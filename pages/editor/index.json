@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "添加菜谱",
+  "usingComponents": {
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "ui-icon": "/components/ui-icon/index"
+  }
+}

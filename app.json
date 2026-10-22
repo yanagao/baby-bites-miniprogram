@@ -1,0 +1,53 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/recipes/index",
+    "pages/ingredients/index",
+    "pages/records/index",
+    "pages/detail/index",
+    "pages/editor/index",
+    "pages/record-editor/index",
+    "pages/random/index",
+    "pages/settings/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "小口袋",
+    "navigationBarBackgroundColor": "#f7f9fc",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f7f9fc"
+  },
+  "tabBar": {
+    "color": "#64748b",
+    "selectedColor": "#0071e3",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "今天",
+        "iconPath": "assets/icons/home-muted.png",
+        "selectedIconPath": "assets/icons/home-blue.png"
+      },
+      {
+        "pagePath": "pages/recipes/index",
+        "text": "菜谱",
+        "iconPath": "assets/icons/book-muted.png",
+        "selectedIconPath": "assets/icons/book-blue.png"
+      },
+      {
+        "pagePath": "pages/ingredients/index",
+        "text": "食材",
+        "iconPath": "assets/icons/carrot-muted.png",
+        "selectedIconPath": "assets/icons/carrot-blue.png"
+      },
+      {
+        "pagePath": "pages/records/index",
+        "text": "记录",
+        "iconPath": "assets/icons/notebook-muted.png",
+        "selectedIconPath": "assets/icons/notebook-blue.png"
+      }
+    ],
+    "custom": true
+  },
+  "sitemapLocation": "sitemap.json"
+}

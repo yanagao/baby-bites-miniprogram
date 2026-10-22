@@ -1,0 +1,38 @@
+<view class="page" wx:if="{{recipe}}">
+  <image wx:if="{{recipe.photoSrc}}" class="photo-preview" src="{{recipe.photoSrc}}" mode="aspectFill" />
+  <view class="card">
+    <view class="detail-top">
+      <view class="title grow">{{recipe.name}}</view>
+      <view class="detail-favorite"><t-button t-class="detail-favorite-button" theme="{{recipe.favorite?'primary':'default'}}" variant="text" size="small" aria-label="{{recipe.favorite?'取消收藏':'收藏'}}" bind:tap="favorite">
+        <view class="favorite-label"><ui-icon name="{{recipe.favorite?'heart-filled':'heart'}}" tone="{{recipe.favorite?'blue':'muted'}}" size="20" /><text>{{recipe.favorite?'已收藏':'收藏'}}</text></view>
+      </t-button></view>
+    </view>
+    <view class="muted">{{recipe.minutes}} 分钟 · {{recipe.category}} · {{recipe.texture}}</view>
+    <view class="detail-rating rating-state">
+      <t-tag wx:if="{{recipe.rating > 0}}" theme="{{recipe.rating === 3 ? 'primary' : recipe.rating === 2 ? 'success' : 'warning'}}" variant="light" shape="round" size="medium" aria-label="已记录喜好：{{recipe.ratingName}}"><ui-icon slot="icon" name="{{recipe.ratingIcon}}" tone="{{recipe.rating === 3 ? 'blue' : recipe.rating === 2 ? 'green' : 'brown'}}" size="18" />{{recipe.ratingName}}</t-tag>
+      <text wx:else class="rating-pending">还没记录喜好</text>
+    </view>
+  </view>
+  <view class="card ingredients-card">
+    <view class="ingredient-heading">准备这些食材</view>
+    <t-cell wx:for="{{recipe.ingredients}}" wx:key="name" title="{{item.name}}" note="{{item.amount || '适量'}}" bordered="{{index < recipe.ingredients.length - 1}}" />
+  </view>
+  <view class="card">
+    <view class="section-title first-title">一起动手做</view>
+    <view class="step" wx:for="{{recipe.steps}}" wx:key="index"><text class="step-number">{{index+1}}</text><text class="grow">{{item}}</text></view>
+    <view wx:if="{{recipe.note}}" class="detail-note">{{recipe.note}}</view>
+    <view wx:if="{{recipe.isExample}}" class="example-label"><t-tag variant="light" size="small">小口袋示例菜谱</t-tag></view>
+  </view>
+  <t-button theme="primary" size="large" block icon="heart" bind:tap="record">记下宝宝的这一口</t-button>
+  <view class="detail-actions">
+    <t-button theme="primary" variant="text" bind:tap="edit">编辑菜谱</t-button>
+    <t-button theme="danger" variant="text" bind:tap="remove">删除菜谱</t-button>
+  </view>
+</view>
+<view class="page" wx:else>
+  <view class="card empty-card">
+    <t-empty icon="file-unknown" description="没有找到这道菜谱，可能已经被删除。">
+      <t-button slot="action" theme="primary" bind:tap="back">返回菜谱列表</t-button>
+    </t-empty>
+  </view>
+</view>

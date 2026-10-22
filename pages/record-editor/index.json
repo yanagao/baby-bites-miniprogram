@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "记一口",
+  "usingComponents": {
+    "ui-icon": "/components/ui-icon/index",
+    "t-radio-group": "/miniprogram_npm/tdesign-miniprogram/radio-group/radio-group",
+    "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+  }
+}

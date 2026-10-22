@@ -1,0 +1,6 @@
+.record-card{padding:0;overflow:hidden;--td-radio-vertical-padding:26rpx 32rpx}.record-heading{padding:32rpx 32rpx 16rpx}.record-title{font-size:38rpx;font-weight:600;line-height:1.45;margin-bottom:14rpx}.record-divider{height:16rpx;background:#f7f9fc}.empty-card{padding:72rpx 32rpx;--td-empty-icon-color:#a9bfdc;--td-empty-action-margin-top:32rpx}
+.portion-picker{--td-cell-description-font:24rpx/1.5 var(--td-font-family)}
+.portion-title{flex:1 1 0!important;min-width:0}
+.portion-note{flex:0 0 auto!important}
+.portion-value{display:flex;align-items:center;justify-content:center;gap:10rpx;padding:14rpx 18rpx;border-radius:16rpx;background:#eef5fd;color:#0067cc;font-size:27rpx;font-weight:500;line-height:1.4;white-space:nowrap}
+.portion-chevron{display:flex;align-items:center;justify-content:center;transform:rotate(90deg)}

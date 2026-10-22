@@ -1,0 +1,33 @@
+.home-topline{display:flex;align-items:center;justify-content:space-between;margin-bottom:20rpx;min-height:88rpx}
+.brand-name{font-size:34rpx;font-weight:650;color:#1d2b3a;letter-spacing:-1rpx}
+.profile-button{max-width:360rpx;--td-button-medium-height:88rpx;--td-button-default-outline-border-color:#e4eaf2;--td-button-default-outline-color:#536b88;--td-button-medium-font:500 25rpx/1.4 var(--td-font-family)}
+.storage-warning{padding:22rpx;margin-bottom:24rpx;border-radius:18rpx;background:#fff5df;color:#785b25;font-size:25rpx;line-height:1.6}
+
+/* Content determines the card height; actions stay close to their content. */
+.feature-card{background:#eef5fd;border:1rpx solid #e1ecf9;border-radius:32rpx;padding:28rpx 32rpx;margin-bottom:24rpx;box-sizing:border-box}
+.feature-title{font-size:40rpx;line-height:1.3;font-weight:650;letter-spacing:-1rpx;color:#1d2b3a}
+.random-title{color:#0071e3;font-weight:700;margin-top:4rpx}
+.feature-copy{font-size:24rpx;line-height:1.4;color:#536b88;margin-top:8rpx}
+.feature-action{display:block;margin-top:26rpx;--td-button-border-radius:20rpx;--td-button-medium-height:88rpx}
+.quick-ingredients{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:18rpx}
+.quick-chip{flex:1;min-width:120rpx;--td-tag-default-light-color:#fff;--td-tag-large-padding:0;--td-tag-large-font:500 24rpx/1.3 var(--td-font-family)}
+.quick-chip-inner{display:flex!important;width:100%;min-height:88rpx;padding:10rpx 8rpx!important;justify-content:center;border:1rpx solid #dce8f6;border-radius:16rpx;box-sizing:border-box}
+.pantry-action{margin-top:20rpx}
+
+.stats-strip{display:flex;background:#fff;border:1rpx solid #e4eaf2;border-radius:24rpx;padding:26rpx 0;margin:28rpx 0 32rpx}
+.stat-item{flex:1;display:flex;flex-direction:column;align-items:center;border-right:1rpx solid #eef1f6;min-width:0}
+.stat-item:last-child{border-right:0}
+.stat-value{display:flex;align-items:baseline;justify-content:center;white-space:nowrap}
+.stat-number{font-size:36rpx;line-height:1.1;font-weight:650;color:#405875}
+.stat-unit{font-size:22rpx;line-height:1.1;font-weight:400;color:#64748b;margin-left:6rpx}
+.stat-label{font-size:22rpx;color:#64748b;margin-top:9rpx}
+.home-section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:22rpx}
+.home-section-heading .section-title{margin:0}
+.home-view-all{margin-left:auto;flex:0 0 auto;display:flex;justify-content:flex-end}
+.view-all-button{margin:0!important}
+.home-section-heading{--td-button-small-font:500 25rpx/1.4 var(--td-font-family);--td-button-small-height:80rpx;--td-button-small-padding-horizontal:0}
+.recipe-list{gap:0}
+.recipe-list recipe-card{display:block;margin-bottom:20rpx}
+.control-pressed{opacity:.72}
+
+.empty-card{padding:48rpx 24rpx;background:#fff;border:1rpx solid #e4eaf2;border-radius:28rpx}

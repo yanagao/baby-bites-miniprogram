@@ -1,0 +1,7 @@
+project.private.config.json
+.DS_Store
+output/
+node_modules/
+__pycache__/
+*.pyc
+# miniprogram_npm/ is intentionally included: the project opens without npm setup.

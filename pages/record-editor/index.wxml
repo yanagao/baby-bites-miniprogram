@@ -1,0 +1,31 @@
+<view class="page" wx:if="{{recipe}}">
+  <view class="card record-card">
+    <view class="record-heading">
+      <view class="record-title">{{recipe.name}}</view>
+      <view class="muted">宝宝今天觉得怎么样？</view>
+    </view>
+    <t-radio-group icon="dot" value="{{rating}}" options="{{ratingOptions}}" disabled="{{saving}}" bind:change="rate" />
+    <view class="record-divider"></view>
+    <picker mode="date" value="{{date}}" end="{{maxDate}}" disabled="{{saving}}" bindchange="changeDate">
+      <t-cell title="吃饭日期" note="{{date}}" arrow />
+    </picker>
+    <picker class="portion-picker" range="{{portions}}" value="{{portionIndex}}" disabled="{{saving}}" bindchange="portion">
+      <t-cell title="吃了多少" description="选填 · 点击后滑动选择" hover="{{!saving}}" t-class-center="portion-title" t-class-note="portion-note" aria-role="button" aria-label="吃了多少，{{portions[portionIndex]}}，点击后上下滑动选择">
+        <view slot="note" class="portion-value">
+          <text>{{portionIndex ? portions[portionIndex] : '请选择'}}</text>
+          <view class="portion-chevron"><ui-icon name="chevron" tone="blue" size="14" /></view>
+        </view>
+      </t-cell>
+    </picker>
+    <t-textarea label="这一餐的小发现 · 选填" value="{{note}}" bind:change="note" maxlength="500" indicator autosize="{{true}}" disabled="{{saving}}" placeholder="例如：今天喜欢更细腻的口感" />
+  </view>
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+  <t-button theme="primary" size="large" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存这一口</t-button>
+</view>
+<view class="page" wx:else>
+  <view class="card empty-card">
+    <t-empty icon="file-unknown" description="没有找到这道菜谱">
+      <t-button slot="action" theme="primary" bind:tap="back">返回菜谱列表</t-button>
+    </t-empty>
+  </view>
+</view>

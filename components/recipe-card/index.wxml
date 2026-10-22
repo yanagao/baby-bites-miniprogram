@@ -1,0 +1,29 @@
+<view class="recipe-card">
+  <view class="recipe-main" bindtap="open" aria-role="button" aria-label="查看{{recipe.name}}">
+    <image wx:if="{{recipe.photoSrc}}" class="thumb" src="{{recipe.photoSrc}}" mode="aspectFill" />
+    <view wx:else class="thumb placeholder"><ui-icon name="{{recipe.placeholderIcon || 'bowl'}}" tone="blue" size="32" /></view>
+    <view class="recipe-copy">
+      <view class="name">{{recipe.name}}</view>
+      <view class="ingredients">{{recipe.ingredientText}}</view>
+      <view class="meta">{{recipe.minutes}} 分钟 · {{recipe.texture}}</view>
+    </view>
+    <view class="favorite"><t-button t-class="favorite-button" theme="{{recipe.favorite ? 'primary' : 'default'}}" variant="text" shape="square" catch:tap="favorite" aria-label="{{recipe.favorite ? '取消收藏' : '收藏'}}{{recipe.name}}">
+      <view class="favorite-content"><ui-icon name="{{recipe.favorite ? 'heart-filled' : 'heart'}}" tone="{{recipe.favorite ? 'blue' : 'muted'}}" size="24" /></view>
+    </t-button></view>
+  </view>
+  <view wx:if="{{recipe.totalCount}}" class="match">
+    <text>{{recipe.complete ? '食材已备齐' : '已备齐'}} {{recipe.foundCount}} / {{recipe.totalCount}} 种</text>
+    <view wx:if="{{recipe.missingText}}" class="missing">还缺：{{recipe.missingText}}</view>
+  </view>
+  <view class="bottom">
+    <view class="rating-slot">
+      <t-tag wx:if="{{recipe.rating > 0}}" class="rating-state" theme="{{recipe.rating === 3 ? 'primary' : recipe.rating === 2 ? 'success' : 'warning'}}" variant="light" shape="round" size="medium" aria-label="已记录喜好：{{recipe.ratingName}}"><ui-icon slot="icon" name="{{recipe.ratingIcon}}" tone="{{recipe.rating === 3 ? 'blue' : recipe.rating === 2 ? 'green' : 'brown'}}" size="18" />{{recipe.ratingName}}</t-tag>
+      <text wx:else class="rating-pending">还没记录喜好</text>
+    </view>
+    <view class="record">
+      <t-button t-class="record-button" theme="primary" variant="text" size="small" block hover-class="record-pressed" bind:tap="record" aria-label="记录{{recipe.name}}的喜好">
+        <view class="record-label"><ui-icon name="edit" tone="blue" size="15" /><text>记一口</text></view>
+      </t-button>
+    </view>
+  </view>
+</view>

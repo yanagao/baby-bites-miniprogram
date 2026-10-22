@@ -1,0 +1,25 @@
+<view class="page">
+  <view wx:if="{{warning}}" class="warning">{{warning}}</view>
+  <view class="card profile-card">
+    <t-input label="宝宝称呼" layout="vertical" value="{{nickname}}" bind:change="nickname" maxlength="20" disabled="{{busy}}" placeholder="怎么称呼宝宝？" borderless />
+    <view class="profile-action"><t-button theme="primary" block disabled="{{busy}}" bind:tap="saveNickname">保存称呼</t-button></view>
+  </view>
+  <view class="card">
+    <view class="section-title first-title">数据与备份</view>
+    <view class="muted">{{counts.recipeCount}} 道菜谱 · {{counts.logCount}} 次试吃记录</view>
+    <view class="storage-note">菜谱、照片和喜好记录保存在当前设备的微信中，暂不自动同步。换设备或清理小程序数据前，请导出备份。</view>
+    <t-button theme="primary" size="large" block icon="download" disabled="{{busy}}" loading="{{busy}}" bind:tap="exportBackup">导出备份文件</t-button>
+    <view class="backup-action"><t-button theme="primary" variant="outline" size="large" block icon="upload" disabled="{{busy}}" bind:tap="chooseBackup">从聊天文件导入</t-button></view>
+    <view class="backup-links">
+      <t-button theme="primary" variant="text" size="small" disabled="{{busy}}" bind:tap="copyBackup">复制备份内容</t-button>
+      <t-button theme="primary" variant="text" size="small" disabled="{{busy}}" bind:tap="togglePaste">粘贴备份内容</t-button>
+    </view>
+    <view class="helper">备份包含照片，总大小不超过 20 MB。支持 JPG、PNG、WebP，也可导入网页版「小口袋」的 JSON 备份。含照片的备份建议通过文件导入。</view>
+    <view wx:if="{{showPaste}}" class="paste-section">
+      <t-textarea t-class="backup-textarea" t-class-textarea="backup-textarea-input" bordered maxlength="-1" disabled="{{busy}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
+      <view class="backup-action"><t-button theme="primary" variant="outline" block disabled="{{busy}}" bind:tap="confirmImport">合并导入</t-button></view>
+    </view>
+    <view wx:if="{{error}}" class="error">{{error}}</view>
+  </view>
+  <view class="page-footer">小口袋 · 1.0.0</view>
+</view>

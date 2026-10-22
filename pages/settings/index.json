@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "宝宝与数据",
+  "usingComponents": {
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
+  }
+}

@@ -1,0 +1,27 @@
+<view class="page records-page">
+  <view wx:if="{{warning}}" class="storage-warning">{{warning}}</view>
+  <view class="record-overview">
+    <view class="overview-item"><view class="overview-value"><text class="overview-number">{{stats.logCount}}</text><text class="overview-unit">次</text></view><text class="overview-label">记录</text></view>
+    <view class="overview-item"><view class="overview-value"><text class="overview-number">{{stats.triedCount}}</text><text class="overview-unit">道</text></view><text class="overview-label">已尝试</text></view>
+    <view class="overview-item"><view class="overview-value"><text class="overview-number">{{stats.likedCount}}</text><text class="overview-unit">道</text></view><text class="overview-label">最爱</text></view>
+  </view>
+  <view class="record-filter">
+    <view class="filter-tabs-host"><t-tabs t-class-item="filter-tab-item" value="{{filter}}" theme="tag" show-bottom-line="{{false}}" split="{{false}}" swipeable="{{false}}" bind:change="chooseFilter">
+      <t-tab-panel wx:for="{{filters}}" wx:key="value" value="{{item.value}}" label="{{item.name}}" />
+    </t-tabs></view>
+  </view>
+  <view class="log-list">
+    <view wx:for="{{logs}}" wx:key="id" class="card log-card">
+      <view class="log-topline"><text class="log-date">{{item.date}}</text><view class="delete-host"><t-button t-class="delete-control" theme="default" variant="text" size="small" data-id="{{item.id}}" bind:tap="deleteLog">删除</t-button></view></view>
+      <view class="recipe-entry-host"><t-cell t-class="recipe-entry" title="{{item.recipeName}}" arrow hover bordered="{{false}}" data-id="{{item.recipeId}}" bind:click="openRecipe" aria-label="查看{{item.recipeName}}" /></view>
+      <view class="log-feedback"><ui-icon name="{{item.ratingIcon}}" tone="{{item.ratingTone}}" size="18" /><text class="feedback-rating">{{item.ratingName}}</text><text wx:if="{{item.portion}}" class="portion">· {{item.portion}}</text></view>
+      <view wx:if="{{item.note}}" class="log-note">{{item.note}}</view>
+    </view>
+  </view>
+  <view wx:if="{{!logs.length}}" class="empty-host"><t-empty t-class="empty-surface">
+    <ui-icon slot="image" name="heart" tone="muted" size="36" />
+    <view slot="description"><view class="empty-heading">{{stats.logCount ? '这个喜好下还没有记录' : '记录宝宝的第一口喜欢'}}</view><view class="empty-description">{{stats.logCount ? '切换「全部记录」查看其他反馈。' : '打开一道菜谱，点「记一口」，留下宝宝的真实反应。'}}</view></view>
+    <view wx:if="{{!stats.logCount}}" slot="action" class="empty-action"><t-button theme="primary" shape="round" block bind:tap="goRecipes">去菜谱里记一口</t-button></view>
+  </t-empty></view>
+  <add-recipe-button />
+</view>

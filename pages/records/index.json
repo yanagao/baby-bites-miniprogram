@@ -1,0 +1,12 @@
+{
+  "navigationBarTitleText": "喜好记录",
+  "usingComponents": {
+    "ui-icon": "/components/ui-icon/index",
+    "add-recipe-button": "/components/add-recipe-button/index",
+    "t-tabs": "/miniprogram_npm/tdesign-miniprogram/tabs/tabs",
+    "t-tab-panel": "/miniprogram_npm/tdesign-miniprogram/tab-panel/tab-panel",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell"
+  }
+}

@@ -1,0 +1,68 @@
+<view class="page" wx:if="{{!missingRecipe}}">
+  <view class="card editor-card">
+    <view class="editor-row">
+      <t-input label="菜谱名称" layout="vertical" t-class-label="editor-field-label" borderless placeholder="例如：南瓜小米粥" value="{{form.name}}" maxlength="60" disabled="{{saving}}" data-field="name" bind:change="input" />
+    </view>
+    <view class="editor-row">
+      <picker disabled="{{saving}}" range="{{categories}}" value="{{categoryIndex}}" data-field="categoryIndex" bindchange="pick">
+        <t-cell title="菜谱分类" t-class-right="editor-cell-right" bordered="{{false}}" hover="{{!saving}}" aria-role="button" aria-label="选择菜谱分类">
+          <view slot="note" class="editor-choice"><text>{{categories[categoryIndex]}}</text><ui-icon name="chevron" tone="muted" size="14" /></view>
+        </t-cell>
+      </picker>
+    </view>
+    <view class="editor-row">
+      <t-input label="烹饪时间" align="right" t-class-label="editor-field-label" suffix="分钟" borderless type="number" value="{{form.minutes}}" disabled="{{saving}}" data-field="minutes" bind:change="input" />
+    </view>
+    <view class="editor-row">
+      <picker disabled="{{saving}}" range="{{textures}}" value="{{textureIndex}}" data-field="textureIndex" bindchange="pick">
+        <t-cell title="食物口感" t-class-right="editor-cell-right" bordered="{{false}}" hover="{{!saving}}" aria-role="button" aria-label="选择食物口感">
+          <view slot="note" class="editor-choice"><text>{{textures[textureIndex]}}</text><ui-icon name="chevron" tone="muted" size="14" /></view>
+        </t-cell>
+      </picker>
+    </view>
+    <view class="editor-row">
+      <t-textarea label="食材与用量" t-class-label="editor-field-label" value="{{form.ingredients}}" placeholder="每行一种，例如：南瓜 50克" maxlength="4000" autosize="{{ { minHeight: 48, maxHeight: 240 } }}" disabled="{{saving}}" data-field="ingredients" bind:change="input" />
+    </view>
+    <view class="editor-row">
+      <t-textarea label="制作步骤" t-class-label="editor-field-label" value="{{form.steps}}" placeholder="每行一步，写下具体做法" maxlength="12000" autosize="{{ { minHeight: 72, maxHeight: 320 } }}" disabled="{{saving}}" data-field="steps" bind:change="input" />
+    </view>
+    <view class="editor-row">
+      <t-textarea label="自己的小心得 · 选填" t-class-label="editor-field-label" value="{{form.note}}" placeholder="下次想调整的口感或小技巧" maxlength="2000" autosize="{{ { minHeight: 48, maxHeight: 200 } }}" disabled="{{saving}}" data-field="note" bind:change="input" />
+    </view>
+    <view class="photo-section editor-row">
+      <view class="photo-heading">
+        <view class="field-title">成品照<text class="optional-label">选填</text></view>
+        <view class="photo-action">
+          <t-button t-class="photo-button" theme="light" size="small" disabled="{{saving}}" bind:tap="choosePhoto">
+            <view class="photo-button-label"><ui-icon name="plus" tone="blue" size="15" /><text>{{photo?'更换照片':'添加照片'}}</text></view>
+          </t-button>
+        </view>
+      </view>
+      <view class="helper photo-hint">照片仅保存在本机，最多 2 MB。</view>
+      <image wx:if="{{photo}}" class="photo-preview" src="{{photo}}" mode="aspectFill" />
+      <view wx:if="{{photo}}" class="photo-remove-action"><t-button t-class="photo-button" theme="default" variant="text" size="small" disabled="{{saving}}" bind:tap="clearPhoto">移除照片</t-button></view>
+    </view>
+    <view wx:if="{{!editing}}" class="rating-section editor-row">
+      <view class="field-title">今天做过了吗？<text class="optional-label">选填</text></view>
+      <view class="helper rating-hint">做过的话，可以同时记下宝宝这一餐的喜好。</view>
+      <picker disabled="{{saving}}" range="{{ratingOptions}}" value="{{ratingIndex}}" data-field="ratingIndex" bindchange="pick">
+        <view class="rating-picker {{saving ? 'rating-picker-disabled' : ''}}" hover-class="{{saving ? 'none' : 'rating-picker-pressed'}}" aria-role="button" aria-label="今天做过了吗？{{ratingOptions[ratingIndex]}}，点击选择">
+          <text class="rating-picker-value">{{ratingOptions[ratingIndex]}}</text>
+          <view class="picker-chevron"><ui-icon name="chevron" tone="blue" size="14" /></view>
+        </view>
+      </picker>
+    </view>
+  </view>
+  <view wx:if="{{error}}" class="error">{{error}}</view>
+  <view class="editor-actions">
+    <view class="action-half"><t-button theme="default" variant="outline" size="large" block disabled="{{saving}}" bind:tap="cancel">取消</t-button></view>
+    <view class="action-half"><t-button theme="primary" size="large" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存菜谱</t-button></view>
+  </view>
+</view>
+<view class="page" wx:else>
+  <view class="card empty-card">
+    <t-empty icon="file-unknown" description="没有找到这道菜谱，可能已经被删除。">
+      <t-button slot="action" theme="primary" bind:tap="cancel">返回菜谱列表</t-button>
+    </t-empty>
+  </view>
+</view>

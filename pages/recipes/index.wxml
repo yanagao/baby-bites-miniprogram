@@ -1,0 +1,26 @@
+<view class="page recipes-page">
+  <view wx:if="{{warning}}" class="storage-warning">{{warning}}</view>
+  <view class="recipe-search-host"><t-search t-class="recipe-search" t-class-input-container="recipe-search-box" value="{{search}}" bind:change="searchInput" placeholder="搜索菜谱或食材" maxlength="60" clearable shape="round" /></view>
+  <view class="category-filter">
+    <view class="filter-tabs-host"><t-tabs t-class-item="filter-tab-item" value="{{category}}" theme="tag" show-bottom-line="{{false}}" split="{{false}}" swipeable="{{false}}" bind:change="chooseCategory">
+      <t-tab-panel wx:for="{{categories}}" wx:key="*this" value="{{item}}" label="{{item}}" />
+    </t-tabs></view>
+  </view>
+  <view class="recipe-filters">
+    <picker mode="selector" range="{{textures}}" value="{{textureIndex}}" bindchange="changeTexture" aria-label="口感筛选"><view class="picker-button">{{textures[textureIndex]}}<ui-icon class="picker-arrow" name="chevron" tone="muted" size="14" /></view></picker>
+    <view class="favorites-filter"><text>只看收藏</text><view class="filter-switch-host"><t-switch t-class="switch-hit-area" value="{{onlyFavorites}}" bind:change="changeFavorites" size="small" aria-label="只看收藏" /></view></view>
+  </view>
+  <view class="results-heading">
+    <text class="result-count">{{recipes.length}} 道菜谱</text>
+    <picker mode="selector" range="{{sorts}}" value="{{sortIndex}}" bindchange="changeSort" aria-label="菜谱排序"><view class="sort-picker">{{sorts[sortIndex]}}<ui-icon class="sort-arrow" name="chevron" tone="muted" size="13" /></view></picker>
+  </view>
+  <view class="recipe-list">
+    <recipe-card wx:for="{{recipes}}" wx:key="id" class="recipe-item" recipe="{{item}}" bind:open="openRecipe" bind:favorite="toggleFavorite" bind:record="recordRecipe" />
+  </view>
+  <view wx:if="{{!recipes.length}}" class="empty-host"><t-empty t-class="empty-surface">
+    <ui-icon slot="image" name="book" tone="muted" size="36" />
+    <view slot="description"><view class="empty-heading">暂时没有匹配的菜谱</view><view class="empty-description">试试其他食材或分类，也可以添加自己的菜谱。</view></view>
+    <view slot="action" class="empty-action"><t-button theme="primary" shape="round" block bind:tap="addRecipe">添加菜谱</t-button></view>
+  </t-empty></view>
+  <add-recipe-button />
+</view>

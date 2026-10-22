@@ -1,0 +1,63 @@
+{
+  "appid": "wx844feefcabeafbad",
+  "projectname": "小口袋-今天辅食吃什么",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "./",
+  "libVersion": "2.32.3",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "minified": true,
+    "postcss": true,
+    "urlCheck": true,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "packOptions": {
+    "ignore": [
+      {
+        "value": "tests",
+        "type": "folder"
+      },
+      {
+        "value": "scripts",
+        "type": "folder"
+      },
+      {
+        "value": "README.md",
+        "type": "file"
+      },
+      {
+        "value": "node_modules",
+        "type": "folder"
+      },
+      {
+        "value": "package.json",
+        "type": "file"
+      },
+      {
+        "value": "package-lock.json",
+        "type": "file"
+      }
+    ],
+    "include": []
+  },
+  "simulatorPluginLibVersion": {},
+  "editorSetting": {}
+}

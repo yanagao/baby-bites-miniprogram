@@ -1,0 +1,13 @@
+{
+  "navigationBarTitleText": "食材找菜",
+  "usingComponents": {
+    "ui-icon": "/components/ui-icon/index",
+    "recipe-card": "/components/recipe-card/index",
+    "add-recipe-button": "/components/add-recipe-button/index",
+    "t-check-tag": "/miniprogram_npm/tdesign-miniprogram/check-tag/check-tag",
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+  }
+}

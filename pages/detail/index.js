@@ -1,0 +1,4 @@
+const store=require('../../utils/store');
+const {enrichRecipe}=require('../../utils/selectors');
+const ui=require('../../utils/ui');
+Page({data:{recipe:null},onLoad(options){this.recipeId=options.id;},onShow(){this.refresh();},refresh(){const state=store.getState();const r=state.recipes.find(x=>x.id===this.recipeId);this.setData({recipe:r?enrichRecipe(state,r):null});},edit(){wx.navigateTo({url:'/pages/editor/index?id='+encodeURIComponent(this.recipeId)});},record(){wx.navigateTo({url:'/pages/record-editor/index?id='+encodeURIComponent(this.recipeId)});},favorite(){try{store.toggleFavorite(this.recipeId);this.refresh();}catch(e){ui.error(e);}},remove(){wx.showModal({title:'删除这道菜谱？',content:'关联的喜好记录也会删除，建议先在「宝宝与数据」中备份。',confirmText:'删除',confirmColor:'#c43b37',success:res=>{if(!res.confirm)return;try{store.deleteRecipe(this.recipeId);ui.back();}catch(e){ui.error(e);}}});},back:ui.back});

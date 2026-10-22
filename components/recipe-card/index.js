@@ -1,0 +1,1 @@
+Component({properties:{recipe:Object},methods:{open(){this.triggerEvent('open',{id:this.data.recipe.id});},favorite(){this.triggerEvent('favorite',{id:this.data.recipe.id});},record(){this.triggerEvent('record',{id:this.data.recipe.id});}}});

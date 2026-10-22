@@ -1,0 +1,28 @@
+<view class="page ingredients-page">
+  <view wx:if="{{warning}}" class="storage-warning">{{warning}}</view>
+  <view class="card ingredient-panel">
+    <view class="section-title">今天有哪些食材？</view>
+    <view class="panel-copy">点选食材，看看已有菜谱能做什么。</view>
+    <view class="ingredient-grid">
+      <view wx:for="{{items}}" wx:key="name" class="ingredient-tag-slot">
+        <view class="ingredient-tag-host"><t-check-tag t-class="ingredient-tag" checked="{{item.selected}}" variant="light-outline" shape="square" size="large" content="{{item.name}}" data-name="{{item.name}}" bind:change="toggleIngredient" aria-label="{{item.name}}，{{item.selected ? '已选择' : '未选择'}}">
+          <ui-icon slot="icon" name="{{item.icon}}" tone="{{item.selected ? 'blue' : 'muted'}}" size="20" />
+        </t-check-tag></view>
+      </view>
+    </view>
+    <view class="custom-ingredient">
+      <view class="ingredient-input-host"><t-input t-class="ingredient-input" t-class-input="ingredient-input-text" value="{{ingredient}}" bind:change="inputIngredient" bind:enter="addIngredient" maxlength="30" confirm-type="done" borderless placeholder="其他食材，例如冬瓜" aria-label="其他食材" /></view>
+      <view class="ingredient-add-host"><t-button t-class="ingredient-add-control" theme="light" shape="round" bind:tap="addIngredient">加入</t-button></view>
+    </view>
+    <view class="pantry-summary"><text>已选 {{pantry.length}} 种食材</text><view class="clear-pantry-host"><t-button wx:if="{{pantry.length}}"  t-class="clear-pantry-control" theme="primary" variant="text" size="small" bind:tap="clearPantry">清空</t-button></view></view>
+    <view class="complete-filter"><text>只看食材齐全的菜谱</text><view class="filter-switch-host"><t-switch t-class="switch-hit-area" value="{{completeOnly}}" bind:change="changeComplete" size="small" aria-label="只看食材齐全的菜谱" /></view></view>
+  </view>
+  <view class="matches-heading"><text class="section-title">匹配菜谱</text><text class="muted">{{matches.length}} 道</text></view>
+  <view wx:for="{{matches}}" wx:key="id" class="match-item"><recipe-card recipe="{{item}}" bind:open="openRecipe" bind:favorite="toggleFavorite" bind:record="recordRecipe" /></view>
+  <view wx:if="{{!matches.length}}" class="empty-host"><t-empty t-class="empty-surface">
+    <ui-icon slot="image" name="fridge" tone="muted" size="36" />
+    <view slot="description"><view class="empty-heading">{{pantry.length ? '暂时没有匹配的菜谱' : '先选几样食材'}}</view><view class="empty-description">{{pantry.length ? '试试多选几样食材，或关闭「只看食材齐全」。' : '选好手边的食材，匹配结果会出现在这里。'}}</view></view>
+    <view wx:if="{{pantry.length}}" slot="action" class="empty-action"><t-button theme="light" shape="round" block bind:tap="addRecipe">添加自己的搭配</t-button></view>
+  </t-empty></view>
+  <add-recipe-button />
+</view>

@@ -1,0 +1,33 @@
+<view class="page home-page">
+  <view class="home-topline">
+    <text class="brand-name">小口袋</text>
+    <view class="profile-button"><t-button theme="default" variant="outline" shape="round" icon="user" bind:tap="openSettings" aria-label="宝宝称呼与设置">
+      {{nickname}}<t-icon slot="suffix" name="chevron-right" size="16" />
+    </t-button></view>
+  </view>
+  <view wx:if="{{warning}}" class="storage-warning">{{warning}}</view>
+  <view class="feature-card">
+    <view class="feature-title">今天吃什么？</view>
+    <view class="feature-title random-title">随机选一道。</view>
+    <view class="feature-action"><t-button theme="primary" block icon="refresh" bind:tap="openRandom">随机抽一道<t-icon slot="suffix" name="arrow-right" size="20" /></t-button></view>
+  </view>
+  <view class="feature-card pantry-card">
+    <view class="feature-title">冰箱里有什么？</view>
+    <view class="feature-copy">选几样食材，搭配宝宝的下一餐。</view>
+    <view class="quick-ingredients">
+      <view wx:for="{{quickIngredients}}" wx:key="name" class="quick-chip"><t-check-tag t-class="quick-chip-inner" content="{{item.name}}" checked="{{item.selected}}" data-name="{{item.name}}" variant="light" size="large" bind:change="toggleIngredient" aria-label="{{item.name}}，{{item.selected ? '已选择' : '未选择'}}">
+        <ui-icon slot="icon" name="{{item.icon}}" tone="{{item.selected ? 'blue' : 'muted'}}" size="17" />
+      </t-check-tag></view>
+    </view>
+    <view class="feature-action pantry-action"><t-button theme="primary" block icon="search" bind:tap="goIngredients">用现有食材找菜谱<t-icon slot="suffix" name="arrow-right" size="20" /></t-button></view>
+  </view>
+  <view class="stats-strip">
+    <view class="stat-item"><view class="stat-value"><text class="stat-number">{{stats.recipeCount}}</text><text class="stat-unit">道</text></view><text class="stat-label">小食谱</text></view>
+    <view class="stat-item"><view class="stat-value"><text class="stat-number">{{stats.likedCount}}</text><text class="stat-unit">道</text></view><text class="stat-label">宝宝最爱</text></view>
+    <view class="stat-item"><view class="stat-value"><text class="stat-number">{{stats.logCount}}</text><text class="stat-unit">次</text></view><text class="stat-label">试吃记录</text></view>
+  </view>
+  <view class="home-section-heading"><text class="section-title">最近添加</text><view class="home-view-all"><t-button t-class="view-all-button" theme="primary" variant="text" size="small" bind:tap="goRecipes">查看全部<t-icon slot="suffix" name="chevron-right" size="16" /></t-button></view></view>
+  <view class="recipe-list"><recipe-card wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" bind:open="openRecipe" bind:favorite="toggleFavorite" bind:record="recordRecipe" /></view>
+  <view wx:if="{{!recipes.length}}" class="empty-card"><t-empty icon="file-add" description="添加第一道菜谱"><t-button slot="action" theme="primary" bind:tap="addRecipe">添加菜谱</t-button></t-empty></view>
+  <add-recipe-button />
+</view>
