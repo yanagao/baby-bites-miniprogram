@@ -1,53 +1,33 @@
-.ingredients-page {
-  --td-brand-color: #0071e3;
-  --td-brand-color-light: #eaf3ff;
-  --td-button-medium-height: 88rpx;
-  --td-button-medium-font: 600 28rpx / 1.4 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
-}
-.storage-warning { padding: 22rpx; margin-bottom: 24rpx; border-radius: 18rpx; background: #fff5df; color: #785b25; font-size: 25rpx; line-height: 1.6; }
-.ingredient-panel { padding: 30rpx; }
-.ingredient-panel .section-title, .matches-heading .section-title { margin: 0; }
-.panel-copy { font-size: 25rpx; line-height: 1.6; color: #64748b; margin: 10rpx 0 22rpx; }
-.ingredient-grid { display: flex; flex-wrap: wrap; margin: -5rpx; }
-.ingredient-tag-slot { width: 33.333%; box-sizing: border-box; padding: 5rpx; min-width: 0; }
-.ingredient-tag-host {
-  display: block;
-  --td-tag-large-font: 25rpx / 1.4 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
-  --td-tag-large-padding: 12rpx 6rpx;
-  --td-tag-square-border-radius: 18rpx;
-  --td-tag-default-light-color: #f7f9fc;
-  --td-tag-default-font-color: #536b88;
-  --td-tag-primary-color: #0071e3;
-  --td-tag-primary-light-color: #eaf3ff;
-  --td-component-border: #e4eaf2;
-}
-.ingredient-tag { display: flex !important; width: 100%; min-height: 88rpx; justify-content: center; }
-.custom-ingredient { display: flex; align-items: center; margin-top: 24rpx; }
-.ingredient-input-host {
-  display: block;
-  flex: 1 1 0;
-  min-width: 0;
-  --td-input-bg-color: #f7f9fc;
-  --td-input-vertical-padding: 18rpx;
-  --td-input-default-text-color: #1d2b3a;
-  --td-input-placeholder-text-color: #94a0b2;
-  --td-input-placeholder-text-font: 25rpx / 40rpx -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
-}
-.ingredient-input { border: 1rpx solid #e4eaf2; border-radius: 18rpx; min-height: 88rpx; box-sizing: border-box; }
-.ingredient-input-text { font-size: 25rpx !important; }
-.ingredient-add-host { display: block; flex: 0 0 112rpx; width: 112rpx; margin-left: 14rpx; }
-.ingredient-add-control { width: 100%; padding: 0 !important; font-size: 26rpx !important; }
-.pantry-summary { display: flex; align-items: center; justify-content: space-between; min-height: 88rpx; color: #64748b; font-size: 25rpx; margin-top: 8rpx; }
-.clear-pantry-host { display: block; --td-button-small-height: 80rpx; --td-button-small-font: 500 25rpx / 1.4 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; }
-.clear-pantry-control { padding-right: 0 !important; }
-.complete-filter { display: flex; justify-content: space-between; align-items: center; font-size: 25rpx; color: #536b88; border-top: 1rpx solid #e4eaf2; padding-top: 10rpx; }
-.filter-switch-host { display: block; flex-shrink: 0; margin-left: 12rpx; }
-.switch-hit-area { min-height: 88rpx; }
-.matches-heading { display: flex; justify-content: space-between; align-items: center; margin: 34rpx 0 22rpx; }
-.matches-heading .muted { font-size: 25rpx; }
-.match-item { margin-bottom: 24rpx; }
-.empty-host { display: block; margin-top: 20rpx; --td-empty-description-margin-top: 18rpx; --td-empty-action-margin-top: 28rpx; }
-.empty-surface { padding: 64rpx 28rpx; border: 1rpx solid #e4eaf2; border-radius: 28rpx; background: #fff; }
-.empty-heading { font-size: 32rpx; font-weight: 600; color: #1d2b3a; line-height: 1.5; }
-.empty-description { margin-top: 16rpx; font-size: 26rpx; color: #64748b; line-height: 1.6; }
-.empty-action { width: 440rpx; max-width: 100%; }
+.ingredients-page { padding-top: 14rpx; }
+.pantry-hero { display: flex; align-items: center; justify-content: space-between; min-height: 144rpx; margin-bottom: 10rpx; }
+.pantry-intro { flex: 1; min-width: 0; }
+.pantry-title { color: #3b241f; font-size: 46rpx; font-weight: 800; line-height: 1.3; letter-spacing: 1rpx; }
+.pantry-subtitle { margin-top: 12rpx; color: #78675f; font-size: 27rpx; line-height: 1.5; }
+.pantry-mascot { flex: none; width: 136rpx; height: 136rpx; margin-left: 6rpx; transform: rotate(5deg); }
+.pantry-search { --td-search-bg-color: #f0ece3; --td-search-height: 72rpx; --td-search-font: 28rpx / 44rpx -apple-system, BlinkMacSystemFont, sans-serif; --td-search-icon-color: #67564c; --td-search-text-color: #3b241f; --td-search-placeholder-color: #93877e; }
+.pantry-selection-bar { display: flex; align-items: center; justify-content: space-between; min-height: 68rpx; }
+.selection-count { font-size: 28rpx; font-weight: 600; color: #3b241f; }
+.clear-selection { margin: 0; padding: 10rpx 0 10rpx 28rpx; min-height: 56rpx; line-height: 36rpx; background: transparent; color: #e75169; font-size: 27rpx; border-radius: 0; }
+.clear-selection::after, .ingredient-tile::after, .all-ingredients::after { border: 0; }
+.clear-selection[disabled] { color: #ad9c93; background: transparent; }
+.ingredient-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14rpx; }
+.ingredient-tile { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; min-width: 0; min-height: 140rpx; margin: 0; padding: 18rpx 12rpx; color: #3b241f; background: #fffdf8; border: 2rpx solid #ede3d5; border-radius: 24rpx; line-height: 1.3; }
+.ingredient-tile-selected { border-color: #cde7b6; background: #edf7e1; color: #225c29; }
+.ingredient-tile-pressed { opacity: 0.78; }
+.ingredient-label { display: block; margin-top: 12rpx; font-size: 27rpx; font-weight: 600; line-height: 36rpx; overflow-wrap: break-word; }
+.ingredient-check { position: absolute; top: 10rpx; right: 10rpx; display: flex; align-items: center; justify-content: center; width: 34rpx; height: 34rpx; color: #fff; background: #2e9144; border: 3rpx solid #fffdf8; border-radius: 50%; z-index: 1; }
+.pantry-more-actions { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
+.all-ingredients { display: flex; align-items: center; justify-content: center; gap: 8rpx; margin: 0; padding: 14rpx 0; min-height: 64rpx; line-height: 36rpx; color: #78675f; background: transparent; font-size: 25rpx; }
+.custom-ingredient-toggle { margin-left: auto; color: #c45668; }
+.custom-ingredient-panel { overflow: hidden; border-radius: 20rpx; }
+.match-filter-row { display: flex; align-items: center; justify-content: space-between; min-height: 76rpx; padding: 5rpx 0; }
+.match-filter-label { font-size: 26rpx; color: #78675f; }
+.match-section { padding: 16rpx 12rpx 8rpx; margin-bottom: 22rpx; border-radius: 32rpx 38rpx 28rpx 28rpx; }
+.match-section-complete { background: #edf6df; }
+.match-section-partial { background: #ffede8; }
+.match-section-heading { display: flex; align-items: center; gap: 10rpx; padding: 0 6rpx 14rpx; color: #3b241f; font-size: 31rpx; font-weight: 800; line-height: 1.4; }
+.match-section-complete .match-section-heading { color: #315d2d; }
+.match-section-partial .match-section-heading { color: #a54c3b; }
+.pantry-empty-note { display: flex; align-items: center; justify-content: center; gap: 10rpx; padding: 30rpx 8rpx; color: #988778; font-size: 25rpx; line-height: 1.6; }
+
+.pantry-title {font-family:PocketBrush,'Kaiti SC','PingFang SC',sans-serif;}

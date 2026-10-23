@@ -1,11 +1,14 @@
 {
   "navigationBarTitleText": "随机选一道",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
     "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
-    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-tag": "/miniprogram_npm/tdesign-miniprogram/tag/tag",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",
+    "t-collapse-panel": "/miniprogram_npm/tdesign-miniprogram/collapse-panel/collapse-panel",
+    "t-radio-group": "/miniprogram_npm/tdesign-miniprogram/radio-group/radio-group",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "food-art": "/components/food-art/index"
   }
 }

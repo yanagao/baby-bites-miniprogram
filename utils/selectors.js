@@ -1,11 +1,11 @@
 'use strict';
 
-const categories = ['全部', '粥与面', '蔬菜泥', '小点心'];
+const {categories} = require('./categories');
 const textures = ['细腻泥糊', '软烂颗粒', '手指食物'];
 const ratings = {
-  1: { name: '不太喜欢', icon: 'face-neutral' },
-  2: { name: '还不错', icon: 'face-smile' },
-  3: { name: '超级喜欢', icon: 'face-happy' }
+  1: { name: '不太喜欢', icon: 'unhappy' },
+  2: { name: '还不错', icon: 'smile' },
+  3: { name: '很喜欢', icon: 'happy' }
 };
 const pantryItems = [
   ['南瓜', 'pumpkin'], ['胡萝卜', 'carrot'], ['西兰花', 'broccoli'],
@@ -55,20 +55,26 @@ function ratingOf(state, recipeId) {
   return latest ? latest.rating : 0;
 }
 
-function enrichWithRating(recipe, rating) {
+const examplePhotos = {pumpkin: '/assets/food/pumpkin.jpg', noodle: '/assets/food/noodle.jpg', broccoli: '/assets/food/broccoli.jpg'};
+function displayPhoto(recipe) { return recipe.photo || (recipe.isExample && examplePhotos[recipe.imageKey]) || ''; }
+
+function enrichWithRating(recipe, feedback) {
+  const rating = feedback ? feedback.rating : 0;
   return Object.assign({}, recipe, {
     rating,
-    ratingName: rating ? ratings[rating].name : '还没记录喜好',
+    ratingDate: feedback ? feedback.date : '',
+    ratingName: rating ? ratings[rating].name : '未记录喜好',
     ratingIcon: rating ? ratings[rating].icon : 'heart',
     ingredientText: recipe.ingredients.map(item => item.name).join(' · '),
     photoSrc: recipe.photo || '',
+    displayPhoto: displayPhoto(recipe),
     placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey)
       ? dishIcons[recipe.imageKey] : 'bowl'
   });
 }
 
 function enrichRecipe(state, recipe) {
-  return recipe ? enrichWithRating(recipe, ratingOf(state, recipe.id)) : null;
+  return recipe ? enrichWithRating(recipe, latestRatings(state).get(recipe.id)) : null;
 }
 
 function listRecipes(state, options) {
@@ -83,7 +89,7 @@ function listRecipes(state, options) {
     (!opts.texture || opts.texture === '全部' || opts.texture === '全部口感' || recipe.texture === opts.texture) &&
     (!search || [recipe.name].concat(recipe.ingredients.map(item => item.name))
       .some(value => value.toLowerCase().includes(search) || normalizeIngredient(value).toLowerCase().includes(normalizedSearch)))
-  ).map(recipe => enrichWithRating(recipe, feedback.has(recipe.id) ? feedback.get(recipe.id).rating : 0));
+  ).map(recipe => enrichWithRating(recipe, feedback.get(recipe.id)));
   list.sort((a, b) => {
     const recent = (b.createdAt || 0) - (a.createdAt || 0);
     if (opts.sort === 'quick') return a.minutes - b.minutes || recent;
@@ -101,8 +107,8 @@ function matchRecipes(state, ingredients, completeOnly) {
     const missing = recipe.ingredients.filter(item => !selected.has(normalizeIngredient(item.name)));
     const totalCount = recipe.ingredients.length;
     const foundCount = totalCount - missing.length;
-    return Object.assign(enrichWithRating(recipe, feedback.has(recipe.id) ? feedback.get(recipe.id).rating : 0), {
-      foundCount, totalCount, missingText: missing.map(item => item.name).join('、'), complete: !missing.length
+    return Object.assign(enrichWithRating(recipe, feedback.get(recipe.id)), {
+      foundCount, totalCount, missingCount: missing.length, missingText: missing.map(item => item.name).join('、'), complete: !missing.length
     });
   }).filter(recipe => recipe.foundCount > 0 && (!completeOnly || recipe.complete))
     .sort((a, b) => b.foundCount / b.totalCount - a.foundCount / a.totalCount || b.foundCount - a.foundCount);
@@ -138,6 +144,7 @@ function listLogs(state, filter) {
       return Object.assign({}, log, {
         recipeName: recipe.name, ratingName: ratings[log.rating].name,
         ratingIcon: ratings[log.rating].icon, photoSrc: recipe.photo || '',
+    displayPhoto: displayPhoto(recipe),
         placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey) ? dishIcons[recipe.imageKey] : 'bowl'
       });
     });

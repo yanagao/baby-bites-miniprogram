@@ -1,12 +1,10 @@
 {
-  "navigationBarTitleText": "喜好记录",
+  "navigationBarTitleText": "用餐记录",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
-    "add-recipe-button": "/components/add-recipe-button/index",
-    "t-tabs": "/miniprogram_npm/tdesign-miniprogram/tabs/tabs",
-    "t-tab-panel": "/miniprogram_npm/tdesign-miniprogram/tab-panel/tab-panel",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
-    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell"
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-popup": "/miniprogram_npm/tdesign-miniprogram/popup/popup",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "bottom-navigation": "/components/bottom-navigation/index"
   }
 }

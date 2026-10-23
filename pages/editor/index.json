@@ -5,7 +5,13 @@
     "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
     "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
+    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
     "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
-    "ui-icon": "/components/ui-icon/index"
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-radio-group": "/miniprogram_npm/tdesign-miniprogram/radio-group/radio-group",
+    "t-picker": "/miniprogram_npm/tdesign-miniprogram/picker/picker",
+    "t-picker-item": "/miniprogram_npm/tdesign-miniprogram/picker-item/picker-item",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar"
   }
 }

@@ -12,9 +12,34 @@ const write = (filePath, data, encoding) => new Promise((resolve, reject) => {
   fs().writeFile({filePath, data, encoding, success: resolve, fail: reject});
 });
 const removeFile = filePath => new Promise(resolve => {
+  if (typeof filePath !== 'string' || !filePath || filePath.indexOf('cloud://') === 0) { resolve(); return; }
   try { fs().unlink({filePath, success: resolve, fail: resolve}); }
   catch (error) { resolve(); }
 });
+
+function isTemporaryPath(filePath) {
+  // downloadFile returns a temporary local path, never a saved USER_DATA_PATH
+  // photo or a cloud file ID. Be conservative before unlinking a returned path.
+  return typeof filePath === 'string' && !/[\u0000-\u001f]/.test(filePath) &&
+    (/^wxfile:\/\/tmp(?:_|-|\/)/.test(filePath) || /^https?:\/\/tmp(?:_|-|\/)/.test(filePath) ||
+      /^\/(?:private\/)?tmp\//.test(filePath));
+}
+async function readPhoto(filePath) {
+  if (filePath.indexOf('cloud://') !== 0) return read(filePath, 'base64');
+  const result = await new Promise((resolve, reject) => {
+    if (!wx.cloud || typeof wx.cloud.downloadFile !== 'function') { reject(Error('云照片下载暂不可用。')); return; }
+    try { wx.cloud.downloadFile({fileID: filePath, success: resolve, fail: reject}); }
+    catch (error) { reject(error); }
+  });
+  const temporary = result && result.tempFilePath;
+  const canRemove = isTemporaryPath(temporary);
+  try {
+    if (!canRemove || (result.statusCode != null && result.statusCode !== 200)) throw Error('云照片下载未完成。');
+    return await read(temporary, 'base64');
+  } finally {
+    if (canRemove) await removeFile(temporary);
+  }
+}
 
 function byteLength(text) {
   let bytes = 0;
@@ -61,7 +86,7 @@ async function exportText() {
   for (const recipe of data.recipes) {
     if (!recipe.photo) continue;
     let base64;
-    try { base64 = await read(recipe.photo, 'base64'); }
+    try { base64 = await readPhoto(recipe.photo); }
     catch (error) { throw Error('照片无法读取，请先检查「' + recipe.name + '」的成品照后再导出。'); }
     checkBase64(base64);
     recipe.photo = 'data:image/' + imageType(base64) + ';base64,' + base64;
@@ -80,7 +105,18 @@ async function exportFile() {
   return filePath;
 }
 
-async function importText(text) {
+async function importText(text, beforeCommit) {
+  function assertCanCommit() {
+    if (beforeCommit == null) return;
+    if (typeof beforeCommit !== 'function') throw Error('导入校验必须是同步函数。');
+    const result = beforeCommit();
+    if (result && typeof result.then === 'function') {
+      // Account ownership must be checked synchronously beside the store commit.
+      // An asynchronous guard would create another account-switch window.
+      if (typeof result.catch === 'function') result.catch(() => {});
+      throw Error('导入校验必须是同步函数。');
+    }
+  }
   if (typeof text !== 'string' || byteLength(text) > MAX_BACKUP_BYTES) throw Error('备份文件过大，请选择 20 MB 以内的 JSON 文件。');
   let data;
   try { data = JSON.parse(text); } catch (error) { throw Error('备份内容不是有效的 JSON 文件。'); }
@@ -99,18 +135,31 @@ async function importText(text) {
     photos.push({index, base64: match[2], type: imageType(match[2])});
   });
 
-  const oldPhotos = new Set(store.getState().recipes.map(recipe => recipe.photo).filter(Boolean));
+  assertCanCommit();
+  const currentRecipes = store.getState().recipes;
+  const currentById = new Map(currentRecipes.map(recipe => [recipe.id, recipe]));
+  const repairMissingPhotos = [];
+  const oldPhotos = new Set(currentRecipes.map(recipe => recipe.photo)
+    .filter(photo => photo && photo.indexOf('cloud://') !== 0));
   const createdPaths = [];
   let committed = false;
   try {
     for (const photo of photos) {
+      const incoming = data.recipes[photo.index];
+      const local = currentById.get(incoming.id);
+      if (local && local.photo && local.photo.indexOf('cloud://') !== 0 &&
+        (incoming.updatedAt || 0) === (local.updatedAt || 0)) {
+        try { await read(local.photo, 'base64'); }
+        catch (error) { repairMissingPhotos.push({id: local.id, photo: local.photo}); }
+      }
       const filePath = wx.env.USER_DATA_PATH + '/import-' + Date.now() + '-' + photo.index + '-' +
         Math.random().toString(36).slice(2, 8) + '.' + (photo.type === 'jpeg' ? 'jpg' : photo.type);
       createdPaths.push(filePath);
       await write(filePath, photo.base64, 'base64');
       data.recipes[photo.index].photo = filePath;
     }
-    const result = store.importBackup(JSON.stringify(data));
+    assertCanCommit();
+    const result = store.importBackup(JSON.stringify(data), {repairMissingPhotos});
     committed = true;
     const used = new Set(store.getState().recipes.map(recipe => recipe.photo).filter(Boolean));
     for (const filePath of createdPaths) if (!used.has(filePath)) await removeFile(filePath);

@@ -1,0 +1,28 @@
+<t-navbar z-index="100" title="{{isSelf ? '我的主页' : '口袋主页'}}" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="page-shell social-page">
+  <view wx:if="{{loading}}" class="social-state muted">正在打开口袋主页…</view>
+  <t-empty wx:elif="{{error}}" icon="info-circle" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
+  <block wx:elif="{{profile}}">
+    <view class="profile-panel panel">
+      <view class="profile-header"><image class="profile-avatar" src="/assets/cute/pocket-mascot.png" mode="aspectFit" /><view class="profile-copy"><view class="profile-name brush">{{profile.name}}</view><view class="muted">{{profile.bio || (isSelf ? '分享做过的好味道' : '欢迎来我的口袋小厨房')}}</view></view></view>
+      <block wx:if="{{isSelf}}">
+        <view class="profile-actions" wx:if="{{!editing}}"><t-button theme="default" variant="outline" size="small" bind:tap="edit">{{profile.exists === false ? '设置公开主页' : '编辑主页'}}</t-button><t-button wx:if="{{profile.exists !== false}}" theme="primary" size="small" open-type="share" icon="share">分享给好友</t-button></view>
+        <view wx:if="{{profile.exists === false && !editing}}" class="profile-note muted">设置公开昵称后即可分享。只有你主动公开的菜谱会出现在这里。</view>
+      </block>
+      <view wx:else class="profile-actions"><t-button theme="{{following ? 'default' : 'primary'}}" variant="{{following ? 'outline' : 'base'}}" shape="round" loading="{{followBusy}}" disabled="{{followBusy}}" bind:tap="toggleFollow">{{following ? '已关注 · 取消' : '关注'}} </t-button></view>
+    </view>
+    <view wx:if="{{editing && isSelf}}" class="profile-edit panel">
+      <t-input label="公开昵称" layout="vertical" value="{{name}}" maxlength="20" disabled="{{saving}}" bind:change="changeName" placeholder="想让好友怎么称呼你" />
+      <t-textarea label="一句介绍 · 选填" value="{{bio}}" maxlength="120" indicator disabled="{{saving}}" bind:change="changeBio" placeholder="分享你的小厨房日常" autosize />
+      <view class="muted profile-note">昵称和介绍会公开显示。宝宝信息、私人心得和用餐记录不会出现在主页。</view>
+      <view class="profile-actions"><t-button size="small" variant="outline" disabled="{{saving}}" bind:tap="cancelEdit">取消</t-button><t-button size="small" theme="primary" loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存公开主页</t-button></view>
+    </view>
+    <view class="social-section-heading"><view class="section-title">公开食谱</view><t-button wx:if="{{isSelf}}" theme="primary" variant="text" size="small" bind:tap="openFollowing">我的关注</t-button></view>
+    <view wx:if="{{!recipes.length}}" class="panel social-state"><view class="social-empty-title">{{isSelf ? '还没有公开食谱' : '这里还没有公开食谱'}}</view><view class="muted">{{isSelf ? '到「我的食谱」打开一道菜，选择「公开菜谱」。' : '关注后，新公开的菜谱会出现在「关注的菜谱」。'}}</view><view wx:if="{{isSelf}}" class="social-empty-action"><t-button theme="primary" variant="outline" size="small" bind:tap="openCookbook">选择要分享的菜谱</t-button></view></view>
+    <view wx:for="{{recipes}}" wx:key="id" class="social-recipe panel" data-id="{{item.id}}" bindtap="openRecipe" hover-class="social-pressed" aria-role="button" aria-label="{{'查看' + item.name}}">
+      <image wx:if="{{item.photoURL}}" src="{{item.photoURL}}" class="social-photo" mode="aspectFill" data-index="{{index}}" binderror="photoError" /><view wx:else class="social-photo social-art"><food-art name="{{item.ingredients[0].name}}" size="100" /></view>
+      <view class="social-recipe-copy"><view class="social-recipe-title">{{item.name}}</view><view class="muted">{{item.category}}</view><view class="social-meta">{{item.minutes}} 分钟 · {{item.texture}}</view></view><t-icon name="chevron-right" size="32rpx" />
+    </view>
+    <view wx:if="{{nextOffset !== null}}" class="social-more"><t-button theme="primary" variant="text" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">加载更多</t-button></view>
+  </block>
+</view>

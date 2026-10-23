@@ -1,25 +1,35 @@
-<view class="page">
-  <view wx:if="{{warning}}" class="warning">{{warning}}</view>
-  <view class="card profile-card">
-    <t-input label="宝宝称呼" layout="vertical" value="{{nickname}}" bind:change="nickname" maxlength="20" disabled="{{busy}}" placeholder="怎么称呼宝宝？" borderless />
-    <view class="profile-action"><t-button theme="primary" block disabled="{{busy}}" bind:tap="saveNickname">保存称呼</t-button></view>
-  </view>
-  <view class="card">
-    <view class="section-title first-title">数据与备份</view>
-    <view class="muted">{{counts.recipeCount}} 道菜谱 · {{counts.logCount}} 次试吃记录</view>
-    <view class="storage-note">菜谱、照片和喜好记录保存在当前设备的微信中，暂不自动同步。换设备或清理小程序数据前，请导出备份。</view>
-    <t-button theme="primary" size="large" block icon="download" disabled="{{busy}}" loading="{{busy}}" bind:tap="exportBackup">导出备份文件</t-button>
-    <view class="backup-action"><t-button theme="primary" variant="outline" size="large" block icon="upload" disabled="{{busy}}" bind:tap="chooseBackup">从聊天文件导入</t-button></view>
-    <view class="backup-links">
-      <t-button theme="primary" variant="text" size="small" disabled="{{busy}}" bind:tap="copyBackup">复制备份内容</t-button>
-      <t-button theme="primary" variant="text" size="small" disabled="{{busy}}" bind:tap="togglePaste">粘贴备份内容</t-button>
-    </view>
-    <view class="helper">备份包含照片，总大小不超过 20 MB。支持 JPG、PNG、WebP，也可导入网页版「小口袋」的 JSON 备份。含照片的备份建议通过文件导入。</view>
-    <view wx:if="{{showPaste}}" class="paste-section">
-      <t-textarea t-class="backup-textarea" t-class-textarea="backup-textarea-input" bordered maxlength="-1" disabled="{{busy}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
-      <view class="backup-action"><t-button theme="primary" variant="outline" block disabled="{{busy}}" bind:tap="confirmImport">合并导入</t-button></view>
-    </view>
-    <view wx:if="{{error}}" class="error">{{error}}</view>
-  </view>
-  <view class="page-footer">小口袋 · 1.0.0</view>
-</view>
+<t-navbar z-index="100" title="设置" placeholder left-arrow />
+<t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
+<t-cell-group title="宝宝信息" theme="card">
+  <t-input label="宝宝称呼" value="{{nickname}}" bind:change="nickname" maxlength="20" disabled="{{busy}}" placeholder="例如：宝宝">
+    <t-button slot="suffix" size="small" theme="primary" variant="text" disabled="{{busy}}" bind:tap="saveNickname">保存</t-button>
+  </t-input>
+</t-cell-group>
+<t-cell-group title="微信账号同步" theme="card">
+  <t-cell title="{{syncTitle}}" description="{{syncMessage}}" />
+  <t-cell wx:if="{{syncState !== 'unconfigured'}}" title="{{syncTime || '菜谱、照片、收藏和用餐记录'}}">
+    <t-button slot="right-icon" theme="primary" variant="text" size="small" loading="{{syncState === 'syncing'}}" disabled="{{syncState === 'syncing'}}" bind:tap="syncNow">立即同步</t-button>
+  </t-cell>
+</t-cell-group>
+<t-cell-group title="数据与备份" theme="card">
+  <t-cell title="{{counts.recipeCount || 0}} 道菜谱 · {{counts.logCount || 0}} 次用餐记录" description="{{storageDescription}}" />
+  <t-cell title="导出备份文件" description="保存菜谱、照片和用餐记录" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="exportBackup" />
+  <t-cell title="导入备份文件" description="从微信聊天选择 JSON 文件，最多 20 MB" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="chooseBackup" />
+</t-cell-group>
+<t-collapse theme="card" disabled="{{busy}}">
+  <t-collapse-panel value="backup-methods" header="其他备份方式">
+    <t-cell title="复制备份内容" description="复制为文字，方便自行保存" arrow="{{!busy}}" hover="{{!busy}}" bind:click="copyBackup" />
+    <t-cell title="粘贴备份内容" note="{{showPaste ? '收起' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="togglePaste" />
+    <block wx:if="{{showPaste}}">
+      <t-textarea label="备份内容" maxlength="-1" disabled="{{busy}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
+      <t-cell>
+        <t-button slot="note" theme="primary" disabled="{{busy}}" loading="{{busy}}" bind:tap="confirmImport">合并导入</t-button>
+      </t-cell>
+    </block>
+    <t-cell title="备份说明" description="照片支持 JPG、PNG、WebP，含照片的备份建议通过文件导入。也可导入网页版「小口袋」的 JSON 备份。" />
+  </t-collapse-panel>
+</t-collapse>
+<t-notice-bar wx:if="{{error}}" visible theme="error" content="{{error}}" />
+<t-cell title="小口袋" note="1.2.0" />
+<t-dialog visible="{{importVisible}}" title="合并这份备份？" content="将菜谱和用餐记录合并到本机；相同内容保留较新的修改。" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
+<t-dialog visible="{{exportVisible}}" title="备份已准备好" content="{{exportDescription}}" confirm-btn="{{exportConfirmButton}}" cancel-btn="取消" bind:confirm="confirmExportDialog" bind:cancel="cancelExportDialog" />

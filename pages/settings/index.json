@@ -1,8 +1,15 @@
 {
-  "navigationBarTitleText": "宝宝与数据",
+  "navigationBarTitleText": "设置",
   "usingComponents": {
     "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
     "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
+    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
+    "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",
+    "t-collapse-panel": "/miniprogram_npm/tdesign-miniprogram/collapse-panel/collapse-panel",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar"
   }
 }

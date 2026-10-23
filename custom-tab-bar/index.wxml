@@ -1,3 +1,0 @@
-<t-tab-bar value="{{value}}" bind:change="change" fixed safe-area-inset-bottom split="{{false}}" bordered="{{true}}" theme="normal" z-index="120">
-  <t-tab-bar-item wx:for="{{items}}" wx:key="value" value="{{item.value}}" icon="{{'/assets/icons/' + item.icon + (value === item.value ? '-blue.png' : '-muted.png')}}" aria-label="{{item.label}}">{{item.label}}</t-tab-bar-item>
-</t-tab-bar>

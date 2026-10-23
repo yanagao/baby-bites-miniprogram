@@ -1,0 +1,16 @@
+<t-navbar z-index="100" title="公开食谱" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="page-shell detail-page">
+  <view wx:if="{{loading}}" class="empty-note">正在打开这道菜谱…</view>
+  <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
+  <block wx:elif="{{recipe}}">
+    <view class="public-author" bindtap="openAuthor" hover-class="public-pressed" aria-role="button" aria-label="{{'打开' + author.name + '的主页'}}"><t-icon name="user" size="34rpx" /><text>{{author.name}}的口袋食谱</text><t-icon name="chevron-right" size="28rpx" /></view>
+    <image wx:if="{{recipe.photoURL && !photoFailed}}" class="detail-photo" src="{{recipe.photoURL}}" mode="aspectFill" binderror="photoError" bindtap="previewPhoto" aria-label="预览成品照片" /><view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
+    <view class="detail-heading"><view class="detail-title brush">{{recipe.name}}</view></view>
+    <view class="detail-meta"><view><t-icon name="time" size="28rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="28rpx" />{{recipe.texture}}</view><text class="muted">{{recipe.category}}</text></view>
+    <view class="ingredients-panel panel"><view class="ingredients-heading"><text class="brush">需要准备</text><text>食材与用量</text></view><view wx:for="{{recipe.ingredients}}" wx:key="index" class="ingredient-row"><food-art name="{{item.name}}" size="60" /><text>{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view></view>
+    <view class="steps-section"><view class="section-title">怎么做</view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
+    <t-button wx:if="{{recipe.source}}" theme="primary" variant="text" size="small" bind:tap="openSource">参考自 {{recipe.source.authorName}}</t-button>
+    <view class="copy-explanation muted">{{importedId ? '已收进自己的食谱，可继续编辑、收藏或记录用餐。' : '添加后是你自己的副本，可以调整做法。原作者之后的修改不会改变这份副本。'}}</view>
+    <view class="detail-bottom-space" /><view class="detail-bottom public-bottom"><t-button theme="primary" shape="round" block icon="{{importedId ? 'check' : 'add'}}" loading="{{adding}}" disabled="{{adding}}" bind:tap="add">{{importedId ? '已添加 · 查看我的食谱' : '添加到我的食谱'}}</t-button></view>
+  </block>
+</view>

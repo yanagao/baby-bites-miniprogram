@@ -1,14 +1,19 @@
 {
-  "navigationBarTitleText": "我的菜谱",
+  "navigationBarTitleText": "我的食谱",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
-    "recipe-card": "/components/recipe-card/index",
-    "add-recipe-button": "/components/add-recipe-button/index",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
     "t-search": "/miniprogram_npm/tdesign-miniprogram/search/search",
+    "t-dropdown-menu": "/miniprogram_npm/tdesign-miniprogram/dropdown-menu/dropdown-menu",
+    "t-dropdown-item": "/miniprogram_npm/tdesign-miniprogram/dropdown-item/dropdown-item",
+    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
     "t-tabs": "/miniprogram_npm/tdesign-miniprogram/tabs/tabs",
     "t-tab-panel": "/miniprogram_npm/tdesign-miniprogram/tab-panel/tab-panel",
-    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",
+    "t-collapse-panel": "/miniprogram_npm/tdesign-miniprogram/collapse-panel/collapse-panel",
+    "recipe-card": "/components/recipe-card/index",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "bottom-navigation": "/components/bottom-navigation/index"
   }
 }

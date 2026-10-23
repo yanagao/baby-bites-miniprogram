@@ -1,10 +1,11 @@
 {
   "navigationBarTitleText": "菜谱详情",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
-    "t-tag": "/miniprogram_npm/tdesign-miniprogram/tag/tag",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "food-art": "/components/food-art/index"
   }
 }

@@ -1,9 +1,9 @@
 {
-  "appid": "wx844feefcabeafbad",
+  "appid": "wxc6c61fbebebe3340",
   "projectname": "小口袋-今天辅食吃什么",
   "compileType": "miniprogram",
   "miniprogramRoot": "./",
-  "libVersion": "2.32.3",
+  "libVersion": "3.7.12",
   "setting": {
     "es6": true,
     "enhance": true,
@@ -54,10 +54,19 @@
       {
         "value": "package-lock.json",
         "type": "file"
+      },
+      {
+        "value": "cloudfunctions",
+        "type": "folder"
+      },
+      {
+        "value": "cloud",
+        "type": "folder"
       }
     ],
     "include": []
   },
   "simulatorPluginLibVersion": {},
-  "editorSetting": {}
+  "editorSetting": {},
+  "cloudfunctionRoot": "cloudfunctions/"
 }

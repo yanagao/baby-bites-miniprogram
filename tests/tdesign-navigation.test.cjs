@@ -5,23 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 
-test('home ingredient tags apply TDesign checked values without toggling twice', () => {
-  const app = {globalData:{pantry:['南瓜']}};
-  let definition;
-  vm.runInNewContext(fs.readFileSync(path.join(root,'pages/home/index.js'),'utf8'), {
-    Page: value => { definition = value; }, require: () => ({}), getApp: () => app
-  });
-  const page = {...definition, refresh() {}};
-  const event = checked => ({currentTarget:{dataset:{name:'南瓜'}},detail:{checked}});
-  page.toggleIngredient(event(true));
-  page.toggleIngredient(event(true));
-  assert.deepEqual(Array.from(app.globalData.pantry),['南瓜']);
-  page.toggleIngredient(event(false));
-  page.toggleIngredient(event(false));
-  assert.deepEqual(Array.from(app.globalData.pantry),[]);
-});
-
-// WeChat caches a separate custom-tab-bar instance for each tab page.
+// WeChat caches each tab page and its own in-page navigation component.
 // Deliberately rely on Page.onShow, not component pageLifetimes.show forwarding.
 function navigationHarness() {
   let active;
@@ -41,8 +25,8 @@ function navigationHarness() {
     }
     return helpers;
   };
-  const requireModule = name => name.endsWith('/tab-bar') ? loadHelpers() : {};
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'custom-tab-bar/index.js'), 'utf8'), {
+  const requireModule = name => name.endsWith('/tab-bar') ? loadHelpers() : name.endsWith('/selectors') ? require('../utils/selectors') : {};
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'components/bottom-navigation/index.js'), 'utf8'), {
     ...common, require: requireModule, Component: value => { component = value; }
   });
   for (const name of ['home', 'recipes', 'ingredients', 'records']) {
@@ -50,7 +34,14 @@ function navigationHarness() {
     vm.runInNewContext(fs.readFileSync(path.join(root, `pages/${name}/index.js`), 'utf8'), {
       ...common, require: requireModule, Page: value => { definition = value; }
     });
-    const page = {...definition, route: `pages/${name}/index`, refresh() {}, getTabBar() { return this.tab; }};
+    const page = {
+      ...definition, route: `pages/${name}/index`, refresh() {},
+      selectComponent(selector) {
+        assert.equal(selector, '#bottom-navigation');
+        return this.tab;
+      },
+      getTabBar() { throw Error('the native custom-tab-bar host is intentionally empty'); }
+    };
     pages[name] = page;
   }
   function activate(name) {
@@ -69,6 +60,24 @@ function navigationHarness() {
   function finish(index, name) { activate(name); requests[index].success(); }
   return {pages, requests, activate, tap, finish};
 }
+
+test('navigation placeholder is rendered after tab-page content, outside the native tab-bar host', () => {
+  const app = JSON.parse(fs.readFileSync(path.join(root, 'app.json'), 'utf8'));
+  assert.equal(app.tabBar.custom, true, 'prevent a duplicate native tab bar');
+  assert.equal(fs.readFileSync(path.join(root, 'custom-tab-bar/index.wxml'), 'utf8').trim(), '');
+  const nativeHost = JSON.parse(fs.readFileSync(path.join(root, 'custom-tab-bar/index.json'), 'utf8'));
+  assert.deepEqual(nativeHost.usingComponents || {}, {});
+  for (const {pagePath} of app.tabBar.list) {
+    const template = fs.readFileSync(path.join(root, pagePath + '.wxml'), 'utf8').trim();
+    assert.match(template, /<bottom-navigation id="bottom-navigation"\s*\/>$/);
+    assert.equal((template.match(/<bottom-navigation\b/g) || []).length, 1, pagePath);
+    const config = JSON.parse(fs.readFileSync(path.join(root, pagePath + '.json'), 'utf8'));
+    assert.equal(config.usingComponents['bottom-navigation'], '/components/bottom-navigation/index');
+  }
+  const template = fs.readFileSync(path.join(root, 'components/bottom-navigation/index.wxml'), 'utf8');
+  assert.match(template, /<t-tab-bar\b[^>]*\splaceholder(?:\s|>)/);
+  assert.doesNotMatch(template, /fixed="\{\{false\}\}"/);
+});
 
 test('cached tab pages retain their own highlight when switching away and returning', () => {
   const h = navigationHarness();

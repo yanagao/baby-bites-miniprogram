@@ -2,7 +2,7 @@ module.exports = [
   {
     id: 'pumpkin-millet',
     name: '南瓜小米粥',
-    category: '粥与面',
+    category: '粥饭主食',
     minutes: 30,
     texture: '软烂颗粒',
     ingredients: [{ name: '南瓜', amount: '50 克' }, { name: '小米', amount: '20 克' }],
@@ -13,7 +13,7 @@ module.exports = [
   {
     id: 'tomato-beef-noodle',
     name: '番茄牛肉软面',
-    category: '粥与面',
+    category: '粥饭主食',
     minutes: 25,
     texture: '软烂颗粒',
     ingredients: [{ name: '番茄', amount: '半个' }, { name: '牛肉', amount: '25 克' }, { name: '面条', amount: '20 克' }],
@@ -24,7 +24,7 @@ module.exports = [
   {
     id: 'broccoli-potato',
     name: '西兰花土豆泥',
-    category: '蔬菜泥',
+    category: '蔬菜手抓',
     minutes: 20,
     texture: '细腻泥糊',
     ingredients: [{ name: '西兰花', amount: '30 克' }, { name: '土豆', amount: '60 克' }],
@@ -35,7 +35,7 @@ module.exports = [
   {
     id: 'carrot-chicken',
     name: '胡萝卜鸡肉粥',
-    category: '粥与面',
+    category: '粥饭主食',
     minutes: 35,
     texture: '软烂颗粒',
     ingredients: [{ name: '胡萝卜', amount: '30 克' }, { name: '鸡肉', amount: '25 克' }, { name: '大米', amount: '20 克' }],
@@ -46,7 +46,7 @@ module.exports = [
   {
     id: 'yam-red-date',
     name: '山药红枣泥',
-    category: '蔬菜泥',
+    category: '蔬菜手抓',
     minutes: 25,
     texture: '细腻泥糊',
     ingredients: [{ name: '山药', amount: '60 克' }, { name: '红枣', amount: '2 颗' }],
@@ -57,7 +57,7 @@ module.exports = [
   {
     id: 'spinach-egg-pancake',
     name: '菠菜鸡蛋小饼',
-    category: '小点心',
+    category: '早餐饼',
     minutes: 20,
     texture: '手指食物',
     ingredients: [{ name: '菠菜', amount: '20 克' }, { name: '鸡蛋', amount: '1 个' }, { name: '面粉', amount: '15 克' }],
@@ -68,7 +68,7 @@ module.exports = [
   {
     id: 'salmon-vegetable',
     name: '三文鱼蔬菜粥',
-    category: '粥与面',
+    category: '粥饭主食',
     minutes: 35,
     texture: '软烂颗粒',
     ingredients: [{ name: '三文鱼', amount: '25 克' }, { name: '西兰花', amount: '20 克' }, { name: '胡萝卜', amount: '20 克' }, { name: '大米', amount: '20 克' }],
@@ -79,12 +79,155 @@ module.exports = [
   {
     id: 'banana-oat-pancake',
     name: '香蕉燕麦小饼',
-    category: '小点心',
+    category: '早餐饼',
     minutes: 20,
     texture: '手指食物',
     ingredients: [{ name: '香蕉', amount: '半根' }, { name: '燕麦', amount: '20 克' }, { name: '鸡蛋', amount: '1 个' }],
     steps: ['香蕉去皮压泥，燕麦片打成细粉。', '加入打散的鸡蛋和燕麦粉，拌成均匀面糊。', '不粘锅刷薄油，摊入少量面糊，小火煎至两面及内部熟透。', '放至适口温度，切成柔软、便于拿取的小条。'],
     note: '确认鸡蛋、燕麦等食材已适应；饼的软硬和形状按实际进食能力调整。',
     imageKey: 'banana'
+  },
+  {
+    id: 'chicken-tofu-patty',
+    name: '鸡肉豆腐软饼',
+    category: '肉饼肉丸',
+    minutes: 25,
+    texture: '手指食物',
+    ingredients: [{ name: '鸡肉', amount: '30 克' }, { name: '豆腐', amount: '40 克' }, { name: '面粉', amount: '10 克' }],
+    steps: ['鸡肉去皮去骨去筋，剁成细泥；豆腐沥水后压碎。', '将鸡肉泥、豆腐和面粉拌匀，分成厚约半厘米的扁饼。', '不粘锅刷薄油，小火煎至两面定形，加入少量水并盖盖焖熟。', '切开最厚处确认鸡肉完全熟透、内部无生面糊，必要时继续加热；放温后切成容易压散的软条。'],
+    note: '豆腐选原味；软饼需能轻松压散，咀嚼尚不熟练时可压碎后喂食。',
+    imageKey: 'pancake'
+  },
+  {
+    id: 'carrot-beef-steamed-patty',
+    name: '胡萝卜牛肉蒸饼',
+    category: '肉饼肉丸',
+    minutes: 30,
+    texture: '手指食物',
+    ingredients: [{ name: '牛肉', amount: '30 克' }, { name: '胡萝卜', amount: '25 克' }, { name: '土豆', amount: '30 克' }],
+    steps: ['胡萝卜和土豆去皮切薄片，蒸至能轻松压碎，再压成细泥。', '牛肉去筋剁成细泥，与蔬菜泥拌匀；较干时加少量水。', '将肉泥铺在浅盘中，厚度不超过 1 厘米，水开后入锅蒸约 15 分钟。', '切开检查牛肉已全部熟透，未熟继续蒸；放温后切成软条，吃前再检查有无筋膜。'],
+    note: '蒸制时间随厚度调整，牛肉需熟透且细软；可加少量温水压成碎末。',
+    imageKey: 'pancake'
+  },
+  {
+    id: 'cabbage-pork-soft-meatball',
+    name: '白菜猪肉软丸',
+    category: '肉饼肉丸',
+    minutes: 30,
+    texture: '软烂颗粒',
+    ingredients: [{ name: '猪肉', amount: '30 克' }, { name: '白菜', amount: '30 克' }, { name: '豆腐', amount: '30 克' }, { name: '面粉', amount: '5 克' }],
+    steps: ['白菜洗净煮软，切去粗硬菜梗后剁碎；猪肉去筋剁成细泥，豆腐压碎。', '将全部食材拌匀，用勺子分成小份并轻轻压扁，放在浅盘中。', '水开后入蒸锅蒸约 15 分钟，切开最厚处确认猪肉完全熟透；未熟继续加热。', '将熟软丸压碎并加少量温水调软，放温后喂食，不整颗提供。'],
+    note: '不做紧实、弹牙的肉丸；熟后务必压碎，避免圆形食物整颗入口。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'pumpkin-oat-steamed-cake',
+    name: '南瓜燕麦蒸糕',
+    category: '面包糕点',
+    minutes: 40,
+    texture: '手指食物',
+    ingredients: [{ name: '南瓜', amount: '50 克' }, { name: '燕麦', amount: '25 克' }, { name: '鸡蛋', amount: '1 个' }],
+    steps: ['南瓜去皮去籽切片，蒸软压泥并放温；原味燕麦片打成细粉。', '将南瓜泥、燕麦粉和打散的鸡蛋拌匀，倒入铺好烘焙纸的浅模具，厚度不超过 2 厘米。', '盖上耐热小盘防止水滴落入，水开后入锅蒸约 20 分钟。', '切开确认蛋液和燕麦糊均已熟透、中心无湿生糊，放温后脱模并切成柔软长条。'],
+    note: '使用无添加糖的原味燕麦；成品不加糖或蜂蜜，太干时压碎后加少量温水。',
+    imageKey: 'pancake'
+  },
+  {
+    id: 'apple-yam-steamed-cake',
+    name: '苹果山药蒸糕',
+    category: '面包糕点',
+    minutes: 35,
+    texture: '手指食物',
+    ingredients: [{ name: '苹果', amount: '40 克' }, { name: '山药', amount: '60 克' }, { name: '鸡蛋', amount: '1 个' }, { name: '面粉', amount: '10 克' }],
+    steps: ['苹果洗净去皮去核，山药去皮，分别切小块。', '将苹果、山药和鸡蛋打成细糊，加入面粉拌匀，倒入铺好烘焙纸的浅模具。', '糊的厚度不超过 2 厘米，盖耐热小盘，水开后蒸约 25 分钟。', '切开检查中心已凝固、没有生面糊且山药熟透，放温后切软条；偏黏时压碎并加少量温水调匀后喂食。'],
+    note: '苹果核须彻底去净；山药黏液可能刺激皮肤，处理时可戴手套。',
+    imageKey: 'yam'
+  },
+  {
+    id: 'sweet-potato-soft-bun',
+    name: '红薯小馒头',
+    category: '面包糕点',
+    minutes: 80,
+    texture: '手指食物',
+    ingredients: [{ name: '红薯', amount: '40 克' }, { name: '面粉', amount: '60 克' }, { name: '干酵母', amount: '1 克' }, { name: '水', amount: '约 20 毫升' }],
+    steps: ['红薯去皮切片，蒸软压泥，放至不烫手。', '面粉加入干酵母和红薯泥，分次加水揉成柔软不粘手的面团。', '盖好放温暖处发酵至约两倍大，揉匀排气后分成小份，整理成长条，再醒发约 10 分钟。', '冷水入蒸锅，水开后蒸约 15 分钟，关火焖 3 分钟；掰开确认内部熟透、没有湿生面。', '放至适口温度，沿长边分成窄条，避免揉成紧实小团；仅在宝宝能处理此类质地时提供。'],
+    note: '发酵时间随室温变化；馒头须松软，出现黏韧结团时不要直接喂食。',
+    imageKey: 'pancake'
+  },
+  {
+    id: 'pumpkin-steamed-egg',
+    name: '南瓜鸡蛋羹',
+    category: '蒸蛋豆腐',
+    minutes: 30,
+    texture: '细腻泥糊',
+    ingredients: [{ name: '南瓜', amount: '40 克' }, { name: '鸡蛋', amount: '1 个' }, { name: '水', amount: '70 毫升' }],
+    steps: ['南瓜去皮去籽切片，蒸至软烂，压成细泥并放温。', '鸡蛋打散，加入南瓜泥和水拌匀，倒入浅蒸碗。', '盖上耐热小盘，水开后中小火蒸约 15 分钟，直至中心完全凝固、没有流动蛋液。', '检查内部熟透，搅拌散热，按需要压细后喂食。'],
+    note: '鸡蛋需完全熟透；使用已单独尝试并适应的食材，不加盐或酱油。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'spinach-tofu-steamed-egg',
+    name: '菠菜豆腐蒸蛋',
+    category: '蒸蛋豆腐',
+    minutes: 25,
+    texture: '软烂颗粒',
+    ingredients: [{ name: '菠菜', amount: '20 克' }, { name: '豆腐', amount: '40 克' }, { name: '鸡蛋', amount: '1 个' }, { name: '水', amount: '60 毫升' }],
+    steps: ['菠菜洗净煮软，去除较粗的茎，切成细末；原味豆腐压碎。', '鸡蛋打散后加水，拌入菠菜末和豆腐，倒入浅蒸碗。', '盖耐热小盘，水开后蒸约 15 分钟，确认中心凝固、所有蛋液完全熟透。', '用勺子压散并搅拌降温，检查没有粗长菜茎后喂食。'],
+    note: '豆腐与鸡蛋分别确认适应后再组合；颗粒可用勺背进一步压细。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'salmon-tofu-steamed-patty',
+    name: '三文鱼豆腐蒸饼',
+    category: '蒸蛋豆腐',
+    minutes: 30,
+    texture: '手指食物',
+    ingredients: [{ name: '三文鱼', amount: '30 克' }, { name: '豆腐', amount: '50 克' }, { name: '面粉', amount: '10 克' }],
+    steps: ['三文鱼去皮，逐一检查并去除鱼刺，剁成细泥；豆腐沥水压碎。', '加入面粉拌匀，铺在浅盘中，厚度不超过 1 厘米。', '水开后蒸约 15 分钟，切开检查鱼肉全部熟透、内部没有生面糊，未熟继续蒸。', '放温后切成容易压散的软条，吃前再次检查鱼刺；需要时压碎后喂食。'],
+    note: '使用新鲜、未腌制的鱼肉；彻底去刺，鱼和豆制品均需已适应。',
+    imageKey: 'salmon'
+  },
+  {
+    id: 'potato-beef-thick-soup',
+    name: '土豆牛肉浓汤',
+    category: '汤羹炖菜',
+    minutes: 30,
+    texture: '软烂颗粒',
+    ingredients: [{ name: '土豆', amount: '60 克' }, { name: '牛肉', amount: '25 克' }, { name: '胡萝卜', amount: '20 克' }, { name: '水', amount: '200 毫升' }],
+    steps: ['土豆、胡萝卜去皮切小块，牛肉去筋剁成细末。', '蔬菜加水煮开，转小火煮至能用勺子轻松压碎。', '加入牛肉末并立即搅散，继续煮至牛肉完全熟透，检查没有硬肉团。', '用勺背压碎土豆和胡萝卜，使汤自然浓稠；连肉末和蔬菜一起盛出，放温后喂食。'],
+    note: '保留汤里的肉和蔬菜一起吃；不加浓汤块，稠度可用温水调整。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'tomato-egg-tofu-soup',
+    name: '番茄鸡蛋豆腐羹',
+    category: '汤羹炖菜',
+    minutes: 20,
+    texture: '软烂颗粒',
+    ingredients: [{ name: '番茄', amount: '50 克' }, { name: '鸡蛋', amount: '1 个' }, { name: '豆腐', amount: '40 克' }, { name: '水', amount: '150 毫升' }],
+    steps: ['番茄洗净去皮切碎，豆腐压碎，鸡蛋打散备用。', '番茄加水煮至软烂，加入豆腐继续煮约 3 分钟。', '保持汤微沸，缓慢倒入蛋液并搅散，继续煮至蛋花全部熟透、没有液态蛋液。', '将较大的蛋花压碎，搅拌放温后连汤和食材一起喂食。'],
+    note: '番茄去掉较硬的蒂；蛋花保持细碎，按实际进食能力调整。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'winter-melon-chicken-stew',
+    name: '冬瓜鸡肉炖菜',
+    category: '汤羹炖菜',
+    minutes: 30,
+    texture: '软烂颗粒',
+    ingredients: [{ name: '冬瓜', amount: '60 克' }, { name: '鸡肉', amount: '30 克' }, { name: '胡萝卜', amount: '20 克' }, { name: '水', amount: '180 毫升' }],
+    steps: ['冬瓜去皮去籽，胡萝卜去皮，都切成细小块；鸡肉去皮去骨去筋后剁细。', '冬瓜和胡萝卜加水煮开，转小火炖至软烂。', '加入鸡肉末，充分搅散后继续炖煮，直至鸡肉全部熟透；较干时补少量热水。', '用勺背将蔬菜压碎，检查无骨和硬肉团，放温后连食材一起喂食。'],
+    note: '冬瓜籽和瓜皮需去净；成品保留少量汤汁，让肉末湿润易压散。',
+    imageKey: 'chicken'
+  },
+  {
+    id: 'broccoli-carrot-soft-fingers',
+    name: '西兰花胡萝卜软条',
+    category: '蔬菜手抓',
+    minutes: 20,
+    texture: '手指食物',
+    ingredients: [{ name: '西兰花', amount: '40 克' }, { name: '胡萝卜', amount: '50 克' }],
+    steps: ['胡萝卜去皮切成长条，不切成圆片；西兰花洗净，保留便于拿取的嫩茎并去除硬皮。', '胡萝卜先蒸约 8 分钟，再加入西兰花，继续蒸至两种蔬菜都能用手指轻轻压扁。', '逐条检查是否有硬芯或粗纤维，未软的继续蒸；较粗的长条纵向分开。', '放至适口温度后提供，大小与形状按实际进食能力调整，尚不能处理时压成泥。'],
+    note: '只提供熟软的蔬菜；手抓时坐直进食，并由成人全程看护。',
+    imageKey: 'yam'
   }
 ];

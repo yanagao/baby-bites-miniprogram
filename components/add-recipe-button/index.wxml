@@ -1,1 +1,1 @@
-<t-fab icon="{{addIcon}}" button-props="{{buttonProps}}" style="right:36rpx;bottom:calc(144rpx + env(safe-area-inset-bottom));z-index:100;" bind:click="add" aria-label="添加菜谱" />
+<t-button theme="primary" shape="circle" icon="add" bind:tap="add" aria-label="添加菜谱" />

@@ -1,0 +1,12 @@
+{
+  "navigationBarTitleText": "口袋主页",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
+    "food-art": "/components/food-art/index"
+  }
+}

@@ -1,11 +1,16 @@
 {
-  "navigationBarTitleText": "记一口",
+  "navigationBarTitleText": "记录用餐",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
     "t-radio-group": "/miniprogram_npm/tdesign-miniprogram/radio-group/radio-group",
     "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
     "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-date-time-picker": "/miniprogram_npm/tdesign-miniprogram/date-time-picker/date-time-picker",
+    "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",
+    "t-collapse-panel": "/miniprogram_npm/tdesign-miniprogram/collapse-panel/collapse-panel",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar"
   }
 }

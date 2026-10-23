@@ -1,47 +1,30 @@
-page{background:#f7f9fc;color:#1d2b3a;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;font-size:28rpx;line-height:1.6}
-view,text,button,input,textarea{box-sizing:border-box}
-.press{opacity:.72}.page{padding:32rpx 32rpx 150rpx}.card{background:#fff;border:1rpx solid #e4eaf2;border-radius:28rpx;padding:32rpx;margin-bottom:24rpx}.section-title{font-size:34rpx;font-weight:650;line-height:1.4;letter-spacing:-.6rpx;margin:30rpx 0 22rpx}.muted{color:#64748b;font-size:25rpx}.primary{background:#0071e3;color:#fff;font-weight:600}.secondary{background:#eef5fd;color:#0063c8}.text-button{padding:12rpx 8rpx;background:transparent;color:#0071e3;font-size:26rpx;min-height:80rpx}.danger{color:#c43b37;background:#fff1f0}.button-row{display:flex;gap:18rpx;align-items:center}.button-row button{flex:1}.chip-row{display:flex;flex-wrap:wrap;gap:14rpx}.chip{border:1rpx solid #e0e8f2;background:#fff;color:#526783;padding:18rpx 24rpx;min-height:80rpx;font-size:26rpx;display:flex;gap:10rpx;align-items:center;border-radius:18rpx}.chip-active{background:#e8f2ff;color:#0071e3;border-color:#a8cbf0}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:16rpx;flex-wrap:wrap;margin-bottom:24rpx}.empty{text-align:center;padding:70rpx 28rpx;background:#fff;border:1rpx solid #e4eaf2;border-radius:28rpx;margin-top:20rpx}.empty-title{font-size:32rpx;font-weight:600;margin-top:18rpx}.empty-copy{font-size:26rpx;color:#64748b;margin:16rpx 0 28rpx}.field{margin-bottom:30rpx}.label{display:block;margin-bottom:12rpx;font-size:28rpx;font-weight:550}.input,.textarea{display:block;width:100%;background:#f7f9fc;border:1rpx solid #e0e7ef;border-radius:18rpx;padding:22rpx 24rpx;font-size:28rpx;min-height:90rpx;color:#1d2b3a}.textarea{height:220rpx;line-height:1.6}.helper{font-size:24rpx;color:#64748b;line-height:1.7;margin:10rpx 0}.error{color:#bf302c;background:#fff0ef;padding:20rpx 24rpx;border-radius:16rpx;margin-bottom:24rpx;font-size:26rpx}.warning{color:#7d5830;background:#fff8e8;padding:20rpx 24rpx;border-radius:16rpx;margin-bottom:24rpx;font-size:26rpx}.divider{height:1rpx;background:#e8edf4;margin:28rpx 0}.pill{color:#537291;background:#eef5fd;border-radius:12rpx;padding:8rpx 16rpx;font-size:23rpx;display:inline-block}.inline-icon{display:flex;align-items:center;gap:12rpx}.page-footer{font-size:23rpx;color:#8290a3;text-align:center;margin:32rpx 0}.setting-row{display:flex;align-items:center;justify-content:space-between;padding:22rpx 0;min-height:88rpx}.grow{flex:1}.title{font-size:44rpx;font-weight:650;line-height:1.3;letter-spacing:-1rpx}.recipe-list{display:flex;flex-direction:column;gap:22rpx}.switch-row{display:flex;align-items:center;justify-content:space-between;gap:16rpx;padding:12rpx 0}.small{font-size:24rpx}.photo-preview{width:100%;height:330rpx;border-radius:20rpx;background:#eef5fd;margin:16rpx 0}
-
-/* Override the native v2 fixed button width with the layout's intended width. */
-.primary,.secondary{width:100%}
-.text-button,.chip{width:auto}
-.button-row .primary,.button-row .secondary,.button-row .text-button{width:auto;min-width:0;flex:1}
-
-/* Native mini buttons keep class-controlled dimensions on older base libraries. */
-.page .primary,.page .secondary{display:flex;align-items:center;justify-content:center;width:100%;min-height:88rpx;margin-left:0;margin-right:0;padding:22rpx 28rpx;font-size:28rpx;line-height:1.4;white-space:nowrap;box-sizing:border-box}
-.page .button-row .primary,.page .button-row .secondary,.page .button-row .text-button{width:auto;min-width:0;flex:1}
-
-/* TDesign theme: shared by actual library controls, with readable light surfaces. */
-page,.page{
-  --td-font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Helvetica Neue',sans-serif;
-  --td-brand-color:#0071e3;
-  --td-brand-color-active:#005bb9;
-  --td-brand-color-light:#eaf3ff;
-  --td-brand-color-light-active:#dcecff;
-  --td-brand-color-disabled:#a8cbf0;
-  --td-text-color-primary:#1d2b3a;
-  --td-text-color-secondary:#536b88;
-  --td-text-color-placeholder:#8290a3;
-  --td-bg-color-page:#f7f9fc;
-  --td-bg-color-container:#fff;
-  --td-bg-color-secondarycontainer:#f7f9fc;
-  --td-bg-color-component:#eef2f7;
-  --td-border-level-1-color:#e4eaf2;
-  --td-component-border:#e0e7ef;
-  --td-button-border-radius:20rpx;
-  --td-button-medium-height:88rpx;
-  --td-button-medium-font:600 28rpx/1.4 var(--td-font-family);
-  --td-button-light-color:#0067cc;
-  --td-button-light-bg-color:#eef5ff;
-  --td-button-light-active-bg-color:#dfedff;
-  --td-input-default-text-color:#1d2b3a;
-  --td-input-placeholder-text-color:#8290a3;
-  --td-search-height:88rpx;
-  --td-search-bg-color:#fff;
-  --td-search-square-radius:20rpx;
-  --td-tab-nav-bg-color:transparent;
-  --td-tag-square-border-radius:16rpx;
-  --td-switch-checked-color:#0071e3;
-  --td-empty-description-color:#64748b;
+page {
+  background: #fffaf1; color: #3e2722; font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  --td-brand-color: #ee5b73; --td-brand-color-active: #d94962; --td-brand-color-light: #ffedf0; --td-brand-color-light-active: #ffe1e6;
+  --td-text-color-primary: #3e2722; --td-text-color-secondary: #85746b; --td-bg-color-page: #fffaf1;
+  --td-navbar-bg-color: #fffaf1; --td-navbar-color: #3e2722; --td-navbar-title-font-weight: 600;
+  --td-button-primary-bg-color: #ee5b73; --td-button-primary-border-color: #ee5b73; --td-button-border-radius: 999rpx;
+  --td-button-default-color: #754334; --td-button-default-border-color: #d9bc9e;
+  --td-search-bg-color: #f2ede5; --td-search-border-radius: 28rpx; --td-search-result-high-light-color: #ee5b73;
+  --td-tabs-bg-color: transparent; --td-tabs-item-active-color: #e84966; --td-tabs-track-color: #ee5b73;
+  --td-tab-bar-bg-color: #fffaf3; --td-tab-bar-item-color: #4b332b; --td-tab-bar-item-active-color: #e74965;
+  --td-tab-bar-active-bg: #ffe4e7; --td-switch-checked-color: #ee5b73; --td-cell-bg-color: #fffdfa;
+  --td-cell-group-title-bg-color: #fffaf1; --td-cell-group-title-color: #9c8271;
+  --td-input-bg-color: #fffdfa; --td-textarea-background-color: #fffdfa;
 }
-.page{padding-bottom:calc(180rpx + env(safe-area-inset-bottom))}
+view, text, button {box-sizing: border-box;}
+
+.page-shell {padding: 24rpx 30rpx 28rpx;}
+.page-title {font-family: PocketBrush, 'Kaiti SC', 'STKaiti', 'PingFang SC', sans-serif; font-size: 60rpx; line-height: 1.22; font-weight: 700; color: #42251e;}
+.brush {font-family: PocketBrush, 'Kaiti SC', 'STKaiti', 'PingFang SC', sans-serif;}
+.muted {color: #8d7c70; font-size: 26rpx; line-height: 1.6;}
+.form-error {--td-cell-description-color: var(--td-error-color, #d54941);}
+.panel {background: #fff; border-radius: 30rpx; border: 1rpx solid #f1e8d9; box-shadow: 0 5rpx 18rpx rgba(92,55,24,.035);}
+.pink-button {margin: 0; background: #ee5b73; color: #fff; border-radius: 999rpx; min-height: 88rpx; line-height: 88rpx; font-size: 32rpx; font-weight: 600;}
+.pink-button[disabled] {background: #f4c3cb; color: #fff;}
+.pill {display: inline-flex; align-items: center; border-radius: 999rpx; padding: 6rpx 20rpx; font-size: 24rpx; background: #ffedf0; color: #b84b60;}
+.pill-green {background: #e8f4df; color: #4d784a;}
+.section-title {font-family: PocketBrush, 'Kaiti SC', 'PingFang SC', sans-serif; font-size: 36rpx; font-weight: 600;}
+.empty-note {padding: 48rpx 28rpx; text-align: center; font-size: 28rpx; color: #8a786b; line-height: 1.7;}
+
+.pink-button::after {border:0;}

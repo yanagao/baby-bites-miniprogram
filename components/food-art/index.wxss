@@ -1,0 +1,5 @@
+.food-art {position:relative;overflow:hidden;flex:none;display:block;}
+.food-cell {position:relative;overflow:hidden;}
+.food-sheet {position:absolute;max-width:none;}
+.food-fallback {height:100%;display:flex;align-items:center;justify-content:center;}
+.food-fallback-aligned {align-items:center;}

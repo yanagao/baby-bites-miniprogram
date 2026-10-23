@@ -11,7 +11,7 @@ const output = path.join(root, 'miniprogram_npm', packageName);
 const componentExtensions = ['.js', '.json', '.wxml', '.wxss'];
 const textExtensions = new Set(['.js', '.json', '.wxml', '.wxss', '.wxs']);
 const assetPattern = /\.(?:png|jpe?g|gif|webp|svg|avif|ico|ttf|otf|woff2?|eot|mp3|mp4|wav)$/i;
-const runtimeIgnored = new Set(['node_modules', '.git', 'output', 'tests', 'scripts']);
+const runtimeIgnored = new Set(['node_modules', '.git', 'output', 'tests', 'scripts', 'cloudfunctions', 'cloud']);
 const relative = (base, file) => path.relative(base, file).split(path.sep).join('/');
 const inside = (base, file) => file === base || file.startsWith(base + path.sep);
 

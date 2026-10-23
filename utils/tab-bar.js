@@ -1,8 +1,8 @@
-// Every tab page owns a separate custom tab bar. Update that page's instance,
+// Every tab page owns an in-page navigation component. Update that instance,
 // never the instance that started a switchTab request and is now hidden.
 function syncTabBar(page) {
-  if (!page || !page.route || typeof page.getTabBar !== 'function') return;
-  const tabBar = page.getTabBar();
+  if (!page || !page.route || typeof page.selectComponent !== 'function') return;
+  const tabBar = page.selectComponent('#bottom-navigation');
   if (tabBar && typeof tabBar.setActiveRoute === 'function') {
     tabBar.setActiveRoute('/' + page.route);
   }

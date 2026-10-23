@@ -1,0 +1,2 @@
+@import "../profile/index.wxss";
+.feed-card {margin-bottom:20rpx;overflow:hidden;}.feed-author {display:flex;align-items:center;gap:12rpx;padding:20rpx 22rpx;border-bottom:1rpx solid #f1e8d9;color:#9d5c4a;font-size:26rpx;}.feed-author>text {flex:1;min-width:0;overflow-wrap:anywhere;}.feed-recipe {margin:0;}.person-avatar {width:88rpx;height:88rpx;display:flex;align-items:center;justify-content:center;flex:none;background:#ffe8e5;color:#b75d58;border-radius:50%;}

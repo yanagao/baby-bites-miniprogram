@@ -1,0 +1,16 @@
+TDesign original icon font 0.4.5 (unmodified bytes, Base64 encoded)
+Source: https://tdesign.gtimg.com/icon/0.4.5/fonts/t.woff
+This is the exact version referenced by tdesign-miniprogram 1.17.0 icon.wxss.
+License: MIT, Tencent. See LICENSE in this directory.
+SHA-256: 377024275d01176d32461000713af752fbefb0d2520c49b0aeda82a3a3150b54
+
+The original font is loaded through wx.loadFontFace in app.js. No TDesign
+styles, font glyphs, size, color, or component source files are modified.
+
+Official WeChat API source:
+https://github.com/wechat-miniprogram/api-typings/blob/master/types/wx/lib.wx.api.d.ts
+LoadFontFaceOption.source accepts HTTPS or Data URL. Data URL requires
+base library >= 3.7.9; global loading has been supported since 2.10.0.
+The project loads only the webview scope. Older clients use the original
+TDesign HTTPS font URL. Offline rendering on iOS/Android still requires
+real-device verification; successful static checks are not that verification.

@@ -1,9 +1,7 @@
 {
   "component": true,
-  "styleIsolation": "apply-shared",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-tag": "/miniprogram_npm/tdesign-miniprogram/tag/tag"
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "food-art": "/components/food-art/index"
   }
 }

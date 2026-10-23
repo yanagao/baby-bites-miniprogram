@@ -1,0 +1,2 @@
+@import "../detail/index.wxss";
+.public-author {display:flex;align-items:center;gap:14rpx;padding:20rpx 0 24rpx;color:#9d5c4a;font-size:27rpx;}.public-author>text {flex:1;min-width:0;overflow-wrap:anywhere;}.public-pressed {opacity:.7;}.copy-explanation {margin-top:30rpx;padding:22rpx;background:#f5eddf;border-radius:22rpx;}.public-bottom {display:block;}

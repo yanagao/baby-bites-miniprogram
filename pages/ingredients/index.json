@@ -1,13 +1,16 @@
 {
-  "navigationBarTitleText": "食材找菜",
+  "navigationBarTitleText": "按食材找菜",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
-    "recipe-card": "/components/recipe-card/index",
-    "add-recipe-button": "/components/add-recipe-button/index",
-    "t-check-tag": "/miniprogram_npm/tdesign-miniprogram/check-tag/check-tag",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-search": "/miniprogram_npm/tdesign-miniprogram/search/search",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
     "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
     "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "recipe-card": "/components/recipe-card/index",
+    "food-art": "/components/food-art/index",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "bottom-navigation": "/components/bottom-navigation/index"
   }
 }

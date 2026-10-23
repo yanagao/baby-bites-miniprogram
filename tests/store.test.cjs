@@ -2,27 +2,28 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const seed = require('../data/recipes');
 const path = require('node:path');
 const selectors = require('../utils/selectors');
 const storePath = path.resolve(__dirname, '../utils/store.js');
 const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 
 function setup(initial, readError) {
-  let saved = copy(initial);
+  const storage = new Map([['baby-bites-v1', copy(initial)]]);
   let failWrite = false;
   let writes = 0;
   global.wx = {
-    getStorageSync() { if (readError) throw Error('Storage unavailable'); return copy(saved); },
-    setStorageSync(key, value) { if (failWrite) throw Error('Quota exceeded'); writes += 1; saved = copy(value); }
+    getStorageSync(key) { if (readError) throw Error('Storage unavailable'); return copy(storage.get(key)); },
+    setStorageSync(key, value) { if (failWrite) throw Error('Quota exceeded'); writes += 1; storage.set(key, copy(value)); }
   };
   delete require.cache[storePath];
   const store = require(storePath);
-  return {store, saved: () => copy(saved), writes: () => writes, failWrites: () => { failWrite = true; },
+  return {store, saved: () => copy(storage.get('baby-bites-v1')), writes: () => writes, failWrites: () => { failWrite = true; },
     allowWrites: () => { failWrite = false; }};
 }
 
 function recipe(overrides) {
-  return Object.assign({name: '西红柿土豆泥', category: '蔬菜泥', minutes: 20, texture: '细腻泥糊',
+  return Object.assign({name: '西红柿土豆泥', category: '蔬菜手抓', minutes: 20, texture: '细腻泥糊',
     ingredients: [{name: '西红柿', amount: '50 克'}, {name: '土豆', amount: '60 克'}],
     steps: ['把两种食材洗净、切块。', '蒸熟后压泥。'], note: ''}, overrides || {});
 }
@@ -31,9 +32,9 @@ function withLog(state, id, recipeId, rating, date, createdAt) {
   state.logs.push({id, recipeId, rating, date, createdAt, portion: '', note: ''});
 }
 
-test('first read exposes eight examples, no fabricated feedback, and no implicit write', () => {
+test('first read exposes the starter catalog, no fabricated feedback, and no implicit write', () => {
   const app = setup();
-  assert.equal(app.store.init().recipes.length, 8);
+  assert.equal(app.store.init().recipes.length, seed.length);
   assert.deepEqual(app.store.getState().logs, []);
   assert.equal(app.store.getWarning(), '');
   assert.equal(app.writes(), 0);
@@ -106,10 +107,10 @@ test('feedback rejects impossible/future dates and invalid ratings', () => {
   const app = setup();
   const recipeId = app.store.getState().recipes[0].id;
   for (const date of ['2024-02-30', '2023-02-29', '2024-13-01', '9999-12-31']) {
-    assert.throws(() => app.store.addLog({recipeId, rating: 3, date}), /喜好记录/);
+    assert.throws(() => app.store.addLog({recipeId, rating: 3, date}), /用餐记录/);
   }
-  assert.throws(() => app.store.addLog({recipeId, rating: 0}), /喜好记录/);
-  assert.throws(() => app.store.addLog({recipeId, rating: 3, note: '字'.repeat(501)}), /喜好记录/);
+  assert.throws(() => app.store.addLog({recipeId, rating: 0}), /用餐记录/);
+  assert.throws(() => app.store.addLog({recipeId, rating: 3, note: '字'.repeat(501)}), /用餐记录/);
   assert.equal(app.store.getState().logs.length, 0);
   app.store.addLog({recipeId, rating: 2, date: '2024-02-29'});
   assert.equal(app.store.getState().logs.length, 1);
@@ -152,7 +153,7 @@ test('failed storage writes roll back memory for creation, edits, deletes, and p
 test('corrupt stored content is not overwritten by initialization or ordinary mutations', () => {
   const original = '{this is not json';
   const app = setup(original);
-  assert.equal(app.store.getState().recipes.length, 8);
+  assert.equal(app.store.getState().recipes.length, seed.length);
   assert.match(app.store.getWarning(), /原数据未被覆盖/);
   assert.equal(app.saved(), original);
   assert.throws(() => app.store.saveRecipe(recipe()), /导入有效备份/);
@@ -228,7 +229,7 @@ test('invalid and oversized backup merges are atomic and leave re-loadable data'
   assert.throws(() => app.store.importBackup('{bad'), /JSON/);
   const orphan = copy(baseline);
   withLog(orphan, 'bad-log', 'missing-recipe', 3, '2024-04-01', 1);
-  assert.throws(() => app.store.importBackup(JSON.stringify(orphan)), /喜好记录/);
+  assert.throws(() => app.store.importBackup(JSON.stringify(orphan)), /用餐记录/);
   const duplicate = copy(baseline);
   duplicate.recipes.push(copy(duplicate.recipes[0]));
   assert.throws(() => app.store.importBackup(JSON.stringify(duplicate)), /菜谱信息/);
@@ -241,13 +242,14 @@ test('backup write failure preserves current recipes and feedback', () => {
   const app = setup();
   app.store.setNickname('保留的称呼');
   const before = app.store.getState();
+  const savedBefore = app.saved();
   const incoming = copy(before);
   incoming.recipes[0].name = '不能写入的修改';
   incoming.recipes[0].updatedAt = Date.now() + 1;
   app.failWrites();
   assert.throws(() => app.store.importBackup(JSON.stringify(incoming)), /保存失败/);
   assert.deepEqual(app.store.getState(), before);
-  assert.deepEqual(app.saved(), before);
+  assert.deepEqual(app.saved(), savedBefore);
 });
 
 test('latest preference uses meal date, then creation time on the same day', () => {
@@ -266,22 +268,25 @@ test('latest preference uses meal date, then creation time on the same day', () 
   assert.equal(selectors.listLogs(state)[0].id, 'same-day-later');
   assert.equal(selectors.listLogs(state)[0].recipeName, state.recipes[0].name);
   assert.equal(selectors.listLogs(state, '3').length, 1);
-  assert.deepEqual(selectors.stats(state), {recipeCount: 8, likedCount: 0, logCount: 3, triedCount: 1});
+  assert.deepEqual(selectors.stats(state), {recipeCount: seed.length, likedCount: 0, logCount: 3, triedCount: 1});
 });
 
 test('recipe search, sort, favorites, and texture filters compose without mutating input', () => {
   const state = setup().store.getState();
   const before = copy(state);
   assert.equal(selectors.listRecipes(state, {search: '西红柿'})[0].id, 'tomato-beef-noodle');
-  assert.equal(selectors.listRecipes(state, {search: '  南瓜  '}).length, 1);
+  const pumpkinRecipes = selectors.listRecipes(state, {search: '  南瓜  '});
+  assert.ok(pumpkinRecipes.length > 0);
+  assert.ok(pumpkinRecipes.every(item => item.name.includes('南瓜') || item.ingredients.some(ingredient => ingredient.name.includes('南瓜'))));
   assert.equal(selectors.listRecipes(state, {search: '不存在的食材'}).length, 0);
   const quick = selectors.listRecipes(state, {sort: 'quick'});
   assert.ok(quick.every((item, index) => index === 0 || item.minutes >= quick[index - 1].minutes));
   assert.deepEqual(state, before);
   state.recipes[2].favorite = true;
   assert.deepEqual(selectors.listRecipes(state, {onlyFavorites: true}).map(item => item.id), ['broccoli-potato']);
-  assert.equal(selectors.listRecipes(state, {onlyFavorites: true, category: '小点心'}).length, 0);
-  assert.ok(selectors.listRecipes(state, {texture: '手指食物'}).every(item => item.category === '小点心'));
+  assert.equal(selectors.listRecipes(state, {onlyFavorites: true, category: '早餐饼'}).length, 0);
+  assert.deepEqual(selectors.listRecipes(state, {texture: '手指食物'}).map(item => item.id).sort(),
+    state.recipes.filter(item => item.texture === '手指食物').map(item => item.id).sort());
   withLog(state, 'favorite-rating', state.recipes[2].id, 3, '2024-04-01', 1);
   assert.equal(selectors.listRecipes(state, {sort: 'liked'})[0].id, 'broccoli-potato');
 });
@@ -299,23 +304,79 @@ test('pantry matching reports missing ingredients and normalizes aliases', () =>
   assert.equal(partial.missingText, '西兰花');
   assert.equal(partial.complete, false);
   assert.equal(selectors.matchRecipes(state, ['南瓜', '小米'], true).length, 1);
-  assert.equal(selectors.matchRecipes(state, ['冬瓜']).length, 0);
+  assert.equal(selectors.matchRecipes(state, ['不存在的食材']).length, 0);
   assert.deepEqual(selectors.matchRecipes(state, []), []);
   assert.equal(selectors.normalizeIngredient('constructor'), 'constructor');
 });
 
 test('random selection respects category/latest dislikes, avoids repetition, and handles empty pools', () => {
   const state = setup().store.getState();
-  const first = selectors.randomRecipe(state, {category: '蔬菜泥'}, () => 0);
-  const next = selectors.randomRecipe(state, {category: '蔬菜泥', lastId: first.id}, () => 0);
+  const first = selectors.randomRecipe(state, {category: '蔬菜手抓'}, () => 0);
+  const next = selectors.randomRecipe(state, {category: '蔬菜手抓', lastId: first.id}, () => 0);
   assert.notEqual(first.id, next.id);
-  assert.equal(next.category, '蔬菜泥');
-  state.recipes.filter(item => item.category === '蔬菜泥').forEach((item, index) => {
+  assert.equal(next.category, '蔬菜手抓');
+  state.recipes.filter(item => item.category === '蔬菜手抓').forEach((item, index) => {
     withLog(state, `disliked-${index}`, item.id, 1, '2024-04-01', index);
   });
-  assert.equal(selectors.randomRecipe(state, {category: '蔬菜泥'}, () => 0), null);
-  assert.ok(selectors.randomRecipe(state, {category: '蔬菜泥', skipDisliked: false}, () => 0));
+  assert.equal(selectors.randomRecipe(state, {category: '蔬菜手抓'}, () => 0), null);
+  assert.ok(selectors.randomRecipe(state, {category: '蔬菜手抓', skipDisliked: false}, () => 0));
   withLog(state, 'now-liked', first.id, 3, '2024-04-02', 5);
-  assert.equal(selectors.randomRecipe(state, {category: '蔬菜泥', lastId: first.id}, () => 0).id, first.id);
+  assert.equal(selectors.randomRecipe(state, {category: '蔬菜手抓', lastId: first.id}, () => 0).id, first.id);
   assert.equal(selectors.randomRecipe({recipes: [], logs: []}, {}, () => 0), null);
+});
+
+test('editing a meal keeps its identity and chronology and updates the latest preference', () => {
+  const {store} = setup();
+  const recipeId = store.getState().recipes[0].id;
+  const id = store.addLog({recipeId, rating: 1, date: '2024-04-02', portion: '尝了几口'});
+  const original = store.getLog(id);
+  assert.equal(store.getLog('missing'), null);
+  original.note = 'only a copy';
+  assert.equal(store.getLog(id).note, '');
+  store.updateLog(id, {recipeId, rating: 3, date: '2024-04-02', portion: '尝了几口', note: '更正反馈'});
+  const updated = store.getLog(id);
+  assert.equal(updated.createdAt, original.createdAt);
+  assert.ok(updated.updatedAt > 0);
+  assert.equal(store.getState().logs.length, 1);
+  const recipe = selectors.enrichRecipe(store.getState(), store.getRecipe(recipeId));
+  assert.equal(recipe.rating, 3);
+  assert.equal(recipe.ratingDate, '2024-04-02');
+  assert.equal(recipe.favorite, false, 'meal preference must not implicitly favorite the recipe');
+  store.toggleFavorite(recipeId);
+  assert.equal(store.getLog(id).rating, 3);
+});
+
+test('invalid and failed meal edits keep persisted data and memory unchanged', () => {
+  const app = setup();
+  const recipeId = app.store.getState().recipes[0].id;
+  const id = app.store.addLog({recipeId, rating: 2, date: '2024-04-02'});
+  const before = app.store.getState();
+  const savedBefore = app.saved();
+  for (const input of [
+    {rating: 0, date: '2024-04-02'}, {rating: 3, date: '2024-02-30'},
+    {rating: 3, date: '2024-04-02', recipeId: 'another-recipe'}
+  ]) assert.throws(() => app.store.updateLog(id, input));
+  assert.throws(() => app.store.updateLog('missing', {rating: 3, date: '2024-04-02'}), /不存在/);
+  app.failWrites();
+  assert.throws(() => app.store.updateLog(id, {rating: 3, date: '2024-04-02'}), /保存失败/);
+  assert.deepEqual(app.store.getState(), before);
+  assert.deepEqual(app.saved(), savedBefore);
+});
+
+test('meal edits round-trip through backups and newer edits win without duplicate records', () => {
+  const app = setup();
+  const recipeId = app.store.getState().recipes[0].id;
+  const id = app.store.addLog({recipeId, rating: 1, date: '2024-04-02'});
+  const oldBackup = app.store.exportBackup();
+  app.store.updateLog(id, {rating: 3, date: '2024-04-02', note: '最新反馈'});
+  const newBackup = app.store.exportBackup();
+  app.store.importBackup(oldBackup);
+  assert.equal(app.store.getLog(id).rating, 3);
+  const other = setup(JSON.parse(oldBackup));
+  other.store.importBackup(newBackup);
+  assert.equal(other.store.getState().logs.length, 1);
+  assert.equal(other.store.getLog(id).note, '最新反馈');
+  assert.equal(other.store.getLog(id).rating, 3);
+  other.store.importBackup(newBackup);
+  assert.equal(other.store.getState().logs.length, 1);
 });

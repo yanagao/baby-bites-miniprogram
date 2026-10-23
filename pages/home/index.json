@@ -1,12 +1,12 @@
 {
-  "navigationBarTitleText": "今天吃什么",
+  "navigationBarTitleText": "随机选菜",
   "usingComponents": {
-    "ui-icon": "/components/ui-icon/index",
-    "recipe-card": "/components/recipe-card/index",
-    "add-recipe-button": "/components/add-recipe-button/index",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "bottom-navigation": "/components/bottom-navigation/index",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
     "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
-    "t-check-tag": "/miniprogram_npm/tdesign-miniprogram/check-tag/check-tag",
-    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+    "food-art": "/components/food-art/index"
   }
 }

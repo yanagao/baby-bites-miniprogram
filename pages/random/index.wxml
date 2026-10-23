@@ -1,28 +1,39 @@
-<view class="page">
-  <view class="card random-settings">
-    <picker range="{{categories}}" value="{{categoryIndex}}" bindchange="category">
-      <t-cell title="菜谱分类" note="{{categories[categoryIndex]}}" arrow />
-    </picker>
-    <t-cell title="避开最近不太喜欢的" bordered="{{false}}">
-      <t-switch slot="right-icon" value="{{skipDisliked}}" bind:change="skip" />
-    </t-cell>
-  </view>
-  <view class="card result" wx:if="{{result}}">
-    <view class="result-symbol"><ui-icon name="dice" tone="blue" size="44" /></view>
-    <view class="muted">这次随机选到</view>
-    <view class="result-name">{{result.name}}</view>
-    <view class="muted">{{result.ingredientText}}</view>
-    <view class="helper">{{result.minutes}} 分钟 · {{result.texture}}</view>
-    <view class="result-rating rating-state">
-      <t-tag wx:if="{{result.rating > 0}}" theme="{{result.rating === 3 ? 'primary' : result.rating === 2 ? 'success' : 'warning'}}" variant="light" shape="round" size="medium" aria-label="已记录喜好：{{result.ratingName}}"><ui-icon slot="icon" name="{{result.ratingIcon}}" tone="{{result.rating === 3 ? 'blue' : result.rating === 2 ? 'green' : 'brown'}}" size="18" />{{result.ratingName}}</t-tag>
-      <text wx:else class="rating-pending">还没记录喜好</text>
+<t-navbar z-index="100" title="随机选一道" placeholder left-arrow />
+<view class="page-shell random-page">
+  <view wx:if="{{result}}" class="random-result">
+    <view class="random-label brush">今天的灵感</view>
+    <image wx:if="{{result.displayPhoto}}" class="random-photo" src="{{result.displayPhoto}}" mode="aspectFill" bindtap="detail" aria-label="查看{{result.name}}的做法" />
+    <view wx:else class="random-art" bindtap="detail" aria-role="button" aria-label="查看{{result.name}}的做法"><food-art name="{{result.ingredients[0].name}}" size="220" /></view>
+    <view class="random-description">
+      <view class="random-name brush">{{result.name}}</view>
+      <view class="random-ingredients">{{result.ingredientText}}</view>
+      <view class="random-metadata">
+        <view><t-icon name="time" size="28rpx" /><text>{{result.minutes}} 分钟</text></view>
+        <view><t-icon name="rice" size="28rpx" /><text>{{result.texture}}</text></view>
+      </view>
+      <view wx:if="{{result.rating}}" class="random-preference">上次：{{result.ratingName}}</view>
     </view>
-    <t-button theme="primary" size="large" block bind:tap="detail">就吃这个，看看做法</t-button>
-    <view class="redraw"><t-button theme="primary" variant="outline" size="large" block icon="refresh" bind:tap="draw">再随机一次</t-button></view>
+    <view class="random-actions">
+      <t-button theme="primary" variant="outline" shape="round" block bind:tap="detail">查看做法 <t-icon name="chevron-right" size="32rpx" /></t-button>
+      <t-button theme="primary" shape="round" block icon="swap" disabled="{{candidateCount < 2}}" bind:tap="draw">{{candidateCount < 2 ? '当前范围只有这一道' : '再抽一道'}}</t-button>
+    </view>
+    <view wx:if="{{candidateCount === 1}}" class="random-single">展开下方范围，可以试试其他菜。</view>
   </view>
-  <view wx:else class="card empty-card">
-    <t-empty icon="file-unknown" description="暂无符合条件的菜谱。试试其他分类，或关闭「避开最近不太喜欢的」。">
-      <t-button slot="action" theme="primary" variant="outline" bind:tap="add">添加一道菜谱</t-button>
-    </t-empty>
+  <view wx:else class="random-empty panel">
+    <image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
+    <view class="random-empty-title brush">{{hasRecipes ? '换个范围试试吧' : '先装进一道拿手菜'}}</view>
+    <view class="random-empty-description">{{hasRecipes ? '当前范围没有可选菜谱，调整筛选后再试。' : '把做过的辅食收进食谱，下次让小口袋帮你选。'}}</view>
+    <t-button wx:if="{{hasRecipes}}" theme="primary" shape="round" block bind:tap="resetFilters">清除筛选</t-button>
+    <t-button wx:else theme="primary" shape="round" block bind:tap="add">添加菜谱</t-button>
+  </view>
+  <view wx:if="{{hasRecipes}}" class="random-filters panel">
+    <t-collapse>
+      <t-collapse-panel value="filters" header="{{(category === '全部' ? '全部菜谱' : category) + ' · ' + candidateCount + ' 道'}}" header-right-content="{{skipDisliked ? '跳过不太喜欢' : '全部喜好'}}">
+        <t-radio-group value="{{category}}" options="{{categoryOptions}}" icon="dot" bind:change="changeCategory" />
+        <t-cell title="跳过不太喜欢的菜" description="根据每道菜最近一次的用餐记录">
+          <t-switch slot="right-icon" value="{{skipDisliked}}" bind:change="skip" aria-label="跳过不太喜欢的菜" />
+        </t-cell>
+      </t-collapse-panel>
+    </t-collapse>
   </view>
 </view>

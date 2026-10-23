@@ -1,41 +1,57 @@
 const {syncTabBar} = require('../../utils/tab-bar');
 const store = require('../../utils/store');
 const selectors = require('../../utils/selectors');
-const quickItems = [['胡萝卜', 'carrot'], ['南瓜', 'pumpkin'], ['鸡蛋', 'egg'], ['西兰花', 'broccoli']];
-
+const ui = require('../../utils/ui');
 Page({
-  data: { nickname: '宝宝', warning: '', quickIngredients: [], recipes: [], stats: {} },
-  onShow() { syncTabBar(this); this.refresh(); },
+  data: {
+    nickname: '宝宝', warning: '', result: null, candidateCount: 0, recipeCount: 0,
+    category: '全部', categoryOptions: selectors.categories.map(value => ({label: value, value})), categoryScrollTarget: 'category-0',
+    skipDisliked: false, recentLogs: []
+  },
+  onShow() { syncTabBar(this); this.refresh(!this._didInitialDraw); },
   onReady() { syncTabBar(this); },
-  refresh() {
+  candidates(state) {
+    return selectors.listRecipes(state, {category: this.data.category})
+      .filter(recipe => !this.data.skipDisliked || recipe.rating !== 1);
+  },
+  refresh(selectInitial = false) {
     try {
       const state = store.getState();
-      const pantry = getApp().globalData.pantry || [];
-      this.setData({
-        nickname: state.nickname || '宝宝',
-        warning: store.getWarning(),
-        stats: selectors.stats(state),
-        recipes: selectors.listRecipes(state, { sort: 'recent' }).slice(0, 3),
-        quickIngredients: quickItems.map(([name, icon]) => ({ name, icon, selected: pantry.includes(name) }))
-      });
-    } catch (error) { wx.showToast({ title: error.message || '暂时无法读取菜谱', icon: 'none' }); }
+      const pool = this.candidates(state);
+      const current = this.data.result && pool.find(recipe => recipe.id === this.data.result.id);
+      const result = current || (selectInitial ? selectors.randomRecipe(state, {
+        category: this.data.category, skipDisliked: this.data.skipDisliked
+      }) : null);
+      this.setData({nickname: state.nickname || '宝宝', warning: store.getWarning(),
+        recipeCount: state.recipes.length, candidateCount: pool.length,
+        result: result || null, recentLogs: selectors.listLogs(state).slice(0, 2)});
+      if (selectInitial && result) this._didInitialDraw = true;
+    } catch (error) { ui.error(error); }
   },
-  toggleIngredient(event) {
-    const name = event.currentTarget.dataset.name;
-    const pantry = getApp().globalData.pantry || [];
-    const checked = event.detail.checked;
-    getApp().globalData.pantry = checked ? Array.from(new Set(pantry.concat(name))) : pantry.filter(item => item !== name);
-    this.refresh();
+  draw() {
+    try {
+      const state = store.getState();
+      const result = selectors.randomRecipe(state, {category: this.data.category,
+        skipDisliked: this.data.skipDisliked, lastId: this.data.result && this.data.result.id});
+      this.setData({result, candidateCount: this.candidates(state).length, recipeCount: state.recipes.length});
+    } catch (error) { ui.error(error); }
   },
-  openRandom() { wx.navigateTo({ url: '/pages/random/index' }); },
-  openSettings() { wx.navigateTo({ url: '/pages/settings/index' }); },
-  goIngredients() { wx.switchTab({ url: '/pages/ingredients/index' }); },
-  goRecipes() { wx.switchTab({ url: '/pages/recipes/index' }); },
-  addRecipe() { wx.navigateTo({ url: '/pages/editor/index' }); },
-  openRecipe(event) { wx.navigateTo({ url: '/pages/detail/index?id=' + encodeURIComponent(event.detail.id) }); },
-  recordRecipe(event) { wx.navigateTo({ url: '/pages/record-editor/index?id=' + encodeURIComponent(event.detail.id) }); },
-  toggleFavorite(event) {
-    try { store.toggleFavorite(event.detail.id); this.refresh(); }
-    catch (error) { wx.showToast({ title: error.message || '收藏失败，请重试', icon: 'none' }); }
-  }
+  tapCategory(event) { this.changeCategory({detail: {value: event.currentTarget.dataset.value}}); },
+  changeCategory(event) {
+    if (!selectors.categories.includes(event.detail.value)) return;
+    this.setData({category: event.detail.value, categoryScrollTarget: 'category-' + selectors.categories.indexOf(event.detail.value)}); this.refresh();
+  },
+  skip(event) { this.setData({skipDisliked: event.detail.value === true}); this.refresh(); },
+  resetFilters() { this.setData({category: '全部', categoryScrollTarget: 'category-0', skipDisliked: false}); this.refresh(); },
+  detail() {
+    if (this.data.result) wx.navigateTo({url: '/pages/detail/index?id=' + encodeURIComponent(this.data.result.id)});
+  },
+  openRecipe(event) {
+    const id = event.currentTarget.dataset.id;
+    if (id) wx.navigateTo({url: '/pages/detail/index?id=' + encodeURIComponent(id)});
+  },
+  openSettings() { wx.navigateTo({url: '/pages/settings/index'}); },
+  goIngredients() { wx.switchTab({url: '/pages/ingredients/index'}); },
+  goRecipes() { wx.switchTab({url: '/pages/recipes/index'}); },
+  addRecipe() { wx.navigateTo({url: '/pages/editor/index'}); }
 });

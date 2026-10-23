@@ -1,0 +1,6 @@
+<view class="food-art" style="width:{{size}}rpx;height:{{alignToLabel ? size * 0.64 : size}}rpx" aria-hidden="true">
+  <view wx:if="{{matched}}" class="food-cell" style="width:{{size}}rpx;height:{{size}}rpx;transform:translate({{alignToLabel ? size * offsetX : 0}}rpx,{{alignToLabel ? size * offsetY : 0}}rpx)">
+    <image class="food-sheet" src="{{spriteSrc}}" mode="scaleToFill" style="width:{{size * columns}}rpx;height:{{size * rows}}rpx;left:{{-column * size}}rpx;top:{{-row * size}}rpx" />
+  </view>
+  <view wx:else class="food-fallback {{alignToLabel ? 'food-fallback-aligned' : ''}}"><t-icon name="rice" size="{{size * 0.6}}rpx" color="#86a572" /></view>
+</view>

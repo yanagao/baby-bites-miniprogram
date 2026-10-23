@@ -1,33 +1,34 @@
-.home-topline{display:flex;align-items:center;justify-content:space-between;margin-bottom:20rpx;min-height:88rpx}
-.brand-name{font-size:34rpx;font-weight:650;color:#1d2b3a;letter-spacing:-1rpx}
-.profile-button{max-width:360rpx;--td-button-medium-height:88rpx;--td-button-default-outline-border-color:#e4eaf2;--td-button-default-outline-color:#536b88;--td-button-medium-font:500 25rpx/1.4 var(--td-font-family)}
-.storage-warning{padding:22rpx;margin-bottom:24rpx;border-radius:18rpx;background:#fff5df;color:#785b25;font-size:25rpx;line-height:1.6}
+.home-page {padding-top:10rpx;}
+.home-intro {display:flex;align-items:center;justify-content:space-between;min-height:210rpx;position:relative;}
+.home-intro-copy {flex:1;min-width:0;}
+.home-greeting {overflow-wrap:anywhere;word-break:break-word;}
+.home-intro .page-title {font-size:62rpx;line-height:1.17;letter-spacing:1rpx;}
+.intro-mascot {width:226rpx;height:226rpx;flex:none;margin-right:-15rpx;transform:rotate(6deg);}
+.intro-subtitle {font-size:26rpx;color:#877267;margin-top:12rpx;letter-spacing:2rpx;}
+.category-scroll {width:100%;margin-top:16rpx;white-space:nowrap;}
+.category-pills {display:inline-flex;gap:12rpx;padding:2rpx 4rpx;vertical-align:top;}
+.category-pill {flex:none;min-width:96rpx;margin:0;padding:0 24rpx;line-height:64rpx;border-radius:40rpx;font-size:27rpx;color:#5a3e35;background:#ffebe7;}
+.category-active {color:#fff;background:#ef5b73;font-weight:600;box-shadow:inset 0 0 0 2rpx #fff,0 0 0 1rpx #ef5b73;}
+.skip-row {display:flex;align-items:center;justify-content:space-between;min-height:78rpx;font-size:26rpx;}
+.inspiration-card {position:relative;padding:22rpx;background:#fff0b8;border:2rpx solid #ffe3a0;border-radius:48rpx 42rpx 36rpx 44rpx;}
+.inspiration-card::before {content:'';position:absolute;pointer-events:none;inset:10rpx;border:2rpx dashed #efd18c;border-radius:36rpx;}
+.inspiration-label {position:absolute;z-index:2;top:13rpx;left:28rpx;transform:rotate(-10deg);background:#ffd4d6;border:3rpx solid #fff5e7;box-shadow:0 2rpx 4rpx #dabd8a;padding:10rpx 24rpx;color:#ba4057;border-radius:16rpx;font-size:33rpx;}
+.hero-photo {display:block;width:100%;height:330rpx;border-radius:30rpx;}
+.hero-illustration {display:flex;align-items:center;justify-content:center;flex-direction:column;height:330rpx;background:#fcf7dd;border-radius:30rpx;color:#a28558;font-size:24rpx;}
+.dish-info {position:relative;z-index:1;margin:-12rpx 16rpx 0;padding:12rpx 8rpx 16rpx;background:#fffaf1;border-radius:44rpx 44rpx 20rpx 20rpx;text-align:center;}
+.dish-title {font-size:49rpx;line-height:1.25;color:#432820;}
+.dish-metadata {display:flex;justify-content:center;gap:20rpx;margin-top:12rpx;}
+.dish-metadata>view {display:flex;align-items:center;gap:8rpx;background:#ffede6;border-radius:30rpx;padding:4rpx 16rpx;font-size:24rpx;line-height:36rpx;}
+.hero-actions {position:relative;z-index:1;display:flex;flex-direction:column;gap:14rpx;margin-top:12rpx;--td-button-large-height:96rpx;--td-button-medium-height:84rpx;--td-button-primary-outline-color:#d94b64;--td-button-primary-outline-border-color:#db5b63;--td-button-primary-outline-bg-color:#fffdf7;}
+.draw-ready {text-align:center;padding:24rpx 0 10rpx;}
+.draw-ready image {display:block;width:250rpx;height:250rpx;margin:0 auto;}
+.ready-title {font-size:45rpx;line-height:1.3;}.ready-subtitle {font-size:25rpx;line-height:1.6;color:#9b805d;margin:12rpx 0 10rpx;}
+.draw-empty {text-align:center;padding:25rpx 0 5rpx;position:relative;}
+.draw-empty image {width:200rpx;height:200rpx;}
+.pantry-banner {display:flex;align-items:center;gap:6rpx;background:#eaf4db;border-radius:28rpx;margin-top:20rpx;padding:18rpx 20rpx;min-height:132rpx;}
+.pantry-banner-text {flex:1;min-width:0;}.pantry-banner-text>view {font-size:34rpx;white-space:nowrap;}.pantry-banner-text>text {display:block;margin-top:10rpx;font-size:24rpx;line-height:1.5;color:#63764f;}
+.banner-foods {display:flex;align-items:center;}.banner-foods food-art+food-art {margin-left:-25rpx;}
+.recent-section {margin-top:48rpx;}.recent-section>.section-title {margin-bottom:16rpx;}.recent-meal {display:flex;flex-wrap:wrap;align-items:center;gap:6rpx 10rpx;padding:20rpx 0;border-bottom:1rpx solid #eee4d5;font-size:27rpx;}.recent-meal>text:first-child {flex:1;}.recent-meal .muted {font-size:23rpx;}
+.home-tools {display:flex;justify-content:space-between;margin-top:16rpx;}.home-tools button {margin:0;padding:10rpx 0;background:transparent;color:#9b8473;font-size:23rpx;line-height:44rpx;}
 
-/* Content determines the card height; actions stay close to their content. */
-.feature-card{background:#eef5fd;border:1rpx solid #e1ecf9;border-radius:32rpx;padding:28rpx 32rpx;margin-bottom:24rpx;box-sizing:border-box}
-.feature-title{font-size:40rpx;line-height:1.3;font-weight:650;letter-spacing:-1rpx;color:#1d2b3a}
-.random-title{color:#0071e3;font-weight:700;margin-top:4rpx}
-.feature-copy{font-size:24rpx;line-height:1.4;color:#536b88;margin-top:8rpx}
-.feature-action{display:block;margin-top:26rpx;--td-button-border-radius:20rpx;--td-button-medium-height:88rpx}
-.quick-ingredients{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:18rpx}
-.quick-chip{flex:1;min-width:120rpx;--td-tag-default-light-color:#fff;--td-tag-large-padding:0;--td-tag-large-font:500 24rpx/1.3 var(--td-font-family)}
-.quick-chip-inner{display:flex!important;width:100%;min-height:88rpx;padding:10rpx 8rpx!important;justify-content:center;border:1rpx solid #dce8f6;border-radius:16rpx;box-sizing:border-box}
-.pantry-action{margin-top:20rpx}
-
-.stats-strip{display:flex;background:#fff;border:1rpx solid #e4eaf2;border-radius:24rpx;padding:26rpx 0;margin:28rpx 0 32rpx}
-.stat-item{flex:1;display:flex;flex-direction:column;align-items:center;border-right:1rpx solid #eef1f6;min-width:0}
-.stat-item:last-child{border-right:0}
-.stat-value{display:flex;align-items:baseline;justify-content:center;white-space:nowrap}
-.stat-number{font-size:36rpx;line-height:1.1;font-weight:650;color:#405875}
-.stat-unit{font-size:22rpx;line-height:1.1;font-weight:400;color:#64748b;margin-left:6rpx}
-.stat-label{font-size:22rpx;color:#64748b;margin-top:9rpx}
-.home-section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:22rpx}
-.home-section-heading .section-title{margin:0}
-.home-view-all{margin-left:auto;flex:0 0 auto;display:flex;justify-content:flex-end}
-.view-all-button{margin:0!important}
-.home-section-heading{--td-button-small-font:500 25rpx/1.4 var(--td-font-family);--td-button-small-height:80rpx;--td-button-small-padding-horizontal:0}
-.recipe-list{gap:0}
-.recipe-list recipe-card{display:block;margin-bottom:20rpx}
-.control-pressed{opacity:.72}
-
-.empty-card{padding:48rpx 24rpx;background:#fff;border:1rpx solid #e4eaf2;border-radius:28rpx}
+.category-pill::after,.home-tools button::after {border:0;}

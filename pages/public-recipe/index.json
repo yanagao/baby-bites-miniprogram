@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "公开食谱",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "food-art": "/components/food-art/index"
+  }
+}
