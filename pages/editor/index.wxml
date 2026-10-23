@@ -18,7 +18,7 @@
     <t-textarea value="{{form.note}}" placeholder="记录下次想调整的口感或做法" maxlength="2000" autosize="{{true}}" disabled="{{saving}}" data-field="note" bind:change="input" />
   </t-cell-group>
   <t-cell-group title="成品照（选填）">
-    <t-cell title="照片" description="照片仅保存在本机，最多 2 MB。">
+    <t-cell title="照片" description="照片随菜谱同步至当前微信账号，单张最多 2 MB。">
       <t-button slot="note" disabled="{{saving}}" bind:tap="choosePhoto">{{photo ? '更换照片' : '添加照片'}}</t-button>
     </t-cell>
     <t-cell wx:if="{{photo}}" title="查看照片" image="{{photo}}" arrow hover bind:click="previewPhoto" />
