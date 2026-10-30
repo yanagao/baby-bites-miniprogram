@@ -1,0 +1,2 @@
+<include src="../profile/content.wxml" />
+<bottom-navigation id="bottom-navigation" />

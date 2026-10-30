@@ -1,5 +1,6 @@
 const store = require('../../utils/store');
-const { today } = require('../../utils/selectors');
+const selectors = require('../../utils/selectors');
+const {today} = selectors;
 const ui = require('../../utils/ui');
 
 const portions = ['暂不记录', '吃了一点', '吃了约一半', '吃了大部分', '全部吃完'];
@@ -9,7 +10,7 @@ Page({
   data: {
     recipe: null, editing: false, missingMessage: '没有找到这道菜谱，可能已经被删除。',
     rating: 0,
-    ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
+    ratingOptions: [{ label: '不太喜欢', value: 1, icon: 'unhappy' }, { label: '还不错', value: 2, icon: 'smile' }, { label: '很喜欢', value: 3, icon: 'happy' }],
     date: today(), maxDate: today(), minDate: '', dateVisible: false,
     portions, portionOptions: portions.map((label, value) => ({ label, value })), portionIndex: 0,
     note: '', error: '', ratingError: '', dateError: '', saving: false,
@@ -51,7 +52,8 @@ Page({
         portionIndex, note: log.note || ''
       });
     } else this.recipeId = options.id;
-    this.setData({ recipe: this.recipeId ? store.getRecipe(this.recipeId) : null });
+    const recipe = this.recipeId ? store.getRecipe(this.recipeId) : null;
+    this.setData({recipe: selectors.enrichRecipe({recipes: recipe ? [recipe] : [], logs: []}, recipe)});
     this.initialDraft = this.draftSnapshot();
   },
   onUnload() { if (this._unsubscribeAccount) this._unsubscribeAccount(); },
@@ -88,6 +90,18 @@ Page({
   openDate() {
     if (!this.data.saving && !this.data.deleting && !this.data.deleteVisible) this.setData({ dateVisible: true, maxDate: today() });
   },
+  moveDate(event) {
+    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    const delta = Number(event.currentTarget.dataset.delta);
+    if (delta !== -1 && delta !== 1) return;
+    const [year, month, day] = this.data.date.split('-').map(Number);
+    const date = new Date(year, month - 1, day + delta);
+    const value = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+    if (value < this.data.minDate || value > today()) return;
+    this.changeDate({detail: {value}});
+  },
+  tapRating(event) { this.rate({detail: {value: event.currentTarget.dataset.value}}); },
+  tapPortion(event) { this.portion({detail: {value: event.currentTarget.dataset.value}}); },
   changeDate(event) {
     if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
     this.setData({ date: event.detail.value, dateVisible: false, dateError: '', error: '' });

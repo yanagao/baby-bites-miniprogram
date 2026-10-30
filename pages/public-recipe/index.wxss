@@ -1,2 +1,16 @@
 @import "../detail/index.wxss";
-.public-author {display:flex;align-items:center;gap:14rpx;padding:20rpx 0 24rpx;color:#9d5c4a;font-size:27rpx;}.public-author>text {flex:1;min-width:0;overflow-wrap:anywhere;}.public-pressed {opacity:.7;}.copy-explanation {margin-top:30rpx;padding:22rpx;background:#f5eddf;border-radius:22rpx;}.public-bottom {display:block;}
+.public-author {display:flex;align-items:center;gap:14rpx;padding:0 0 20rpx;margin-top:-2rpx;color:#345158;font-size:var(--font-body);border-bottom:1rpx solid #e2edf0;--td-button-small-height:64rpx;--td-button-small-font: 500 var(--font-secondary)/var(--line-height-body) var(--td-font-family);--td-button-small-padding-horizontal:20rpx;line-height:var(--line-height-body);}
+.public-author-link {display:flex;align-items:center;gap:10rpx;flex:1;min-width:0;}
+.public-author-avatar {width:56rpx;height:56rpx;flex:none;border-radius:50%;padding:3rpx;background:#eff8f8;}
+.public-author-copy {flex:1;min-width:0;}
+.public-author-name {font-size:var(--font-body);line-height:var(--line-height-body);font-weight:600;overflow-wrap:anywhere;}
+.public-author-caption {margin-top:2rpx;font-size:var(--font-caption);color:#82969a;line-height:var(--line-height-body);}
+.public-author > t-button {flex:none;}
+.public-relation-loading {font-size:var(--font-caption);color:#82969a;max-width:140rpx;line-height:var(--line-height-body);}
+.public-relation-error {font-size:var(--font-secondary);color:#b36f55;line-height:var(--line-height-body);margin:10rpx 0 18rpx;overflow-wrap:anywhere;}
+.public-profile-setup {display:flex;align-items:center;gap:10rpx;margin:14rpx 0 20rpx;padding:16rpx 18rpx;border-radius:16rpx;background:#fff1b8;font-size:var(--font-secondary);color:#607d83;line-height:var(--line-height-body);}
+.public-profile-setup > text {flex:1;min-width:0;}
+.public-profile-setup > t-button {flex:none;}
+.public-pressed {opacity:.7;}
+.copy-explanation {margin-top:26rpx;padding:18rpx;background:#eff8f8;border-radius:16rpx;font-size:var(--font-secondary);line-height:var(--line-height-body);color:#82969a;}
+.public-bottom {display:block;}

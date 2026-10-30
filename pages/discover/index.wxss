@@ -1,0 +1,16 @@
+.discover-navbar-title {font:var(--td-navbar-title-font);padding-left:4rpx;color:#345158;}
+.discover-page {padding:8rpx 28rpx 20rpx;}
+.discover-search {margin-bottom:8rpx;--td-search-bg-color:#eff8f8;--td-search-height:80rpx;--td-search-font:var(--font-body) / var(--line-height-body) var(--td-font-family);--td-search-icon-size:30rpx;--td-search-clear-icon-size:28rpx;--td-search-placeholder-color:#9bafb3;--td-search-action-color:#439e86;}
+.discover-toolbar {display:flex;align-items:center;gap:10rpx;margin-bottom:18rpx;}
+.discover-tabs {flex:1;min-width:0;margin-left:-18rpx;--td-tab-nav-bg-color:transparent;--td-tab-item-height:88rpx;--td-tab-item-color:#82969a;--td-tab-item-active-color:#345158;--td-tab-track-color:#55bba4;--td-tab-track-thickness:3rpx;--td-tab-track-width:32rpx;--td-spacer-2:26rpx;--td-tab-font:var(--font-body) / var(--line-height-body) var(--td-font-family);}
+.discover-people {display:flex;align-items:center;justify-content:center;flex:none;width:52rpx;height:52rpx;padding:0;margin:0;background:transparent;color:#82969a;}
+.discover-people::after {border:0;}
+.discover-query {margin:0 0 14rpx;overflow-wrap:anywhere;font-size:var(--font-secondary);}
+.discover-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20rpx;row-gap:26rpx;align-items:start;}
+.discover-state {padding:38rpx 24rpx;text-align:center;line-height:var(--line-height-body);font-size:var(--font-body);}
+.discover-state .muted {font-size:var(--font-secondary);}
+.discover-empty-title {font-size:var(--font-section-title);font-weight:600;margin-bottom:10rpx;color:#345158;}
+.discover-empty-action {margin-top:20rpx;}
+.discover-more {text-align:center;padding:14rpx 0 20rpx;}
+.discover-page-error {color:#577479;font-size:var(--font-secondary);line-height:var(--line-height-body);overflow-wrap:anywhere;margin-bottom:8rpx;}
+.discover-end {font-size:var(--font-caption);text-align:center;padding:20rpx 0 24rpx;}

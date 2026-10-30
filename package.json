@@ -6,7 +6,8 @@
   "scripts": {
     "build:components": "node scripts/build-tdesign.cjs",
     "test": "node --test tests/*.test.cjs",
-    "validate": "python3 scripts/validate.py"
+    "validate": "python3 scripts/validate.py && npm run check:package",
+    "check:package": "node scripts/check-package.cjs"
   },
   "dependencies": {
     "tdesign-miniprogram": "1.17.0"

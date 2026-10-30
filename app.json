@@ -1,14 +1,20 @@
 {
   "pages": [
     "pages/home/index",
+    "pages/discover/index",
+    "pages/mine/index",
     "pages/recipes/index",
     "pages/ingredients/index",
+    "pages/ingredient-results/index",
     "pages/records/index",
     "pages/detail/index",
     "pages/editor/index",
     "pages/record-editor/index",
     "pages/random/index",
-    "pages/settings/index"
+    "pages/settings/index",
+    "pages/profile/index",
+    "pages/following/index",
+    "pages/public-recipe/index"
   ],
   "window": {
     "navigationBarTitleText": "小口袋",
@@ -20,21 +26,31 @@
     "list": [
       {
         "pagePath": "pages/home/index",
-        "text": "今天"
+        "text": "首页"
       },
       {
-        "pagePath": "pages/ingredients/index",
-        "text": "食材"
-      },
-      {
-        "pagePath": "pages/recipes/index",
-        "text": "食谱"
+        "pagePath": "pages/discover/index",
+        "text": "发现"
       },
       {
         "pagePath": "pages/records/index",
         "text": "记录"
+      },
+      {
+        "pagePath": "pages/mine/index",
+        "text": "我的"
       }
     ]
   },
-  "sitemapLocation": "sitemap.json"
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents",
+  "subPackages": [
+    {
+      "name": "recipe-media",
+      "root": "recipe-media",
+      "pages": [
+        "index"
+      ]
+    }
+  ]
 }

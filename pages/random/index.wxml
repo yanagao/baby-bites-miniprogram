@@ -1,39 +1,59 @@
-<t-navbar z-index="100" title="随机选一道" placeholder left-arrow />
-<view class="page-shell random-page">
-  <view wx:if="{{result}}" class="random-result">
-    <view class="random-label brush">今天的灵感</view>
-    <image wx:if="{{result.displayPhoto}}" class="random-photo" src="{{result.displayPhoto}}" mode="aspectFill" bindtap="detail" aria-label="查看{{result.name}}的做法" />
-    <view wx:else class="random-art" bindtap="detail" aria-role="button" aria-label="查看{{result.name}}的做法"><food-art name="{{result.ingredients[0].name}}" size="220" /></view>
-    <view class="random-description">
-      <view class="random-name brush">{{result.name}}</view>
-      <view class="random-ingredients">{{result.ingredientText}}</view>
-      <view class="random-metadata">
-        <view><t-icon name="time" size="28rpx" /><text>{{result.minutes}} 分钟</text></view>
-        <view><t-icon name="rice" size="28rpx" /><text>{{result.texture}}</text></view>
+<view class="random-page">
+  <t-navbar z-index="100" title="随机选餐" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+  <view class="random-scene" aria-hidden="true">
+    <view class="random-cloud random-cloud-left"></view><view class="random-cloud random-cloud-right"></view>
+    <view class="random-hill random-hill-back"></view><view class="random-hill random-hill-front"></view>
+    <view class="random-scene-food random-scene-broccoli"><food-art name="西兰花" size="130" /></view>
+    <view class="random-scene-food random-scene-carrot"><food-art name="胡萝卜" size="110" /></view>
+    <image class="random-bowl" src="/assets/cute/random-bowl.png" mode="aspectFit" />
+    <view class="random-speech"><text>不知道吃什么？</text><text>让小口袋帮你选吧！</text></view>
+    <view class="random-spark random-spark-one"></view><view class="random-spark random-spark-two"></view>
+  </view>
+  <view class="random-content">
+    <view wx:if="{{accountError}}" class="random-empty"><view class="random-empty-description">{{accountError}}</view><t-button theme="primary" shape="round" block bind:tap="back">返回</t-button></view>
+    <block wx:else>
+      <view wx:if="{{hasRecipes}}" class="random-filters">
+        <view class="random-section-heading"><text class="random-section-title">按月龄</text><text class="random-section-caption">可多选</text></view>
+        <view wx:if="{{ageDefaultLoading || defaultAgeHint}}" class="random-age-default">{{ageDefaultLoading ? '正在读取宝宝月龄…' : defaultAgeHint}}</view>
+        <view class="random-age-chips">
+          <button wx:for="{{ageOptions}}" wx:key="value" class="random-category random-age {{item.selected ? 'is-selected' : ''}}" data-age-group="{{item.value}}" bindtap="toggleAgeGroup" aria-pressed="{{item.selected}}">{{item.label}}</button>
+        </view>
+        <view class="random-section-heading"><text class="random-filter-title">按分类</text><text class="random-section-caption">可多选</text></view>
+        <view class="random-category-chips">
+          <button wx:for="{{categoryOptions}}" wx:key="value" class="random-category {{item.selected ? 'is-selected' : ''}}" data-category="{{item.value}}" bindtap="toggleCategory" aria-pressed="{{item.selected}}">{{item.label}}</button>
+        </view>
+        <view class="random-preference-toggle">
+          <view class="random-preference-icon" aria-hidden="true"><t-icon name="heart" size="40rpx" /></view>
+          <view class="random-preference-copy"><text>跳过不太喜欢的菜</text><text class="random-preference-caption">根据最近一次用餐记录</text></view>
+          <t-switch value="{{skipDisliked}}" bind:change="skip" aria-label="跳过不太喜欢的菜，根据最近一次用餐记录" />
+        </view>
       </view>
-      <view wx:if="{{result.rating}}" class="random-preference">上次：{{result.ratingName}}</view>
-    </view>
-    <view class="random-actions">
-      <t-button theme="primary" variant="outline" shape="round" block bind:tap="detail">查看做法 <t-icon name="chevron-right" size="32rpx" /></t-button>
-      <t-button theme="primary" shape="round" block icon="swap" disabled="{{candidateCount < 2}}" bind:tap="draw">{{candidateCount < 2 ? '当前范围只有这一道' : '再抽一道'}}</t-button>
-    </view>
-    <view wx:if="{{candidateCount === 1}}" class="random-single">展开下方范围，可以试试其他菜。</view>
-  </view>
-  <view wx:else class="random-empty panel">
-    <image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
-    <view class="random-empty-title brush">{{hasRecipes ? '换个范围试试吧' : '先装进一道拿手菜'}}</view>
-    <view class="random-empty-description">{{hasRecipes ? '当前范围没有可选菜谱，调整筛选后再试。' : '把做过的辅食收进食谱，下次让小口袋帮你选。'}}</view>
-    <t-button wx:if="{{hasRecipes}}" theme="primary" shape="round" block bind:tap="resetFilters">清除筛选</t-button>
-    <t-button wx:else theme="primary" shape="round" block bind:tap="add">添加菜谱</t-button>
-  </view>
-  <view wx:if="{{hasRecipes}}" class="random-filters panel">
-    <t-collapse>
-      <t-collapse-panel value="filters" header="{{(category === '全部' ? '全部菜谱' : category) + ' · ' + candidateCount + ' 道'}}" header-right-content="{{skipDisliked ? '跳过不太喜欢' : '全部喜好'}}">
-        <t-radio-group value="{{category}}" options="{{categoryOptions}}" icon="dot" bind:change="changeCategory" />
-        <t-cell title="跳过不太喜欢的菜" description="根据每道菜最近一次的用餐记录">
-          <t-switch slot="right-icon" value="{{skipDisliked}}" bind:change="skip" aria-label="跳过不太喜欢的菜" />
-        </t-cell>
-      </t-collapse-panel>
-    </t-collapse>
+      <block wx:if="{{result}}">
+        <view class="random-result">
+          <view class="random-cover" bindtap="detail" aria-role="button" aria-label="查看{{result.name}}的做法">
+            <image wx:if="{{result.displayPhoto}}" class="random-photo" src="{{result.displayPhoto}}" mode="aspectFill" />
+            <view wx:else class="random-art"><food-art name="{{result.ingredients[0].name}}" size="290" /></view>
+            <button class="random-favorite {{result.favorite ? 'is-favorite' : ''}}" catchtap="favorite" aria-label="{{result.favorite ? '取消收藏这道菜谱' : '收藏这道菜谱'}}" aria-pressed="{{result.favorite}}"><t-icon name="{{result.favorite ? 'heart-filled' : 'heart'}}" size="38rpx" /></button>
+          </view>
+          <view class="random-description">
+            <view class="random-name">{{result.name}}</view>
+            <view wx:if="{{result.ageLabel}}" class="random-age-label">{{result.ageLabel}}</view>
+            <view class="random-ingredients">{{result.note || result.ingredientText}}</view>
+            <view class="random-metadata"><view><t-icon name="time" size="30rpx" /><text>{{result.minutes}} 分钟</text></view><view><t-icon name="layers" size="30rpx" /><text>{{result.texture}}</text></view><view><t-icon name="app" size="30rpx" /><text>{{result.category}}</text></view></view>
+            <view wx:if="{{result.rating}}" class="random-last-preference">上次用餐：{{result.ratingName}}</view>
+          </view>
+        </view>
+        <view class="random-pick-actions">
+          <button class="random-action random-skip" disabled="{{candidateCount < 2}}" bindtap="draw" aria-label="换一道菜，不记录用餐喜好"><t-icon name="refresh" size="38rpx" /><text>换一个</text></button>
+          <button class="random-action random-detail" bindtap="detail"><text>看看做法</text><t-icon name="chevron-right" size="34rpx" /></button>
+        </view>
+        <view class="random-pool-note">{{candidateCount === 1 ? '当前范围只有这一道，试试其他月龄或分类吧' : '当前偏好可选 ' + candidateCount + ' 道，换一个会避开当前这道'}}</view>
+      </block>
+      <view wx:else class="random-empty">
+        <image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="random-empty-title">{{hasRecipes ? '换个偏好试试吧' : '先装进一道拿手菜'}}</view><view class="random-empty-description">{{hasRecipes ? '当前偏好没有可选菜谱，调整月龄、分类或关闭跳过后再试。' : '把做过的辅食收进食谱，下次让小口袋帮你选。'}}</view>
+        <t-button wx:if="{{hasRecipes}}" theme="primary" shape="round" block bind:tap="resetFilters">清除偏好</t-button><t-button wx:else theme="primary" shape="round" block bind:tap="add">添加菜谱</t-button>
+      </view>
+      <view class="random-tip"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view><view class="random-tip-title">不知道吃什么时，<text>来这里选一道～</text></view><view class="random-tip-text">按月龄、分类和用餐喜好抽选。<text>口感和食材仍需按宝宝实际情况调整。</text></view></view><view class="random-tip-spark" aria-hidden="true">✦</view></view>
+    </block>
   </view>
 </view>

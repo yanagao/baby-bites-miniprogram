@@ -35,6 +35,7 @@ function setup() {
       if (name === './selectors') return selectors;
       if (name === './categories') return require('../utils/categories');
       if (name === './sync-merge') return require('../utils/sync-merge');
+      if (name === './recipe-ages') return require('../utils/recipe-ages');
       throw new Error('Unexpected store dependency: ' + name);
     }
   });

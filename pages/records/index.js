@@ -87,7 +87,7 @@ Page({
       '&date=' + encodeURIComponent(this.data.selectedDate)});
   },
   addRecipe() { this.closeRecordPicker(); wx.navigateTo({url: '/pages/editor/index'}); },
-  goRecipes() { wx.switchTab({url: '/pages/recipes/index'}); },
+  goRecipes() { wx.navigateTo({url: '/pages/recipes/index'}); },
   editLog(event) {
     const id = event.currentTarget.dataset.id;
     if (!this.data.logs.some(log => log.id === id)) return;

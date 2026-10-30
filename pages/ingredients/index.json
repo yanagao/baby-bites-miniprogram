@@ -6,11 +6,8 @@
     "t-search": "/miniprogram_npm/tdesign-miniprogram/search/search",
     "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
     "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
-    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
     "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
-    "recipe-card": "/components/recipe-card/index",
     "food-art": "/components/food-art/index",
-    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
-    "bottom-navigation": "/components/bottom-navigation/index"
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar"
   }
 }

@@ -3,6 +3,7 @@
 const seed = require('../data/recipes');
 const selectors = require('./selectors');
 const {normalizeCategory} = require('./categories');
+const {normalizeAgeGroups} = require('./recipe-ages');
 const {mergeSnapshots} = require('./sync-merge');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
@@ -92,10 +93,12 @@ function validateData(data) {
       fail('菜谱信息不完整：请检查名称、分类、用时、食材和制作步骤。');
     }
     if (!validPhoto(recipe.photo)) fail('照片必须是本机或云端保存的图片，请重新选择并保存照片。');
+    const ageGroups = normalizeAgeGroups(recipe.ageGroups);
     recipeIds.add(recipe.id);
     return {
       id: recipe.id, name: recipe.name.trim(), category, minutes: recipe.minutes,
       texture: recipe.texture, ingredients: recipe.ingredients.map(item => ({name: item.name.trim(), amount: item.amount.trim()})),
+      ...(ageGroups === undefined ? {} : {ageGroups}),
       steps: recipe.steps.map(step => step.trim()), note: recipe.note || '', photo: recipe.photo || '',
       imageKey: recipe.imageKey || '', favorite: Boolean(recipe.favorite), isExample: Boolean(recipe.isExample),
       createdAt: recipe.createdAt || 0, updatedAt: recipe.updatedAt || 0,
@@ -345,6 +348,7 @@ function saveRecipe(input, initialRating) {
     note: input.note == null ? '' : input.note,
     photo: input.photo == null ? (existing ? existing.photo : '') : input.photo,
     imageKey: input.imageKey == null ? (existing ? existing.imageKey : '') : input.imageKey,
+    ageGroups: input.ageGroups === undefined ? (existing ? existing.ageGroups : undefined) : input.ageGroups,
     favorite: existing ? existing.favorite : Boolean(input.favorite),
     isExample: false,
     createdAt: existing ? existing.createdAt : Date.now(), updatedAt: timestamp(existing && existing.updatedAt)
@@ -378,6 +382,7 @@ function addPublicRecipe(input, expectedOwner) {
   const recipe = {
     id: recipeId, name: input.name, category: input.category, minutes: input.minutes, texture: input.texture,
     ingredients: input.ingredients, steps: input.steps, imageKey: input.imageKey || '', photo: input.photo || '',
+    ...(input.ageGroups === undefined ? {} : {ageGroups: input.ageGroups}),
     source: {profileId: input.profileId, recipeId: input.id, authorName: input.authorName},
     note: '', favorite: false, isExample: false, createdAt: now, updatedAt: now
   };

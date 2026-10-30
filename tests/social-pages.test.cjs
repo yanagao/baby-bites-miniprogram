@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {evaluatePage} = require('./page-runtime.cjs');
 const clone = value => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return {promise, resolve, reject}; };
 const profile = {id: 'a'.repeat(32), name: '朋友的小厨房', bio: '', exists: true};
@@ -12,7 +13,7 @@ function setup(name, social, options = {}) {
   const calls = {errors: [], toasts: [], routes: [], share: [], updates: 0};
   let owner = options.owner === undefined ? 'owner-a' : options.owner;
   const listeners = new Set();
-  const store = {getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {
     showToast(o) { calls.toasts.push(o.title); },
     navigateTo(o) { calls.routes.push(o.url); }, switchTab(o) { calls.routes.push(o.url); },
@@ -23,10 +24,12 @@ function setup(name, social, options = {}) {
     module: accountModule, wx, require() { return store; }
   });
   let definition;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages', name, 'index.js'), 'utf8'), {
+  evaluatePage(name, {
     Page(value) { definition = value; },
     require(dep) {
       if (dep.endsWith('/social')) return social;
+      if (dep.endsWith('/store')) return store;
+      if (dep.endsWith('/profile-poster')) return {remove() {}};
       if (dep.endsWith('/account')) return accountModule.exports;
       if (dep.endsWith('/ui')) return {error(e) { calls.errors.push(e.message); }, back() { calls.routes.push('back'); }};
       throw Error(dep);
@@ -83,11 +86,13 @@ test('profile save requires a nickname and never submits the baby nickname', asy
     saveProfile: async value => { input = value; },
     getMine: async () => ({profile}), getProfile: async () => ({profile, recipes: [], isSelf: true})
   });
+  await page.onShow();
   page.setData({name: '   ', bio: '介绍'}); await page.save();
   assert.equal(input, undefined); assert.equal(calls.errors[0], '请填写公开昵称');
   page.setData({name: ' 我的厨房 ', bio: ' 只分享做法 '}); await page.save();
   assert.equal(input.name, '我的厨房'); assert.equal(input.bio, '只分享做法');
   assert.deepEqual(Object.keys(input).sort(), ['bio', 'name']);
+  assert.equal(input.babyBirthDate, undefined);
 });
 
 test('changing following tabs ignores an older feed response', async () => {
@@ -197,7 +202,7 @@ test('pending save, follow and copy have no UI effects after page unload', async
       const fixture = setup(method === 'add' ? 'public-recipe' : 'profile', {
         saveProfile: () => pending.promise, setFollowing: () => pending.promise, addToCookbook: () => pending.promise
       }, {id: method === 'add' ? recipe.id : profile.id});
-      fixture.page.setData({name: '公开昵称', profile, recipe});
+      fixture.page.setData({name: '公开昵称', profile, recipe, isSelf: method === 'save'});
       const task = fixture.page[method]();
       fixture.page.onUnload();
       const updates = fixture.calls.updates;

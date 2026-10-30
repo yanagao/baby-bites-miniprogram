@@ -1,12 +1,10 @@
-const {syncTabBar} = require('../../utils/tab-bar');
 const store = require('../../utils/store');
 const selectors = require('../../utils/selectors');
 const ui = require('../../utils/ui');
-const commonIngredients = ['南瓜', '小米', '鸡蛋', '鸡肉', '土豆', '西兰花', '胡萝卜', '面条', '豆腐'];
+const commonIngredients = ['南瓜', '鸡蛋', '西兰花', '小米', '土豆', '豆腐', '胡萝卜', '番茄'];
 Page({
-  data: {warning: '', options: [], pantry: [], selectedText: '', ingredient: '', search: '', showAllIngredients: false, ingredientCount: 0, completeOnly: false, matches: [], completeMatches: [], partialMatches: [], panels: ['pantry'], customPanels: []},
-  onShow() { syncTabBar(this); this.refresh(); },
-  onReady() { syncTabBar(this); },
+  data: {warning: '', options: [], pantry: [], ingredient: '', search: '', showAllIngredients: false, ingredientCount: 0, matchCount: 0, matches: [], previewMatches: [], completeMatches: [], partialMatches: [], customPanels: []},
+  onShow() { this.refresh(); },
   refresh() {
     try {
       const pantry = getApp().globalData.pantry || [];
@@ -14,14 +12,13 @@ Page({
       const search = selectors.normalizeIngredient(this.data.search);
       const visibleNames = search ? names.filter(name => name.includes(search)) : this.data.showAllIngredients ? names : commonIngredients;
       const options = visibleNames.map(name => ({label: name, value: name, icon: 'rectangle', selected: pantry.includes(name)}));
-      const matches = selectors.matchRecipes(store.getState(), pantry, this.data.completeOnly);
-      this.setData({pantry, selectedText: pantry.join('、'), options, ingredientCount: names.length,
-        matches, completeMatches: matches.filter(recipe => recipe.complete),
+      const matches = selectors.matchRecipes(store.getState(), pantry, false);
+      this.setData({pantry, options, ingredientCount: names.length,
+        matchCount: matches.length, matches, previewMatches: matches.slice(0, 4),
+        completeMatches: matches.filter(recipe => recipe.complete),
         partialMatches: matches.filter(recipe => !recipe.complete), warning: store.getWarning()});
     } catch (error) { ui.error(error); }
   },
-  changePanels(event) { this.setData({panels: event.detail.value}); },
-  changeCustomPanels(event) { this.setData({customPanels: event.detail.value}); },
   toggleCustomIngredients() { this.setData({customPanels: this.data.customPanels.length ? [] : ['custom']}); },
   toggleAllIngredients() { this.setData({showAllIngredients: !this.data.showAllIngredients}); this.refresh(); },
   searchIngredient(event) { this.setData({search: typeof event.detail.value === 'string' ? event.detail.value : ''}); this.refresh(); },
@@ -40,6 +37,11 @@ Page({
     getApp().globalData.pantry = pantry.includes(name) ? pantry.filter(item => item !== name) : pantry.concat(name);
     this.refresh();
   },
+  removeIngredient(event) {
+    const name = event.currentTarget.dataset.name;
+    getApp().globalData.pantry = (getApp().globalData.pantry || []).filter(item => item !== name);
+    this.refresh();
+  },
   inputIngredient(event) { this.setData({ingredient: event.detail.value}); },
   addIngredient() {
     const name = selectors.normalizeIngredient(this.data.ingredient);
@@ -49,8 +51,14 @@ Page({
     this.setData({ingredient: '', search: ''}); this.refresh(); wx.hideKeyboard();
   },
   clearPantry() { getApp().globalData.pantry = []; this.refresh(); },
-  showMatches() { this.setData({panels: []}); wx.hideKeyboard(); },
-  selectIngredients() { this.setData({panels: ['pantry']}); wx.pageScrollTo({scrollTop: 0}); },
-  changeComplete(event) { this.setData({completeOnly: event.detail.value === true}); this.refresh(); },
-  openRecipe(event) { wx.navigateTo({url: '/pages/detail/index?id=' + encodeURIComponent(event.detail.id)}); }
+  showMatches() {
+    if (!(getApp().globalData.pantry || []).length) return;
+    wx.hideKeyboard();
+    wx.navigateTo({url: '/pages/ingredient-results/index'});
+  },
+  openRecipe(event) {
+    const id = event.detail && event.detail.id || event.currentTarget && event.currentTarget.dataset.id;
+    if (this.data.matches.some(recipe => recipe.id === id)) wx.navigateTo({url: '/pages/detail/index?id=' + encodeURIComponent(id)});
+  },
+  back() { ui.back(); }
 });

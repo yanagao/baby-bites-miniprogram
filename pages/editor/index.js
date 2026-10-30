@@ -1,10 +1,16 @@
 const store = require('../../utils/store');
 const { categories, textures } = require('../../utils/selectors');
+const recipeAges = require('../../utils/recipe-ages');
 const ui = require('../../utils/ui');
+const ageGroupFields = values => ({
+  ageGroups: values,
+  ageGroupOptions: recipeAges.ageGroups.map(group => ({...group, selected: values.includes(group.value)}))
+});
 
 Page({
   data: {
     categories: categories.slice(1), textures, categoryIndex: 0, textureIndex: 0,
+    ...ageGroupFields([]), ageGroupsDirty: false,
     pickerVisible: false, pickerField: '', pickerTitle: '', pickerOptions: [], pickerValue: [],
     recordMeal: false, rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
@@ -13,7 +19,7 @@ Page({
     nameError: '', minutesError: '', ingredientsError: '', stepsError: '', ratingError: '',
     discardVisible: false
   },
-  onLoad(options) {
+  onLoad(options = {}) {
     this._draftOwner = store.getSyncInfo().owner;
     this._unsubscribeAccount = store.subscribe(info => {
       if (!this._draftOwner && info.owner) this._draftOwner = info.owner;
@@ -31,9 +37,11 @@ Page({
           steps: recipe.steps.join('\n'), note: recipe.note || ''
         },
         categoryIndex: this.data.categories.indexOf(recipe.category),
-        textureIndex: textures.indexOf(recipe.texture), photo: recipe.photo || ''
+        textureIndex: textures.indexOf(recipe.texture), photo: recipe.photo || '',
+        ...ageGroupFields(recipeAges.recipeAgeGroups(recipe))
       });
     }
+    this.initialAgeGroups = this.data.ageGroups.slice();
     this.initialDraft = this.draftSnapshot();
   },
   onUnload() {
@@ -48,7 +56,7 @@ Page({
   draftSnapshot() {
     return JSON.stringify({
       form: this.data.form, categoryIndex: this.data.categoryIndex,
-      textureIndex: this.data.textureIndex, photo: this.data.photo,
+      textureIndex: this.data.textureIndex, photo: this.data.photo, ageGroups: this.data.ageGroups,
       recordMeal: this.data.recordMeal, rating: this.data.recordMeal ? this.data.rating : 0
     });
   },
@@ -77,6 +85,17 @@ Page({
     const field = event.currentTarget.dataset.field;
     if (!Object.prototype.hasOwnProperty.call(this.data.form, field)) return;
     this.setData({ ['form.' + field]: event.detail.value, [field + 'Error']: '', error: '' });
+    this.updateUnsavedAlert();
+  },
+  toggleAgeGroup(event) {
+    if (this.data.saving || this.data.missingRecipe) return;
+    try { this.assertDraftAccount(); }
+    catch (error) { this.setData({error: error.message}); return; }
+    const value = event.currentTarget && event.currentTarget.dataset.value;
+    if (!recipeAges.ageGroups.some(group => group.value === value)) return;
+    const values = recipeAges.normalizeAgeGroups(this.data.ageGroups.includes(value)
+      ? this.data.ageGroups.filter(group => group !== value) : this.data.ageGroups.concat(value));
+    this.setData({...ageGroupFields(values), ageGroupsDirty: JSON.stringify(values) !== JSON.stringify(this.initialAgeGroups || []), error: ''});
     this.updateUnsavedAlert();
   },
   openPicker(event) {
@@ -174,6 +193,8 @@ Page({
         name: form.name.trim(), minutes, category: this.data.categories[this.data.categoryIndex],
         texture: textures[this.data.textureIndex], ingredients, steps, note: form.note.trim(), photo
       });
+      if (this.data.ageGroupsDirty) recipe.ageGroups = recipeAges.normalizeAgeGroups(this.data.ageGroups);
+      else delete recipe.ageGroups;
       this.assertDraftAccount();
       store.saveRecipe(recipe, !this.data.editing && this.data.recordMeal ? this.data.rating : 0);
       this.stagedPhotoPath = '';

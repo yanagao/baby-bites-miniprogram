@@ -32,6 +32,37 @@ function withLog(state, id, recipeId, rating, date, createdAt) {
   state.logs.push({id, recipeId, rating, date, createdAt, portion: '', note: ''});
 }
 
+test('optional recipe ages preserve legacy absence, normalize explicit values and survive edits or explicit clearing', () => {
+  const legacy = {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [recipe({id: 'legacy', createdAt: 1, updatedAt: 1})], logs: []};
+  const app = setup(legacy);
+  assert.equal(Object.hasOwn(app.store.getRecipe('legacy'), 'ageGroups'), false);
+  assert.equal(app.writes(), 0);
+  app.store.saveRecipe({...app.store.getRecipe('legacy'), ageGroups: ['18+', '6-8', '18+']});
+  assert.deepEqual(app.store.getRecipe('legacy').ageGroups, ['6-8', '18+']);
+  const edit = {...app.store.getRecipe('legacy'), name: '修改菜名'};
+  delete edit.ageGroups;
+  app.store.saveRecipe(edit);
+  assert.deepEqual(app.store.getRecipe('legacy').ageGroups, ['6-8', '18+']);
+  assert.deepEqual(JSON.parse(app.store.exportBackup()).recipes[0].ageGroups, ['6-8', '18+']);
+  app.store.saveRecipe({...edit, ageGroups: []});
+  assert.deepEqual(app.store.getRecipe('legacy').ageGroups, []);
+  const restored = setup(app.saved());
+  assert.deepEqual(restored.store.getRecipe('legacy').ageGroups, []);
+  assert.equal(restored.writes(), 0);
+});
+
+test('invalid recipe age groups never mutate storage and missing custom ages stay absent', () => {
+  const app = setup();
+  const id = app.store.saveRecipe(recipe());
+  assert.equal(Object.hasOwn(app.store.getRecipe(id), 'ageGroups'), false);
+  const before = app.store.getState(), persisted = app.saved();
+  for (const ageGroups of [null, '', '6-8', {}, [6], ['all'], ['6-8', 'bad'], Array(5).fill('6-8')]) {
+    assert.throws(() => app.store.saveRecipe({...app.store.getRecipe(id), ageGroups}), /适用月龄/);
+    assert.deepEqual(app.store.getState(), before);
+    assert.deepEqual(app.saved(), persisted);
+  }
+});
+
 test('first read exposes the starter catalog, no fabricated feedback, and no implicit write', () => {
   const app = setup();
   assert.equal(app.store.init().recipes.length, seed.length);

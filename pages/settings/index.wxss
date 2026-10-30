@@ -1,0 +1,70 @@
+.settings-page {
+  padding: 24rpx 28rpx calc(28rpx + env(safe-area-inset-bottom));
+  color: #345158;
+  background: #ffffff;
+  font-size: 30rpx;
+  line-height: 1.6;
+  --td-cell-bg-color: #eff8f8;
+  --td-cell-vertical-padding: 24rpx;
+  --td-cell-horizontal-padding: 24rpx;
+  --td-cell-title-color: #345158;
+  --td-cell-title-font: 500 30rpx/1.6 var(--td-font-family);
+  --td-cell-note-font-size: 24rpx;
+  --td-cell-note-color: #82969a;
+  --td-cell-description-font: 400 24rpx/1.6 var(--td-font-family);
+  --td-cell-description-color: #82969a;
+  --td-cell-border-color: #deebed;
+  --td-cell-border-left-space: 24rpx;
+  --td-cell-border-right-space: 24rpx;
+  --td-cell-group-title-font-size: 28rpx;
+  --td-cell-group-title-line-height: 1.6;
+  --td-textarea-background-color: #ffffff;
+  --td-textarea-padding: 20rpx;
+  --td-textarea-placeholder-color: #9aadb1;
+  --td-font-body-large: 400 30rpx/1.6 var(--td-font-family);
+  --td-font-body-medium: 400 26rpx/1.6 var(--td-font-family);
+  --td-font-body-small: 400 24rpx/1.6 var(--td-font-family);
+  --td-button-small-height: 64rpx;
+  --td-button-small-font: 500 26rpx/1.6 var(--td-font-family);
+  --td-button-border-radius: 16rpx;
+  --td-collapse-panel-bg-color: #eff8f8;
+  --td-collapse-header-text-color: #345158;
+  --td-collapse-header-height: 92rpx;
+  --td-collapse-horizontal-padding: 24rpx;
+  --td-collapse-title-font: 500 30rpx/1.6 var(--td-font-family);
+  --td-collapse-content-padding: 0;
+  --td-collapse-content-font: 400 24rpx/1.6 var(--td-font-family);
+}
+
+.settings-section + .settings-section { margin-top: 32rpx; }
+.settings-section-title { margin: 0 4rpx 14rpx; font-size: 28rpx; font-weight: 600; }
+.settings-card { overflow: hidden; border-radius: 24rpx; background: #eff8f8; }
+.settings-description { color: #82969a; font-size: 24rpx; line-height: 1.6; overflow-wrap: break-word; word-break: break-word; }
+.settings-sync-card { padding: 24rpx; }
+.settings-sync-heading { display: flex; align-items: center; gap: 12rpx; }
+.settings-status-dot { flex: 0 0 14rpx; width: 14rpx; height: 14rpx; border-radius: 50%; background: #73c6e8; }
+.settings-status-dot--synced { background: #55bba4; }
+.settings-status-dot--error { background: #e29b6e; }
+.settings-status-dot--unconfigured { background: #a6b8bc; }
+.settings-sync-title { min-width: 0; font-size: 30rpx; font-weight: 600; overflow-wrap: break-word; }
+.settings-sync-description { margin-top: 8rpx; }
+.settings-sync-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16rpx 24rpx; margin-top: 22rpx; padding-top: 20rpx; border-top: 1rpx solid #deebed; }
+.settings-sync-time { flex: 1 1 260rpx; min-width: 0; font-size: 24rpx; color: #82969a; overflow-wrap: break-word; }
+.settings-overview { padding: 24rpx; }
+.settings-counts { display: flex; align-items: flex-start; }
+.settings-count { display: flex; flex: 1 1 0; min-width: 0; align-items: baseline; flex-wrap: wrap; gap: 4rpx 10rpx; padding-right: 20rpx; }
+.settings-count--logs { padding-right: 0; padding-left: 24rpx; border-left: 1rpx solid #d7e7ea; }
+.settings-count-value { font-size: 34rpx; font-weight: 600; overflow-wrap: anywhere; }
+.settings-count-label { color: #82969a; font-size: 24rpx; }
+.settings-storage-description { margin-top: 16rpx; }
+.settings-backup-actions, .settings-backup-more { margin-top: 20rpx; }
+.settings-cell-main { min-width: 0; overflow-wrap: break-word; word-break: break-word; }
+.settings-cell-note { flex: 0 0 auto; max-width: 36%; font-size: 24rpx; }
+.settings-paste { padding: 0 24rpx 24rpx; }
+.settings-paste-action { display: flex; justify-content: flex-end; margin-top: 16rpx; }
+.settings-backup-help { margin: 0 24rpx; padding: 20rpx 0 24rpx; border-top: 1rpx solid #deebed; }
+.settings-help-title { margin-bottom: 6rpx; font-size: 26rpx; font-weight: 500; }
+.settings-error { margin-top: 20rpx; overflow: hidden; border-radius: 16rpx; }
+.settings-version { display: flex; align-items: baseline; justify-content: space-between; gap: 20rpx; max-width: 100%; padding: 26rpx 4rpx 0; color: #82969a; font-size: 24rpx; line-height: 1.6; }
+.settings-version-name { min-width: 0; overflow-wrap: break-word; }
+.settings-version-number { flex-shrink: 0; }

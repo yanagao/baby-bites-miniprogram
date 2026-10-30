@@ -27,6 +27,37 @@ function snapshot(owner = ownerFor('alice')) {
   };
 }
 
+test('both cloud snapshot validators accept optional age groups without inventing legacy values', () => {
+  const validators = [validateSnapshot, require('../cloudfunctions/babyBitesSocial/private-snapshot').validateSnapshot];
+  for (const validate of validators) {
+    const check = data => validate(Buffer.from(JSON.stringify(data)), {env: ENV, owner: ownerFor('alice'), now: NOW});
+    assert.equal(Object.hasOwn(check(snapshot()).data.recipes[0], 'ageGroups'), false);
+    for (const [input, expected] of [[[], []], [['18+', '6-8', '6-8'], ['6-8', '18+']],
+      [['18+', '12-17', '9-11', '6-8'], ['6-8', '9-11', '12-17', '18+']]]) {
+      const data = snapshot(); data.data.recipes[0].ageGroups = input;
+      assert.deepEqual(check(data).data.recipes[0].ageGroups, expected);
+    }
+    for (const ageGroups of [null, '', {}, '6-8', [6], ['all'], ['6-8', ''], Array(5).fill('6-8')]) {
+      const data = snapshot(); data.data.recipes[0].ageGroups = ageGroups;
+      assert.throws(() => check(data), error => error.code === 'INVALID_SNAPSHOT' && /适用月龄/.test(error.message));
+    }
+  }
+});
+
+test('committing a private snapshot accepts recipe ages while invalid age metadata never starts a transaction', async () => {
+  const env = fakeEnvironment();
+  const data = snapshot(); data.data.recipes[0].ageGroups = ['9-11', '12-17'];
+  const fileID = env.upload('alice', 'age-valid.json', data);
+  const result = await env.handler()({action: 'commit', baseRevision: 0, fileID});
+  assert.equal(result.revision, 1);
+  const writes = env.writes, transactions = env.transactionCount;
+  data.data.recipes[0].ageGroups = ['6-8', 'private-note'];
+  const invalid = env.upload('alice', 'age-invalid.json', data);
+  const failed = await env.handler()({action: 'commit', baseRevision: 1, fileID: invalid});
+  assert.equal(failed.error.code, 'INVALID_SNAPSHOT');
+  assert.equal(env.writes, writes); assert.equal(env.transactionCount, transactions);
+});
+
 function fakeEnvironment() {
   const records = new Map();
   const files = new Map();

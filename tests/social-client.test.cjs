@@ -78,22 +78,316 @@ function setup(options = {}) {
     store.bindAccount(syncOwner);
     return {state: syncState, owner: syncOwner, message: syncState === 'synced' ? '已同步' : '等待联网同步'};
   }};
+  const coverSources = new Map(Object.entries(options.coverSources || {}));
+  const coverLoader = {getSource: key => coverSources.get(key) || '',
+    isReady: () => false, prepare() { return hooks.coverPrepare ? hooks.coverPrepare() : Promise.resolve(false); }};
+  const coverModule = {exports: {}};
+  vm.runInNewContext(source('recipe-covers.js'), {module: coverModule, require(name) {
+    if (name === './cover-loader') return coverLoader;
+    if (name === '../data/recipe-cover-catalog') return require('../data/recipe-cover-catalog');
+    throw Error(name);
+  }});
   const socialModule = {exports: {}};
   vm.runInNewContext(source('social.js'), {module: socialModule, wx, console, ArrayBuffer, Uint8Array,
     require(name) {
       if (name === './store') return store;
       if (name === './cloud-sync') return sync;
+      if (name === './recipe-covers') return coverModule.exports;
+      if (name === './cover-loader') return coverLoader;
+      if (name === './baby-age') return {isValidBirthDate: value => require('../utils/baby-age').isValidBirthDate(value, options.today || '2026-10-29')};
+      if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === '../config/cloud') return {env: 'social-test', socialEnabled: options.enabled !== false};
       throw Error(name);
     }});
-  return {social: socialModule.exports, store, files, hooks, calls, storage,
+  return {social: socialModule.exports, store, files, hooks, calls, storage, coverSources,
     setSyncOwner(value) { syncOwner = value; }, setSyncState(value) { syncState = value; }};
 }
+
+test('saving public recipes retains explicit age groups but never infers them from a starter cover', async () => {
+  for (const ageGroups of [undefined, [], ['18+', '9-11', '18+']]) {
+    const app = setup();
+    app.hooks.request = args => args.data.action === 'recipe' ? {recipe: {...publicRecipe(), imageKey: 'dish:pumpkin-millet',
+      ...(ageGroups === undefined ? {} : {ageGroups})}} : undefined;
+    const added = await app.social.addToCookbook(PUBLIC_ID);
+    const recipe = app.store.getRecipe(added.recipeId);
+    if (ageGroups === undefined) assert.equal(Object.hasOwn(recipe, 'ageGroups'), false);
+    else assert.deepEqual(copy(recipe.ageGroups), ageGroups.length ? ['9-11', '18+'] : []);
+    assert.equal(app.calls.filter(item => item.action === 'download').length, 0);
+  }
+});
+
+test('invalid public recipe age groups fail before photo download or private writes', async () => {
+  for (const ageGroups of [null, '6-8', ['all'], Array(5).fill('6-8')]) {
+    const app = setup(), before = copy(app.store.getState());
+    app.hooks.request = args => args.data.action === 'recipe' ? {recipe: {...publicRecipe(), ageGroups,
+      photoURL: 'https://storage.example/photo'}} : undefined;
+    await assert.rejects(app.social.addToCookbook(PUBLIC_ID), /适用月龄/);
+    assert.deepEqual(copy(app.store.getState()), before);
+    assert.equal(app.files.size, 0); assert.equal(app.calls.filter(item => item.action === 'download').length, 0);
+  }
+});
+
+test('explicit example publication retains only stored age metadata and missing metadata stays missing', async () => {
+  for (const ageGroups of [undefined, [], ['9-11', '12-17']]) {
+    const app = setup();
+    const snapshot = {version: 1, data: app.store.getState(), deleted: {recipes: [], logs: []}};
+    const original = snapshot.data.recipes[0];
+    if (ageGroups === undefined) delete original.ageGroups; else original.ageGroups = ageGroups;
+    const info = app.store.getSyncInfo();
+    app.store.applySyncedSnapshot(snapshot, {owner: OWNER, sequence: info.sequence, revision: 1});
+    app.hooks.sync = () => {
+      const state = app.store.getSyncInfo();
+      if (state.dirty) app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: state.sequence, revision: state.revision + 1});
+    };
+    await app.social.publishRecipe(original.id);
+    const stored = app.store.getRecipe(original.id);
+    if (ageGroups === undefined) assert.equal(Object.hasOwn(stored, 'ageGroups'), false);
+    else assert.deepEqual(copy(stored.ageGroups), ageGroups);
+    assert.equal(stored.isExample, false);
+    assert.deepEqual(app.calls.map(item => item.action), ['sync', 'sync', 'publish']);
+    assert.equal(Object.hasOwn(app.calls[2], 'ageGroups'), false, 'the server reads only its authoritative snapshot');
+  }
+});
 
 test('social writes confirm identity and use it as a backend precondition', async () => {
   const app = setup();
   await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 '});
   assert.deepEqual(app.calls, [{action: 'identity'}, {action: 'updateProfile', name: '小厨房', bio: '家常辅食', expectedOwner: OWNER}]);
+});
+
+test('public catalog covers render from available cache sources and copying never downloads or deletes that source', async () => {
+  const cachedCover = 'wxfile://usr/recipe-cover-cache/carrot-chicken.jpg';
+  const app = setup({coverSources: {'dish:carrot-chicken': cachedCover}});
+  app.files.set(cachedCover, Buffer.from('already verified cache image'));
+  app.hooks.request = async args => {
+    const recipe = {...publicRecipe(), imageKey: 'dish:carrot-chicken'};
+    if (args.data.action === 'recipe') return {recipe};
+    if (['profile', 'feed', 'discover'].includes(args.data.action)) return {recipes: [recipe]};
+  };
+  const detail = await app.social.getRecipe(PUBLIC_ID);
+  assert.equal(detail.recipe.displayPhoto, cachedCover);
+  assert.equal(detail.recipe.photoURL, '');
+  for (const result of [await app.social.getProfile(PROFILE_ID), await app.social.getFeed(), await app.social.getDiscover()]) {
+    assert.equal(result.recipes[0].displayPhoto, detail.recipe.displayPhoto);
+  }
+  const imported = await app.social.addToCookbook(PUBLIC_ID);
+  const stored = app.store.getRecipe(imported.recipeId);
+  assert.equal(stored.imageKey, 'dish:carrot-chicken');
+  assert.equal(stored.photo, ''); assert.equal(stored.displayPhoto, undefined);
+  assert.equal(app.calls.filter(call => call.action === 'download').length, 0);
+  assert.ok(app.files.has(cachedCover), 'copying must not remove the shared cover cache');
+  assert.doesNotMatch(app.store.exportBackup(), /recipe-cover-cache|displayPhoto/);
+});
+
+test('a public starter dish with an uploaded photo preserves and copies that photo ahead of its catalog cover', async () => {
+  const app = setup({coverSources: {'dish:carrot-chicken': 'https://storage.example/default-cover'}});
+  const photoURL = 'https://storage.example/author-photo?sign=current';
+  app.hooks.request = async args => args.data.action === 'recipe'
+    ? {recipe: {...publicRecipe(), imageKey: 'dish:carrot-chicken', photoURL}} : undefined;
+  const detail = await app.social.getRecipe(PUBLIC_ID);
+  assert.equal(detail.recipe.photoURL, photoURL);
+  assert.equal(detail.recipe.displayPhoto, undefined);
+  const imported = await app.social.addToCookbook(PUBLIC_ID);
+  const stored = app.store.getRecipe(imported.recipeId);
+  assert.equal(stored.imageKey, 'dish:carrot-chicken');
+  assert.match(stored.photo, /^wxfile:\/\/usr\/shared-.+\.png$/);
+  assert.deepEqual(app.files.get(stored.photo), PNG);
+  assert.deepEqual(app.calls.filter(call => call.action === 'download'), [{action: 'download', url: photoURL}]);
+  assert.equal(require('../utils/selectors').enrichRecipe(app.store.getState(), stored).displayPhoto, stored.photo);
+  assert.equal(stored.displayPhoto, undefined);
+});
+
+test('public reads render ready covers independently and missing sources stay empty through copying', {timeout: 1000}, async () => {
+  const signedCover = 'https://storage.example/current-cover-signature';
+  const app = setup({coverSources: {'dish:pumpkin-millet': signedCover}});
+  app.hooks.coverPrepare = () => new Promise(() => {});
+  app.hooks.request = async args => {
+    if (args.data.action === 'discover') return {recipes: [
+      {...publicRecipe(), imageKey: 'dish:pumpkin-millet'},
+      {...publicRecipe(), id: 'e'.repeat(64), imageKey: 'dish:carrot-chicken'}
+    ]};
+    if (args.data.action === 'recipe') return {recipe: {...publicRecipe(), imageKey: 'dish:carrot-chicken'}};
+  };
+  const result = await app.social.getDiscover();
+  assert.equal(result.recipes[0].displayPhoto, signedCover);
+  assert.equal(result.recipes[1].displayPhoto, undefined); assert.equal(result.recipes[1].photoURL, '');
+  const imported = await app.social.addToCookbook(PUBLIC_ID), stored = app.store.getRecipe(imported.recipeId);
+  assert.equal(stored.imageKey, 'dish:carrot-chicken'); assert.equal(stored.photo, ''); assert.equal(stored.displayPhoto, undefined);
+  assert.equal(app.calls.filter(call => call.action === 'download').length, 0);
+  assert.doesNotMatch(app.store.exportBackup(), /current-cover-signature|recipe-media\/food|displayPhoto/);
+});
+
+test('a user recipe cannot acquire a starter photo from a matching name or generic image key during reads or copying', async () => {
+  const app = setup();
+  const recipe = {...publicRecipe(), name: '南瓜小米粥', imageKey: 'pumpkin'};
+  app.hooks.request = async args => {
+    if (args.data.action === 'recipe') return {recipe: {...recipe}};
+    if (['profile', 'feed', 'discover'].includes(args.data.action)) return {recipes: [{...recipe}]};
+  };
+  assert.equal((await app.social.getRecipe(PUBLIC_ID)).recipe.displayPhoto, undefined);
+  for (const result of [await app.social.getProfile(PROFILE_ID), await app.social.getFeed(), await app.social.getDiscover()]) {
+    assert.equal(result.recipes[0].displayPhoto, undefined);
+    assert.equal(result.recipes[0].photoURL, '');
+  }
+  const imported = await app.social.addToCookbook(PUBLIC_ID);
+  const stored = app.store.getRecipe(imported.recipeId);
+  assert.equal(stored.photo, '');
+  assert.equal(require('../utils/selectors').enrichRecipe(app.store.getState(), stored).displayPhoto, '');
+  assert.equal(app.calls.filter(call => call.action === 'download').length, 0);
+});
+
+test('public baby age forwards zero, whole months, the upper bound and explicit clearing without changing private data', async () => {
+  const app = setup();
+  const before = copy(app.store.getState());
+  for (const babyAgeMonths of [0, 8, 120, null]) {
+    await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 ', babyAgeMonths});
+  }
+  assert.deepEqual(app.calls.filter(call => call.action === 'updateProfile'), [0, 8, 120, null].map(babyAgeMonths => ({
+    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyAgeMonths, expectedOwner: OWNER
+  })));
+  assert.equal(app.calls.filter(call => call.action === 'identity').length, 4);
+  assert.deepEqual(copy(app.store.getState()), before);
+});
+
+test('legacy profile saves omit baby age instead of clearing it or carrying a previous request value', async () => {
+  const app = setup();
+  await app.social.saveProfile({name: '小厨房', bio: '', babyAgeMonths: 8});
+  await app.social.saveProfile({name: '修改昵称', bio: '修改简介'});
+  const request = app.calls.filter(call => call.action === 'updateProfile')[1];
+  assert.deepEqual(request, {action: 'updateProfile', name: '修改昵称', bio: '修改简介', expectedOwner: OWNER});
+  assert.equal(Object.prototype.hasOwnProperty.call(request, 'babyAgeMonths'), false);
+});
+
+test('invalid public baby ages are rejected before identity lookup or cloud requests', () => {
+  const app = setup();
+  const before = copy(app.store.getState());
+  for (const babyAgeMonths of [-1, 121, 0.5, NaN, Infinity, -Infinity, '8', '', true, false, {}, [], undefined]) {
+    assert.throws(() => app.social.saveProfile({name: '小厨房', bio: '', babyAgeMonths}), error =>
+      error.code === 'INVALID_BABY_AGE' && /0–120/.test(error.message) && error.userMessage === error.message);
+  }
+  assert.deepEqual(app.calls, []);
+  assert.deepEqual(copy(app.store.getState()), before);
+});
+
+test('server baby-age validation uses the same friendly message without exposing diagnostics', async () => {
+  const app = setup();
+  app.hooks.request = () => ({error: {code: 'INVALID_BABY_AGE', message: 'secret server diagnostic'}});
+  await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '', babyAgeMonths: 8}), error =>
+    error.code === 'INVALID_BABY_AGE' && /月龄/.test(error.message) && /0–120/.test(error.message) && !/secret/.test(error.message));
+});
+
+test('baby birthday forwards valid dates, today and explicit clearing without changing private data', async () => {
+  const app = setup({today: '2026-10-29'});
+  const before = copy(app.store.getState());
+  const birthdays = ['1900-01-01', '2024-02-29', '2026-10-29', null];
+  for (const babyBirthDate of birthdays) {
+    await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 ', babyBirthDate});
+  }
+  assert.deepEqual(app.calls.filter(call => call.action === 'updateProfile'), birthdays.map(babyBirthDate => ({
+    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyBirthDate, expectedOwner: OWNER
+  })));
+  assert.equal(app.calls.filter(call => call.action === 'identity').length, birthdays.length);
+  assert.deepEqual(copy(app.store.getState()), before);
+  assert.equal(JSON.stringify(app.store.getSyncSnapshot()).includes('babyBirthDate'), false);
+  assert.equal(app.store.exportBackup().includes('babyBirthDate'), false);
+});
+
+test('omitted birthdays remain omitted on later saves and legacy manual age stays supported', async () => {
+  const app = setup();
+  await app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2026-04-29'});
+  await app.social.saveProfile({name: '修改昵称', bio: '修改简介'});
+  await app.social.saveProfile({name: '旧版资料', bio: '', babyAgeMonths: 8});
+  const updates = app.calls.filter(call => call.action === 'updateProfile');
+  assert.deepEqual(updates[1], {action: 'updateProfile', name: '修改昵称', bio: '修改简介', expectedOwner: OWNER});
+  assert.deepEqual(updates[2], {action: 'updateProfile', name: '旧版资料', bio: '', babyAgeMonths: 8, expectedOwner: OWNER});
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[1], 'babyBirthDate'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[2], 'babyBirthDate'), false);
+});
+
+test('malformed, impossible, too early and future birthdays fail before identity or cloud requests', () => {
+  const app = setup({today: '2026-10-29'});
+  const before = copy(app.store.getState());
+  const invalid = ['1899-12-31', '1900-02-29', '2025-02-29', '2026-04-31', '2026-00-01', '2026-13-01',
+    '2026-01-00', '2026-1-01', '2026-01-1', '2026-10-30', '9999-12-31', '2026-10-29T00:00:00Z',
+    ' 2026-10-29 ', '', 'not-a-date', 20261029, true, false, {}, [], undefined];
+  for (const babyBirthDate of invalid) {
+    assert.throws(() => app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate}), error =>
+      error.code === 'INVALID_BABY_BIRTH_DATE' && error.message === '请选择有效的宝宝生日，不能晚于今天。' &&
+      error.userMessage === error.message);
+  }
+  assert.deepEqual(app.calls, []);
+  assert.deepEqual(copy(app.store.getState()), before);
+});
+
+test('birthday date validation uses the supplied current-day boundary rather than a fixed calendar date', async () => {
+  const app = setup({today: '2027-01-01'});
+  await app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2027-01-01'});
+  assert.throws(() => app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2027-01-02'}), error =>
+    error.code === 'INVALID_BABY_BIRTH_DATE');
+  assert.equal(app.calls.filter(call => call.action === 'updateProfile').length, 1);
+});
+
+test('server birthday validation maps to the friendly message without exposing private diagnostics', async () => {
+  const app = setup();
+  app.hooks.request = () => ({error: {code: 'INVALID_BABY_BIRTH_DATE', message: 'secret birth date diagnostic'}});
+  await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2026-04-29'}), error =>
+    error.code === 'INVALID_BABY_BIRTH_DATE' && error.message === '请选择有效的宝宝生日，不能晚于今天。' &&
+    error.userMessage === error.message && !/secret/.test(error.message));
+});
+
+test('account changes during identity prevent sending a birthday update, including A to B to A switches', async () => {
+  for (const returnToOriginal of [false, true]) {
+    const app = setup();
+    const before = copy(app.store.getState());
+    app.hooks.identity = () => {
+      app.store.bindAccount(OTHER);
+      if (returnToOriginal) app.store.bindAccount(OWNER);
+      return {owner: returnToOriginal ? OWNER : OTHER, revision: 0, fileID: ''};
+    };
+    await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2026-04-29'}), error =>
+      error.code === 'ACCOUNT_CHANGED');
+    assert.deepEqual(app.calls.map(call => call.action), ['identity']);
+    app.store.bindAccount(OWNER);
+    assert.deepEqual(copy(app.store.getState()), before);
+  }
+});
+
+test('account changes during a birthday response reject stale profile data and retain the request owner', async () => {
+  const app = setup();
+  const before = copy(app.store.getState());
+  app.hooks.request = () => {
+    app.store.bindAccount(OTHER);
+    return {profile: {id: PROFILE_ID, name: '旧账号', babyBirthDate: '2026-04-29', babyAgeMonths: 6}};
+  };
+  await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2026-04-29'}), error =>
+    error.code === 'ACCOUNT_CHANGED');
+  assert.deepEqual(app.calls.find(call => call.action === 'updateProfile'), {
+    action: 'updateProfile', name: '小厨房', bio: '', babyBirthDate: '2026-04-29', expectedOwner: OWNER
+  });
+  app.store.bindAccount(OWNER);
+  assert.deepEqual(copy(app.store.getState()), before);
+});
+
+test('discovery and share-code requests confirm identity and validate user-controlled arguments', async () => {
+  const app = setup();
+  await app.social.getDiscover({search: ' 南瓜 ', cursor: 'a-cursor'});
+  await app.social.getShareCode(PROFILE_ID, 'trial');
+  assert.deepEqual(app.calls, [{action: 'identity'}, {action: 'discover', search: '南瓜', cursor: 'a-cursor', expectedOwner: OWNER},
+    {action: 'identity'}, {action: 'shareCode', profileId: PROFILE_ID, envVersion: 'trial', expectedOwner: OWNER}]);
+  for (const input of [null, {search: 'x'.repeat(61)}, {cursor: {}}, {cursor: 'x'.repeat(4001)}]) {
+    assert.throws(() => app.social.getDiscover(input), error => error.code === 'INVALID_INPUT');
+  }
+  assert.throws(() => app.social.getShareCode('private-owner', 'trial'));
+  assert.throws(() => app.social.getShareCode(PROFILE_ID, 'unknown'));
+  assert.equal(app.calls.length, 4);
+});
+
+test('unpublished QR and server account-switch failures expose safe messages without sensitive diagnostics', async () => {
+  const app = setup();
+  app.hooks.request = async () => ({error: {code: 'SHARE_CODE_NOT_PUBLISHED', message: 'secret diagnostic'}});
+  await assert.rejects(app.social.getShareCode(PROFILE_ID, 'release'), error => /尚未发布/.test(error.message) && !/secret/.test(error.message));
+  app.hooks.request = async () => ({error: {code: 'ACCOUNT_CHANGED'}});
+  await assert.rejects(app.social.getShareCode(PROFILE_ID, 'trial'), error => error.code === 'ACCOUNT_CHANGED');
 });
 
 test('unconfigured social feature rejects requests before any cloud or private snapshot work', async () => {
@@ -146,6 +440,20 @@ test('backend errors become safe, actionable Chinese without exposing server det
   await assert.rejects(app.social.getRecipe(PUBLIC_ID), error => /取消公开/.test(error.message) && !error.message.includes('secret'));
   app.hooks.request = () => ({error: {code: 'ACCOUNT_CHANGED'}});
   await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
+});
+
+test('profile moderation errors explain the rejected field or retry without leaking provider diagnostics', async () => {
+  const messages = {
+    PROFILE_NAME_REJECTED: '昵称未通过内容审核，请修改后重试。',
+    PROFILE_BIO_REJECTED: '简介未通过内容审核，请修改后重试。',
+    PROFILE_MODERATION_UNAVAILABLE: '内容审核暂时不可用，资料尚未保存，请稍后重试。'
+  };
+  for (const [code, message] of Object.entries(messages)) {
+    const app = setup();
+    app.hooks.request = () => ({error: {code, message: 'secret openid and provider diagnostics'}});
+    await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '今天的辅食'}), error =>
+      error.code === code && error.userMessage === message && error.message === message);
+  }
 });
 
 test('publishing never runs while a local edit still awaits synchronization', async () => {

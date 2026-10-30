@@ -1,1 +1,1 @@
-:host {--td-tab-bar-bg-color:#fffaf3;--td-tab-bar-color:#53372b;--td-tab-bar-active-color:#e74965;--td-tab-bar-active-bg:#ffe4e7;--td-tab-bar-height:84rpx;}
+:host {--td-tab-bar-bg-color:#ffffff;--td-tab-bar-color:#9aaeb2;--td-tab-bar-active-color:#439e86;--td-tab-bar-active-bg:transparent;--td-tab-bar-height:88rpx;--td-spacer:10rpx;--td-tab-bar-border-color:#eaf1f3;}

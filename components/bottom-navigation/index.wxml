@@ -1,3 +1,3 @@
-<t-tab-bar value="{{value}}" bind:change="change" placeholder theme="tag" split="{{false}}">
+<t-tab-bar value="{{value}}" bind:change="change" placeholder theme="normal" split="{{false}}">
   <t-tab-bar-item wx:for="{{items}}" wx:key="value" value="{{item.value}}" icon="{{item.icon}}" aria-label="{{item.label}}">{{item.label}}</t-tab-bar-item>
 </t-tab-bar>

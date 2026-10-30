@@ -1,60 +1,40 @@
-<t-navbar z-index="100" title="按食材找菜" placeholder />
+<t-navbar class="ingredients-navbar" z-index="100" title="按食材找菜" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
-<view class="page-shell ingredients-page">
-  <view class="pantry-hero">
-    <view class="pantry-intro">
-      <view class="pantry-title">冰箱里，有什么？</view>
-      <view class="pantry-subtitle">选好食材，看看能做什么</view>
+<view class="ingredients-page">
+  <view class="ingredient-hero">
+    <view class="hero-sky" aria-hidden="true" /><view class="hero-cloud hero-cloud-left" aria-hidden="true" /><view class="hero-cloud hero-cloud-right" aria-hidden="true" />
+    <view class="hero-hill hero-hill-back" aria-hidden="true" /><view class="hero-hill hero-hill-front" aria-hidden="true" />
+    <view class="hero-garden" aria-hidden="true"><food-art name="西兰花" size="114" align-to-label /></view>
+    <view class="hero-bubble"><text>选一选家里的食材</text><text>看看能做什么吧</text></view>
+    <image class="hero-pantry-mascot" src="/assets/cute/pantry-bowl.png" mode="aspectFit" aria-hidden="true" />
+  </view>
+  <view class="ingredients-panel">
+    <view class="pantry-selector">
+      <view class="pantry-search"><t-search value="{{search}}" placeholder="搜索食材，如：南瓜、鸡肉" shape="round" bind:change="searchIngredient" maxlength="30" /></view>
+      <view class="pantry-selection-bar"><view class="selection-title"><text class="selection-heading">我家现有食材</text><text class="selection-count">（已选 {{pantry.length}} 项）</text></view><button class="clear-selection" disabled="{{!pantry.length}}" bindtap="clearPantry" aria-label="清空已选食材">清空</button></view>
+      <view class="ingredient-grid" wx:if="{{options.length}}">
+        <button wx:for="{{options}}" wx:key="value" class="ingredient-tile {{item.selected ? 'ingredient-tile-selected' : ''}}" hover-class="ingredient-tile-pressed" data-name="{{item.value}}" bindtap="toggleIngredient" aria-role="checkbox" aria-checked="{{item.selected}}" aria-label="{{item.label}}">
+          <view class="ingredient-check {{item.selected ? 'ingredient-check-selected' : ''}}"><t-icon wx:if="{{item.selected}}" name="check" size="22rpx" /></view><food-art name="{{item.label}}" size="112" align-to-label /><text class="ingredient-label">{{item.label}}</text>
+        </button>
+      </view>
+      <t-empty wx:else description="没有找到，可以添加其他食材" />
+      <view class="pantry-more-actions"><button wx:if="{{!search}}" class="all-ingredients" bindtap="toggleAllIngredients"><text>{{showAllIngredients ? '收起列表' : '更多食材'}}</text><t-icon name="{{showAllIngredients ? 'chevron-up' : 'chevron-down'}}" size="26rpx" /></button><button class="all-ingredients custom-ingredient-toggle" bindtap="toggleCustomIngredients"><t-icon name="{{customPanels.length ? 'chevron-up' : 'add'}}" size="26rpx" /><text>{{customPanels.length ? '收起' : '其他食材'}}</text></button></view>
+      <view wx:if="{{customPanels.length}}" class="custom-ingredient-panel"><t-input label="食材" value="{{ingredient}}" bind:change="inputIngredient" bind:enter="addIngredient" placeholder="例如：冬瓜" maxlength="30" confirm-type="done"><t-button slot="suffix" theme="primary" variant="text" size="small" bind:tap="addIngredient">添加</t-button></t-input></view>
     </view>
-    <image class="pantry-mascot" src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
-  </view>
-  <view class="pantry-search">
-    <t-search value="{{search}}" placeholder="搜索食材" shape="round" bind:change="searchIngredient" maxlength="30" />
-  </view>
-  <view class="pantry-selection-bar">
-    <text class="selection-count">已选 {{pantry.length}} 样</text>
-    <button class="clear-selection" disabled="{{!pantry.length}}" bindtap="clearPantry" aria-label="清空已选食材">清空</button>
-  </view>
-  <view class="ingredient-grid" wx:if="{{options.length}}">
-    <button wx:for="{{options}}" wx:key="value" class="ingredient-tile {{item.selected ? 'ingredient-tile-selected' : ''}}" hover-class="ingredient-tile-pressed" data-name="{{item.value}}" bindtap="toggleIngredient" aria-role="checkbox" aria-checked="{{item.selected}}" aria-label="{{item.label}}">
-      <view class="ingredient-check" wx:if="{{item.selected}}"><t-icon name="check" size="22rpx" /></view>
-      <food-art name="{{item.label}}" size="76" align-to-label />
-      <text class="ingredient-label">{{item.label}}</text>
-    </button>
-  </view>
-  <t-empty wx:else description="没有找到这项食材，可以在下面添加" />
-  <view class="pantry-more-actions">
-    <button wx:if="{{!search}}" class="all-ingredients" bindtap="toggleAllIngredients">
-      <text>{{showAllIngredients ? '收起完整列表' : '全部 ' + ingredientCount + ' 种食材'}}</text>
-      <t-icon name="{{showAllIngredients ? 'chevron-up' : 'chevron-down'}}" size="26rpx" />
-    </button>
-    <button class="all-ingredients custom-ingredient-toggle" bindtap="toggleCustomIngredients">
-      <t-icon name="{{customPanels.length ? 'chevron-up' : 'add'}}" size="26rpx" />
-      <text>{{customPanels.length ? '收起' : '添加其他食材'}}</text>
-    </button>
-  </view>
-  <view wx:if="{{customPanels.length}}" class="custom-ingredient-panel">
-    <t-input label="食材" value="{{ingredient}}" bind:change="inputIngredient" bind:enter="addIngredient" placeholder="例如：冬瓜" maxlength="30" confirm-type="done">
-      <t-button slot="suffix" theme="primary" variant="text" size="small" bind:tap="addIngredient">添加</t-button>
-    </t-input>
-  </view>
-  <block wx:if="{{pantry.length}}">
-    <view class="match-filter-row">
-      <text class="match-filter-label">只看食材齐全</text>
-      <t-switch value="{{completeOnly}}" bind:change="changeComplete" aria-label="只看食材齐全" size="small" />
+    <scroll-view wx:if="{{pantry.length}}" class="selected-ingredients-scroll" scroll-x><view class="selected-ingredients"><button wx:for="{{pantry}}" wx:key="*this" class="selected-ingredient" data-name="{{item}}" bindtap="removeIngredient" aria-label="移除已选食材{{item}}"><text>{{item}}</text><t-icon name="close" size="22rpx" /></button></view></scroll-view>
+    <view wx:else class="pantry-empty-note">点一点家里的食材，下方立即推荐菜谱</view>
+    <view wx:if="{{pantry.length}}" class="inline-match-results" aria-live="polite">
+      <view class="match-summary"><view class="match-summary-copy"><t-icon name="rice" size="34rpx" /><text>已选 {{pantry.length}} 样 · 匹配 {{matchCount}} 道</text></view><button wx:if="{{matchCount}}" class="view-all-matches" bindtap="showMatches" aria-label="查看全部{{matchCount}}道匹配菜谱"><text>查看全部</text><t-icon name="chevron-right" size="24rpx" /></button></view>
+      <view wx:if="{{matchCount}}" class="match-count-note">{{completeMatches.length}} 道食材已齐，{{partialMatches.length}} 道还需补充食材</view>
+      <view wx:if="{{previewMatches.length}}" class="inline-match-list">
+        <button wx:for="{{previewMatches}}" wx:key="id" class="inline-match-card" data-id="{{item.id}}" bindtap="openRecipe" aria-label="查看{{item.name}}，{{item.complete ? '食材已齐' : '还差' + item.missingCount + '样：' + item.missingText}}">
+          <view class="inline-match-cover"><image wx:if="{{item.displayPhoto}}" class="inline-match-photo" src="{{item.displayPhoto}}" mode="aspectFill" /><view wx:else class="inline-match-art"><food-art name="{{item.ingredients[0].name}}" size="156" align-to-label /></view></view>
+          <view class="inline-match-copy"><view class="inline-match-name">{{item.name}}</view><view class="inline-match-meta">{{item.minutes}} 分钟 · {{item.texture}}</view><view class="inline-match-tag {{item.complete ? '' : 'inline-tag-partial'}}"><t-icon name="{{item.complete ? 'check-circle-filled' : 'add-circle'}}" size="26rpx" /><text>{{item.complete ? '食材已齐' : '还差 ' + item.missingCount + ' 样'}}</text></view><view wx:if="{{!item.complete}}" class="inline-match-missing">还差：{{item.missingText}}</view></view>
+          <t-icon class="inline-match-arrow" name="chevron-right" size="30rpx" />
+        </button>
+      </view>
+      <view wx:else class="inline-matches-empty"><view>暂时还没有匹配的菜谱</view><text>换几样食材试试，推荐会随选择更新</text></view>
+      <view wx:if="{{matchCount}}" class="pantry-footer"><text>先看看家里有什么，再决定做什么</text><t-button theme="primary" shape="round" block bind:tap="showMatches">查看菜谱（{{matchCount}}）<t-icon slot="suffix" name="chevron-right" size="30rpx" /></t-button></view>
     </view>
-    <view wx:if="{{completeMatches.length}}" class="match-section match-section-complete">
-      <view class="match-section-heading"><t-icon name="check-circle-filled" size="30rpx" /><text>食材已齐 · {{completeMatches.length}} 道</text></view>
-      <recipe-card wx:for="{{completeMatches}}" wx:key="id" recipe="{{item}}" bind:open="openRecipe" />
-    </view>
-    <view wx:if="{{partialMatches.length}}" class="match-section match-section-partial">
-      <view class="match-section-heading"><t-icon name="add-circle" size="30rpx" /><text>再添一点 · 也能做</text></view>
-      <recipe-card wx:for="{{partialMatches}}" wx:key="id" recipe="{{item}}" bind:open="openRecipe" />
-    </view>
-    <t-empty wx:if="{{!matches.length}}" description="{{completeOnly ? '还没有食材齐全的菜谱，试试关闭筛选' : '已有菜谱中没有匹配结果，试试多选几样食材'}}">
-      <t-button slot="action" theme="primary" variant="outline" bind:tap="selectIngredients">继续选食材</t-button>
-    </t-empty>
-  </block>
-  <view wx:else class="pantry-empty-note"><t-icon name="lightbulb" size="30rpx" /><text>点一点手边的食材，小口袋帮你找菜</text></view>
+  </view>
 </view>
-<bottom-navigation id="bottom-navigation" />

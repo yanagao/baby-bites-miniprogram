@@ -1,50 +1,25 @@
-<t-navbar z-index="100" title="我的食谱" placeholder />
+<t-navbar z-index="100" title="我的食谱" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="page-shell cookbook-page">
-  <view class="cookbook-heading">
-    <view class="cookbook-heading-copy">
-      <view class="cookbook-title">宝宝的小食谱</view>
-      <view class="cookbook-subtitle">好好收藏，每一道喜欢的味道</view>
-    </view>
-    <image class="cookbook-mascot" src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
+  <view class="cookbook-toolbar">
+    <view class="cookbook-collection-tabs"><t-tabs value="{{collection}}" space-evenly="{{false}}" swipeable="{{false}}" split="{{false}}" bind:change="changeCollection"><t-tab-panel value="all" label="全部" /><t-tab-panel wx:if="{{socialEnabled}}" value="public" label="公开" /><t-tab-panel wx:if="{{socialEnabled}}" value="private" label="私密" /><t-tab-panel value="favorites" label="收藏" /></t-tabs></view>
+    <button class="cookbook-filter-button {{advancedFilterCount ? 'cookbook-filter-active' : ''}}" bindtap="openFilters" aria-label="搜索和筛选菜谱"><t-icon name="filter" size="32rpx" /><text wx:if="{{advancedFilterCount}}">{{advancedFilterCount}}</text></button>
   </view>
-  <view wx:if="{{socialEnabled}}" class="cookbook-social panel">
-    <t-cell title="我的主页" note="分享公开菜谱" arrow bind:click="openProfile" />
-    <t-cell title="关注的菜谱" note="看看好友做了什么" arrow bind:click="openFollowing" />
-  </view>
-  <view class="cookbook-search">
-    <t-search value="{{search}}" bind:change="searchInput" placeholder="搜索菜谱或食材" shape="round" maxlength="60" />
-  </view>
-  <view class="cookbook-collection-tabs">
-    <t-tabs value="{{onlyFavorites ? 'favorites' : 'all'}}" theme="tag" space-evenly="{{false}}" swipeable="{{false}}" split="{{false}}" bind:change="changeCollection">
-      <t-tab-panel value="all" label="全部食谱" />
-      <t-tab-panel value="favorites" label="我的收藏" />
-    </t-tabs>
-  </view>
-  <view class="cookbook-filters">
-    <t-collapse>
-      <t-collapse-panel value="filters" header="筛选与排序" header-right-content="{{filterSummary}}">
-        <t-dropdown-menu>
-          <t-dropdown-item options="{{categoryOptions}}" value="{{category}}" bind:change="chooseCategory" />
-          <t-dropdown-item options="{{textureOptions}}" value="{{texture}}" bind:change="changeTexture" />
-          <t-dropdown-item options="{{sortOptions}}" value="{{sort}}" bind:change="changeSort" />
-        </t-dropdown-menu>
-        <t-cell wx:if="{{hasFilters}}">
-          <t-button slot="right-icon" theme="primary" variant="text" bind:tap="resetFilters">清除筛选</t-button>
-        </t-cell>
-      </t-collapse-panel>
-    </t-collapse>
-  </view>
-  <view class="cookbook-list-heading">
-    <text class="cookbook-count">{{recipes.length}} 道{{onlyFavorites ? '收藏' : '食谱'}}</text>
-    <view class="cookbook-add"><t-button theme="primary" size="small" icon="add" shape="round" bind:tap="addRecipe">添加菜谱</t-button></view>
-  </view>
-  <view class="cookbook-list">
-    <recipe-card wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" bind:open="openRecipe" />
-  </view>
-  <t-empty wx:if="{{!recipes.length}}" description="{{hasFilters ? '没有符合条件的菜谱，可以清除筛选后再试' : '还没有菜谱，添加一道做过的辅食吧'}}">
-    <t-button wx:if="{{hasFilters}}" slot="action" theme="primary" bind:tap="resetFilters">清除筛选</t-button>
-    <t-button wx:else slot="action" theme="primary" bind:tap="addRecipe">添加菜谱</t-button>
-  </t-empty>
+  <view wx:if="{{socialEnabled && !publicationReady}}" class="cookbook-privacy-note"><text>{{publicationLoading ? '正在确认公开状态…' : publicationError || '公开状态尚未确认'}}</text><t-button wx:if="{{!publicationLoading}}" theme="primary" variant="text" size="small" bind:tap="refreshPublication">重试</t-button></view>
+  <view wx:if="{{advancedFilterCount}}" class="cookbook-search-summary"><text>{{search ? '「' + search + '」 · ' : ''}}{{recipes.length}} 道{{onlyFavorites ? '收藏' : '食谱'}}</text><t-button theme="primary" variant="text" size="small" bind:tap="clearAdvancedFilters">清除筛选</t-button></view>
+  <view class="cookbook-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" show-visibility="{{socialEnabled}}" bind:open="openRecipe" /></view>
+  <t-empty wx:if="{{!recipes.length && (visibility === 'all' || publicationReady)}}" description="{{hasFilters ? '没有符合条件的菜谱，可以清除筛选后再试' : '还没有菜谱，添加一道做过的辅食吧'}}"><t-button wx:if="{{hasFilters}}" slot="action" theme="primary" bind:tap="resetFilters">清除筛选</t-button><t-button wx:else slot="action" theme="primary" bind:tap="addRecipe">添加菜谱</t-button></t-empty>
+  <view wx:if="{{recipes.length}}" class="cookbook-add"><t-button theme="primary" variant="text" icon="add" shape="round" bind:tap="addRecipe">添加菜谱</t-button></view>
 </view>
-<bottom-navigation id="bottom-navigation" />
+<t-popup visible="{{filtersVisible}}" placement="bottom" close-btn bind:visible-change="filterVisibilityChange">
+  <view class="cookbook-filter-sheet">
+    <view class="cookbook-filter-title">搜索与筛选</view>
+    <scroll-view scroll-y class="cookbook-filter-scroll">
+      <view class="cookbook-search"><t-search value="{{search}}" bind:change="searchInput" placeholder="搜索菜谱或食材" shape="round" maxlength="60" /></view>
+      <view class="cookbook-filter-label">菜谱分类</view><view class="cookbook-filter-options"><button wx:for="{{categoryOptions}}" wx:key="value" class="cookbook-filter-option {{category === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="pickCategory">{{item.label}}</button></view>
+      <view class="cookbook-filter-label">口感</view><view class="cookbook-filter-options"><button wx:for="{{textureOptions}}" wx:key="value" class="cookbook-filter-option {{texture === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="pickTexture">{{item.label}}</button></view>
+      <view class="cookbook-filter-label">排序</view><view class="cookbook-filter-options"><button wx:for="{{sortOptions}}" wx:key="value" class="cookbook-filter-option {{sort === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="pickSort">{{item.label}}</button></view>
+    </scroll-view>
+    <view class="cookbook-filter-actions"><t-button theme="default" variant="outline" shape="round" bind:tap="clearAdvancedFilters">重置</t-button><t-button theme="primary" shape="round" block bind:tap="closeFilters">{{visibility !== 'all' && !publicationReady ? '完成筛选' : '查看 ' + recipes.length + ' 道食谱'}}</t-button></view>
+  </view>
+</t-popup>

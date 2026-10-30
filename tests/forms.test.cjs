@@ -50,6 +50,7 @@ function setup() {
       if (name === './selectors') return selectors;
       if (name === './categories') return require('../utils/categories');
       if (name === './sync-merge') return require('../utils/sync-merge');
+      if (name === './recipe-ages') return require('../utils/recipe-ages');
       throw new Error('Unexpected store dependency: ' + name);
     }
   });
@@ -65,6 +66,7 @@ function setup() {
       require(dependency) {
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../utils/selectors') return selectors;
+        if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/ui') return {
           back() {
             assert.equal(returnWarning, false, 'successful or confirmed navigation must disable the return warning');
@@ -97,6 +99,32 @@ function setup() {
 }
 
 const valueEvent = value => ({ detail: { value } });
+
+test('meal date arrows cross leap days, stop at date bounds and keep changes unsaved', () => {
+  const app = setup();
+  const page = app.open('record-editor', {id: firstRecipeId(app), date: '2024-03-01'});
+  const move = delta => page.moveDate({currentTarget: {dataset: {delta}}});
+  move(-1); assert.equal(page.data.date, '2024-02-29');
+  move(-1); assert.equal(page.data.date, '2024-02-28');
+  move(1); assert.equal(page.data.date, '2024-02-29');
+  assert.equal(app.calls.addLog, 0);
+  assert.equal(app.returnWarning(), true);
+  page.setData({date: selectors.today()}); move(1); assert.equal(page.data.date, selectors.today());
+  page.setData({date: page.data.minDate}); move(-1); assert.equal(page.data.date, page.data.minDate);
+  page.setData({date: '2024-02-28', saving: true}); move(1); assert.equal(page.data.date, '2024-02-28');
+});
+
+test('quick meal preference and portion choices do not persist until save is explicitly tapped', () => {
+  const app = setup();
+  const page = app.open('record-editor', {id: firstRecipeId(app)});
+  page.tapRating({currentTarget: {dataset: {value: 3}}});
+  page.tapPortion({currentTarget: {dataset: {value: 2}}});
+  assert.equal(page.data.rating, 3); assert.equal(page.data.portionIndex, 2);
+  assert.equal(app.calls.addLog, 0);
+  page.save();
+  assert.equal(app.calls.addLog, 1);
+  assert.equal(app.store.getState().logs[0].portion, '吃了约一半');
+});
 const fieldEvent = field => ({ currentTarget: { dataset: { field } } });
 function input(page, field, value) { page.input({ ...fieldEvent(field), ...valueEvent(value) }); }
 function fillRecipe(page) {

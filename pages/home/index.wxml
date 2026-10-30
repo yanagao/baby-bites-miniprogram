@@ -1,35 +1,34 @@
-<t-navbar z-index="100" title="小口袋" placeholder />
+<view class="home-navigation"><t-navbar z-index="100" title="小口袋" placeholder /></view>
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="page-shell home-page">
-  <view class="home-intro">
-    <view class="home-intro-copy"><view class="page-title"><view class="home-greeting">今天，{{nickname}}</view><view>吃点什么呀？</view></view><view class="intro-subtitle">让小口袋帮你选一选</view></view>
-    <image class="intro-mascot" src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
+  <view class="home-hero">
+    <view class="home-scenery" aria-hidden="true"><view class="home-cloud cloud-one" /><view class="home-cloud cloud-two" /><view class="home-sun" /><view class="home-hill hill-back" /><view class="home-hill hill-front" /><view class="scene-food scene-broccoli"><food-art name="西兰花" size="102" align-to-label /></view><view class="scene-food scene-carrot"><food-art name="胡萝卜" size="84" align-to-label /></view><view class="scene-food scene-tomato"><food-art name="番茄" size="92" align-to-label /></view></view>
+    <view class="home-intro"><view class="home-greeting brush">{{greeting}}，{{nickname}}今天吃什么？</view><view class="home-intro-copy">让每一餐都简单又营养～</view></view>
+    <view class="home-search"><t-search value="{{search}}" placeholder="搜索菜谱、食材" shape="round" action="搜索" maxlength="60" bind:change="search" bind:submit="submitSearch" bind:action-click="submitSearch" /></view>
   </view>
-  <scroll-view class="category-scroll" wx:if="{{recipeCount}}" scroll-x enhanced show-scrollbar="{{false}}" scroll-into-view="{{categoryScrollTarget}}" scroll-with-animation aria-label="菜谱分类，可左右滑动">
-    <view class="category-pills">
-      <button wx:for="{{categoryOptions}}" wx:key="value" id="category-{{index}}" class="category-pill {{category === item.value ? 'category-active' : ''}}" data-value="{{item.value}}" bindtap="tapCategory" aria-pressed="{{category === item.value}}">{{item.label}}</button>
+  <view class="home-features">
+    <button class="feature-card random-entry" bindtap="goRandom" aria-label="随机选餐，开始抽选">
+      <view class="feature-copy"><view class="feature-eyebrow">今天吃什么？</view><view class="feature-heading brush">随机选餐<t-icon name="chevron-right" size="38rpx" /></view><view class="feature-description">一键帮你抽一道，告别纠结</view></view>
+      <image class="feature-random-mascot" src="/assets/cute/random-bowl.png" mode="aspectFit" aria-hidden="true" />
+      <view class="feature-chips random-chips" aria-hidden="true"><view class="feature-chip"><t-icon name="calendar" size="26rpx" /><text>按月龄</text></view><view class="feature-chip"><t-icon name="view-module" size="26rpx" /><text>按分类</text></view><view class="feature-chip"><t-icon name="heart" size="26rpx" /><text>跳过不爱吃</text></view></view>
+      <view class="feature-cta random-cta"><text>开始抽选</text><view class="cta-arrow"><t-icon name="chevron-right" size="30rpx" /></view></view>
+    </button>
+    <button class="feature-card pantry-entry" bindtap="goIngredients" aria-label="按食材找菜，去找菜">
+      <view class="feature-copy"><view class="feature-heading brush">按食材找菜<t-icon name="chevron-right" size="36rpx" /></view><view class="feature-description">看看家里现有食材能做什么</view><view class="pantry-entry-hint">{{pantryCount ? '已选 ' + pantryCount + ' 种食材，继续找灵感' : '有什么食材，就从这里开始'}}</view></view>
+      <image class="feature-pantry-mascot" src="/assets/cute/pantry-bowl.png" mode="aspectFit" aria-hidden="true" />
+      <view class="feature-chips pantry-chips" aria-hidden="true"><view wx:for="{{pantryPreview}}" wx:key="*this" class="feature-chip"><food-art name="{{item}}" size="43" align-to-label /><text>{{item}}</text></view></view>
+      <view class="feature-cta pantry-cta"><text>去找菜</text><view class="cta-arrow"><t-icon name="chevron-right" size="30rpx" /></view></view>
+    </button>
+  </view>
+  <view class="recommendations-section">
+    <view class="section-heading"><view class="section-title">{{recommendationTitle}}</view><button class="section-more" bindtap="goRecipes" aria-label="查看全部食谱"><text>更多</text><t-icon name="chevron-right" size="28rpx" /></button></view>
+    <view wx:if="{{recommendations.length}}" class="recommendation-grid">
+      <button wx:for="{{recommendations}}" wx:key="id" class="recommendation-card" data-id="{{item.id}}" bindtap="openRecipe" aria-label="查看{{item.name}}的做法">
+        <view class="recommendation-cover"><image wx:if="{{item.displayPhoto}}" class="recommendation-photo" src="{{item.displayPhoto}}" mode="aspectFill" /><view wx:else class="recommendation-art"><food-art name="{{item.ingredients[0].name}}" size="150" /></view><view class="recommendation-favorite" data-id="{{item.id}}" data-owner="{{recommendationOwner}}" catchtap="toggleFavorite" aria-role="button" aria-label="{{item.favorite ? '取消收藏' : '收藏'}}{{item.name}}"><t-icon name="{{item.favorite ? 'heart-filled' : 'heart'}}" size="27rpx" /></view></view>
+        <view class="recommendation-name">{{item.name}}</view><view class="recommendation-meta">{{item.minutes}} 分钟 · {{item.texture}}</view><view wx:if="{{item.recentMealCount}}" class="recommendation-frequency">近30天做过 {{item.recentMealCount}} 次</view>
+      </button>
     </view>
-  </scroll-view>
-  <view class="skip-row" wx:if="{{recipeCount}}"><text>跳过最近不太喜欢的</text><t-switch size="small" value="{{skipDisliked}}" bind:change="skip" aria-label="跳过最近不太喜欢的菜" /></view>
-  <view class="inspiration-card">
-    <view class="inspiration-label brush">今天的灵感</view>
-    <block wx:if="{{result}}">
-      <image wx:if="{{result.displayPhoto}}" class="hero-photo" src="{{result.displayPhoto}}" mode="aspectFill" bindtap="detail" aria-label="查看{{result.name}}" />
-      <view wx:else class="hero-illustration" bindtap="detail"><food-art name="{{result.ingredients[0].name}}" size="230" /><text>试试这道拿手菜</text></view>
-      <view class="dish-info"><view class="dish-title brush">{{result.name}}</view><view class="dish-metadata"><view><t-icon name="time" size="28rpx" />{{result.minutes}} 分钟</view><view><t-icon name="rice" size="28rpx" />{{result.texture}}</view></view></view>
-      <view class="hero-actions"><t-button theme="primary" variant="outline" shape="round" block bind:tap="detail">看看做法</t-button><t-button theme="primary" shape="round" block icon="swap" disabled="{{candidateCount < 2}}" bind:tap="draw">{{candidateCount < 2 ? '当前范围只有这一道' : '再抽一道'}}</t-button></view>
-    </block>
-    <block wx:elif="{{candidateCount}}">
-      <view class="draw-ready"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" /><view class="ready-title brush">下一餐，交给小口袋</view><view class="ready-subtitle">从 {{candidateCount}} 道菜谱中随机选一道</view></view>
-      <view class="hero-actions"><t-button theme="primary" shape="round" size="large" block icon="swap" bind:tap="draw">随机抽一道</t-button></view>
-    </block>
-    <view wx:else class="draw-empty"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" /><view class="ready-title brush">{{recipeCount ? '换个范围试试吧' : '先装进一道拿手菜'}}</view><view class="ready-subtitle">{{recipeCount ? '当前筛选下没有可选菜谱' : '收好做过的辅食，下次让小口袋帮你选'}}</view><t-button theme="primary" shape="round" block bind:tap="{{recipeCount ? 'resetFilters' : 'addRecipe'}}">{{recipeCount ? '清除筛选' : '添加菜谱'}}</t-button></view>
+    <view wx:else class="home-empty panel"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="brush">先装进一道拿手菜</view><text>收好做过的辅食，下次让小口袋帮你选</text><t-button theme="primary" shape="round" block bind:tap="addRecipe">添加菜谱</t-button></view>
   </view>
-  <view class="pantry-banner" bindtap="goIngredients" aria-role="button" aria-label="按已有食材找菜">
-    <view class="pantry-banner-text"><view class="brush">家里有这些食材？</view><text>按现有食材找菜</text></view>
-    <view class="banner-foods"><food-art name="南瓜" size="72" align-to-label /><food-art name="鸡蛋" size="64" align-to-label /><food-art name="西兰花" size="76" align-to-label /></view><t-icon name="chevron-right" size="30rpx" />
-  </view>
-  <view wx:if="{{recentLogs.length}}" class="recent-section"><view class="section-title">最近吃过</view><view wx:for="{{recentLogs}}" wx:key="id" class="recent-meal" bindtap="openRecipe" data-id="{{item.recipeId}}"><text>{{item.recipeName}}</text><text class="muted">{{item.date}} · {{item.ratingName}}</text><t-icon name="chevron-right" size="26rpx" /></view></view>
-  <view class="home-tools"><button bindtap="goRecipes">我的 {{recipeCount}} 道食谱</button><button bindtap="openSettings"><t-icon name="setting" size="28rpx" /> 设置与备份</button></view>
 </view>
 <bottom-navigation id="bottom-navigation" />

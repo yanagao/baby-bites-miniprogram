@@ -1,0 +1,15 @@
+{
+  "navigationBarTitleText": "发现",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-search": "/miniprogram_npm/tdesign-miniprogram/search/search",
+    "t-tabs": "/miniprogram_npm/tdesign-miniprogram/tabs/tabs",
+    "t-tab-panel": "/miniprogram_npm/tdesign-miniprogram/tab-panel/tab-panel",
+    "bottom-navigation": "/components/bottom-navigation/index",
+    "recipe-tile": "/components/recipe-tile/index"
+  }
+}

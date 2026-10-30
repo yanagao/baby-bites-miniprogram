@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "食材匹配结果",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-notice-bar": "/miniprogram_npm/tdesign-miniprogram/notice-bar/notice-bar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "food-art": "/components/food-art/index"
+  }
+}
