@@ -1,5 +1,5 @@
 {
-  "navigationBarTitleText": "用餐记录",
+  "navigationBarTitleText": "",
   "usingComponents": {
     "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
     "t-popup": "/miniprogram_npm/tdesign-miniprogram/popup/popup",

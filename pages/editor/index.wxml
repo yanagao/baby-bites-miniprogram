@@ -1,32 +1,39 @@
 <t-navbar z-index="100" title="{{editing ? '编辑菜谱' : '添加菜谱'}}" placeholder left-arrow delta="{{0}}" bind:go-back="cancel" />
 <block wx:if="{{!missingRecipe}}">
-  <t-cell-group title="基本信息">
+  <view class="editor-page">
+  <t-cell-group class="editor-group" title="基本信息">
     <t-input label="菜谱名称" align="right" placeholder="例如：南瓜小米粥" value="{{form.name}}" maxlength="60" disabled="{{saving}}" status="{{nameError ? 'error' : 'default'}}" tips="{{nameError}}" data-field="name" bind:change="input" />
     <t-cell title="菜谱分类" note="{{categories[categoryIndex]}}" arrow hover="{{!saving}}" data-field="categoryIndex" bind:click="openPicker" />
     <t-input label="烹饪时间" align="right" suffix="分钟" type="number" value="{{form.minutes}}" disabled="{{saving}}" status="{{minutesError ? 'error' : 'default'}}" tips="{{minutesError}}" data-field="minutes" bind:change="input" />
     <t-cell title="食物口感" note="{{textures[textureIndex]}}" arrow hover="{{!saving}}" data-field="textureIndex" bind:click="openPicker" />
   </t-cell-group>
-  <t-cell-group title="食材与用量">
+  <t-cell-group class="editor-group" title="适用月龄（选填）">
+    <view class="editor-age-groups">
+      <view class="editor-age-options"><button wx:for="{{ageGroupOptions}}" wx:key="value" class="editor-age-chip {{item.selected ? 'is-selected' : ''}}" data-value="{{item.value}}" aria-pressed="{{item.selected}}" disabled="{{saving}}" bindtap="toggleAgeGroup">{{item.label}}</button></view>
+      <view class="editor-age-note">可多选，不选则适用于所有月龄。</view>
+    </view>
+  </t-cell-group>
+  <t-cell-group class="editor-group" title="食材与用量">
     <t-textarea value="{{form.ingredients}}" placeholder="每行一种，例如：南瓜 50克" maxlength="4000" autosize="{{true}}" disabled="{{saving}}" data-field="ingredients" bind:change="input" />
     <t-cell class="form-error" wx:if="{{ingredientsError}}" description="{{ingredientsError}}" />
   </t-cell-group>
-  <t-cell-group title="做法">
+  <t-cell-group class="editor-group" title="做法">
     <t-textarea value="{{form.steps}}" placeholder="每行一步，填写具体做法" maxlength="12000" autosize="{{true}}" disabled="{{saving}}" data-field="steps" bind:change="input" />
     <t-cell class="form-error" wx:if="{{stepsError}}" description="{{stepsError}}" />
   </t-cell-group>
-  <t-cell-group title="备注（选填）">
+  <t-cell-group class="editor-group" title="备注（选填）">
     <t-textarea value="{{form.note}}" placeholder="记录下次想调整的口感或做法" maxlength="2000" autosize="{{true}}" disabled="{{saving}}" data-field="note" bind:change="input" />
   </t-cell-group>
-  <t-cell-group title="成品照（选填）">
+  <t-cell-group class="editor-group" title="成品照（选填）">
     <t-cell title="照片" description="照片随菜谱同步至当前微信账号，单张最多 2 MB。">
-      <t-button slot="note" disabled="{{saving}}" bind:tap="choosePhoto">{{photo ? '更换照片' : '添加照片'}}</t-button>
+      <view slot="note" class="editor-photo-action"><t-button theme="primary" shape="round" icon="camera" disabled="{{saving}}" bind:tap="choosePhoto">{{photo ? '更换照片' : '添加照片'}}</t-button></view>
     </t-cell>
     <t-cell wx:if="{{photo}}" title="查看照片" image="{{photo}}" arrow hover bind:click="previewPhoto" />
     <t-cell wx:if="{{photo}}">
       <t-button slot="note" variant="text" disabled="{{saving}}" bind:tap="clearPhoto">移除照片</t-button>
     </t-cell>
   </t-cell-group>
-  <t-cell-group wx:if="{{!editing}}" title="用餐记录">
+  <t-cell-group class="editor-group" wx:if="{{!editing}}" title="用餐记录">
     <t-cell title="同时记录用餐" description="记下今天吃这道菜的喜好">
       <t-switch slot="note" value="{{recordMeal}}" disabled="{{saving}}" bind:change="toggleRecordMeal" aria-label="同时记录用餐" />
     </t-cell>
@@ -36,12 +43,11 @@
     </block>
   </t-cell-group>
   <t-cell class="form-error" wx:if="{{error}}" title="未能保存" description="{{error}}" />
-  <t-cell-group>
-    <t-cell>
-      <t-button slot="title" theme="default" disabled="{{saving}}" bind:tap="cancel">取消</t-button>
-      <t-button slot="note" theme="primary" loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存菜谱</t-button>
-    </t-cell>
-  </t-cell-group>
+  <view class="editor-actions">
+    <view class="editor-cancel"><t-button theme="default" shape="round" block disabled="{{saving}}" bind:tap="cancel">取消</t-button></view>
+    <view class="editor-save"><t-button theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存菜谱</t-button></view>
+  </view>
+  </view>
   <t-picker visible="{{pickerVisible}}" value="{{pickerValue}}" title="{{pickerTitle}}" bind:confirm="pick" bind:cancel="closePicker" bind:close="closePicker">
     <t-picker-item options="{{pickerOptions}}" />
   </t-picker>

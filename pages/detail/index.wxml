@@ -1,34 +1,39 @@
-<t-navbar z-index="100" title="食谱详情" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
-<view wx:if="{{recipe}}" class="page-shell detail-page">
+<t-navbar z-index="100" class="{{recipe ? 'detail-navbar' : ''}}" t-class-left="{{recipe ? 'detail-back' : ''}}" title="{{recipe ? '' : '食谱详情'}}" placeholder="{{!recipe}}" left-arrow delta="{{0}}" bind:go-back="back" />
+<view wx:if="{{recipe}}" class="detail-page">
+  <view class="detail-cover">
   <image wx:if="{{recipe.photoSrc}}" class="detail-photo" src="{{recipe.photoSrc}}" mode="aspectFill" bindtap="previewPhoto" aria-label="预览成品照片" />
   <image wx:elif="{{recipe.displayPhoto}}" class="detail-photo" src="{{recipe.displayPhoto}}" mode="aspectFill" />
   <view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
-  <view class="detail-heading"><view class="detail-title brush">{{recipe.name}}</view><t-button variant="text" theme="primary" size="small" icon="edit" bind:tap="edit">编辑</t-button></view>
-  <view class="detail-meta"><view><t-icon name="time" size="28rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="28rpx" />{{recipe.texture}}</view><text wx:if="{{recipe.isExample}}" class="example-label">示例菜谱</text></view>
-  <view class="ingredients-panel panel">
-    <view class="ingredients-heading"><text class="brush">需要准备</text><text>{{recipe.isExample ? '示例用量' : '食材与用量'}}</text></view>
-    <view wx:for="{{recipe.ingredients}}" wx:key="name" class="ingredient-row"><food-art name="{{item.name}}" size="60" /><text>{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view>
   </view>
-  <view class="steps-section"><view class="section-title">怎么做 <t-icon name="heart-filled" size="32rpx" color="#f68b98" /></view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
+  <view class="detail-body">
+  <view class="detail-heading"><view class="detail-title">{{recipe.name}}</view><button class="detail-title-favorite {{recipe.favorite ? 'is-favorite' : ''}}" bindtap="favorite" aria-label="{{recipe.favorite ? '取消收藏这道菜谱' : '收藏这道菜谱'}}"><t-icon name="{{recipe.favorite ? 'heart-filled' : 'heart'}}" size="36rpx" /></button></view>
+  <view class="detail-meta"><view wx:if="{{recipe.category}}" class="detail-category">{{recipe.category}}</view><view><t-icon name="time" size="22rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="22rpx" />{{recipe.texture}}</view><text wx:if="{{recipe.isExample}}" class="example-label">示例菜谱</text></view>
+  <view class="detail-top-actions">
+    <view class="detail-edit-action"><t-button theme="default" shape="round" size="small" block icon="edit" disabled="{{deleting || publicBusy}}" bind:tap="edit">编辑菜谱</t-button></view>
+    <view class="detail-delete-action"><t-button theme="danger" shape="round" size="small" block icon="delete" loading="{{deleting}}" disabled="{{deleting || publicBusy}}" bind:tap="remove">删除菜谱</t-button></view>
+  </view>
+  <view wx:if="{{socialEnabled}}" class="publication-panel">
+    <view class="publication-heading">
+      <view class="publication-status"><text class="publication-label">可见范围</text><view class="publication-state {{publicReady && publicInfo ? 'publication-state-public' : ''}}"><t-icon name="{{!publicReady ? 'help-circle' : publicInfo ? 'internet' : 'lock-on'}}" size="28rpx" /><text>{{!publicReady ? '公开状态待确认' : publicInfo ? '公开 · 主页可见' : '私密 · 仅自己可见'}}</text></view></view>
+      <t-button wx:if="{{!publicReady || !publicInfo || publicChanged}}" class="publication-primary" size="small" theme="primary" shape="round" icon="internet" disabled="{{publicLoading || publicBusy || deleting}}" bind:tap="requestPublish">{{publicReady && publicInfo ? '更新公开版本' : '公开菜谱'}}</t-button>
+      <t-button wx:else class="publication-primary" size="small" theme="default" variant="outline" shape="round" disabled="{{publicBusy || publicLoading || deleting}}" bind:tap="unpublish">设为私密</t-button>
+    </view>
+    <view wx:if="{{publicLoading || publicBusy}}" class="publication-loading"><t-loading size="28rpx" /><text>{{publicBusy ? '正在更新公开状态…' : '正在读取公开状态…'}}</text></view>
+    <view class="publication-hint">{{publicReady && publicInfo && publicChanged ? '有修改待公开更新。' : ''}}公开后分享菜名、照片、食材和做法，心得与用餐记录仍仅自己可见。</view>
+    <view wx:if="{{recipe.source}}" class="publication-source">来自 {{recipe.source.authorName}} 的公开菜谱</view>
+    <view wx:if="{{publicError}}" class="publication-error"><text>{{publicError}}</text><t-button size="small" theme="primary" variant="text" disabled="{{publicLoading || publicBusy || deleting}}" bind:tap="refreshPublication">重试</t-button></view>
+    <view wx:if="{{publicReady && publicInfo}}" class="publication-actions"><t-button size="small" theme="primary" variant="text" disabled="{{publicBusy || deleting}}" bind:tap="openPublicRecipe">查看公开版本</t-button><t-button wx:if="{{publicChanged}}" size="small" theme="default" variant="text" disabled="{{publicBusy || publicLoading || deleting}}" bind:tap="unpublish">设为私密</t-button></view>
+  </view>
+  <view class="ingredients-panel">
+    <view class="ingredients-heading"><text class="brush">需要准备</text><text>{{recipe.isExample ? '示例用量' : '食材与用量'}}</text></view>
+    <view wx:for="{{recipe.ingredients}}" wx:key="name" class="ingredient-row"><food-art name="{{item.name}}" size="48" /><text class="ingredient-name">{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view>
+  </view>
+  <view class="steps-section"><view class="section-title">怎么做</view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
   <view wx:if="{{recipe.note}}" class="detail-note"><view class="section-title">口袋小心得</view><text>{{recipe.note}}</text></view>
   <view class="last-meal" bindtap="openLastLog" aria-role="button" aria-label="{{lastLog ? '编辑上次用餐记录' : '记录这道菜的用餐喜好'}}"><t-icon name="{{recipe.rating === 3 ? 'heart-filled' : 'history'}}" size="34rpx" /><view class="last-meal-copy"><text>{{recipe.rating > 0 ? '上次：' + recipe.ratingName + (lastLog.portion ? ' · ' + lastLog.portion : '') : '还没记过，宝宝喜欢吗？'}}</text><text wx:if="{{recipe.rating > 0}}" class="last-meal-date">{{recipe.ratingDate}}</text></view><t-icon name="chevron-right" size="28rpx" /></view>
-  <view wx:if="{{socialEnabled}}" class="publication-panel panel">
-    <view class="publication-heading"><text>{{publicInfo ? '已公开到我的主页' : publicReady ? '仅自己可见' : '公开设置'}}</text><t-icon name="{{publicInfo ? 'internet' : 'lock-on'}}" size="30rpx" /></view>
-    <view class="publication-hint">{{publicInfo ? (publicChanged ? '本机有修改，更新公开版本后好友才能看到。' : '好友可以查看做法，并添加一份到自己的食谱。') : '公开后，好友可以从你的主页查看这道菜。'}}</view>
-    <view wx:if="{{recipe.source}}" class="publication-hint">来自 {{recipe.source.authorName}} 的公开菜谱</view>
-    <view wx:if="{{publicError}}" class="publication-error">{{publicError}}</view>
-    <view class="publication-actions">
-      <block wx:if="{{publicReady}}">
-        <t-button wx:if="{{publicInfo}}" size="small" variant="text" bind:tap="openPublicRecipe">查看公开版本</t-button>
-        <t-button wx:if="{{!publicInfo || publicChanged}}" size="small" theme="primary" variant="outline" loading="{{publicBusy}}" disabled="{{publicBusy}}" bind:tap="requestPublish">{{!profileExists ? '设置公开主页' : publicInfo ? '更新公开版本' : '公开这道菜'}}</t-button>
-        <t-button wx:if="{{publicInfo}}" size="small" variant="text" disabled="{{publicBusy}}" bind:tap="unpublish">设为私密</t-button>
-      </block>
-      <t-button wx:else size="small" variant="text" disabled="{{!publicError}}" bind:tap="refreshPublication">{{publicError ? '重试' : '读取中…'}}</t-button>
-    </view>
-  </view>
-  <view class="detail-manage"><t-button theme="danger" variant="text" size="small" loading="{{deleting}}" disabled="{{deleting || publicBusy}}" bind:tap="remove">删除菜谱</t-button></view>
   <view class="detail-bottom-space" />
-  <view class="detail-bottom"><view class="detail-favorite"><t-button theme="default" variant="outline" shape="round" block icon="{{recipe.favorite ? 'star-filled' : 'star'}}" bind:tap="favorite">{{recipe.favorite ? '已收藏' : '收藏'}}</t-button></view><view class="detail-record"><t-button theme="primary" shape="round" block icon="rice" bind:tap="record">记一餐</t-button></view></view>
+  </view>
+  <view class="detail-bottom"><view class="detail-favorite"><t-button theme="default" shape="round" block icon="{{recipe.favorite ? 'heart-filled' : 'heart'}}" bind:tap="favorite">{{recipe.favorite ? '已收藏' : '收藏'}}</t-button></view><view class="detail-record"><t-button theme="primary" shape="round" block icon="rice" bind:tap="record">记一餐</t-button></view></view>
 </view>
 <t-empty wx:else icon="file-unknown" description="没有找到这道菜谱，可能已经被删除。"><t-button slot="action" theme="primary" bind:tap="back">返回菜谱列表</t-button></t-empty>
 <t-dialog visible="{{deleteVisible}}" title="删除这道菜谱？" content="{{deleteContent}}" confirm-btn="{{deleteConfirmButton}}" cancel-btn="取消" bind:confirm="confirmDelete" bind:cancel="cancelDelete" />

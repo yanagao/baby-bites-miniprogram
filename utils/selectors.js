@@ -1,6 +1,8 @@
 'use strict';
 
 const {categories} = require('./categories');
+const {getCover} = require('./recipe-covers');
+const recipeAges = require('./recipe-ages');
 const textures = ['细腻泥糊', '软烂颗粒', '手指食物'];
 const ratings = {
   1: { name: '不太喜欢', icon: 'unhappy' },
@@ -55,8 +57,7 @@ function ratingOf(state, recipeId) {
   return latest ? latest.rating : 0;
 }
 
-const examplePhotos = {pumpkin: '/assets/food/pumpkin.jpg', noodle: '/assets/food/noodle.jpg', broccoli: '/assets/food/broccoli.jpg'};
-function displayPhoto(recipe) { return recipe.photo || (recipe.isExample && examplePhotos[recipe.imageKey]) || ''; }
+function displayPhoto(recipe) { return recipe.photo || recipe.photoURL || getCover(recipe); }
 
 function enrichWithRating(recipe, feedback) {
   const rating = feedback ? feedback.rating : 0;
@@ -68,6 +69,7 @@ function enrichWithRating(recipe, feedback) {
     ingredientText: recipe.ingredients.map(item => item.name).join(' · '),
     photoSrc: recipe.photo || '',
     displayPhoto: displayPhoto(recipe),
+    ageLabel: recipeAges.ageLabel(recipe),
     placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey)
       ? dishIcons[recipe.imageKey] : 'bowl'
   });
@@ -114,9 +116,21 @@ function matchRecipes(state, ingredients, completeOnly) {
     .sort((a, b) => b.foundCount / b.totalCount - a.foundCount / a.totalCount || b.foundCount - a.foundCount);
 }
 
+function randomCandidates(state, options) {
+  const opts = Object.assign({ category: '全部', skipDisliked: true }, options || {});
+  const selected = Array.isArray(opts.categories)
+    ? opts.categories.filter(value => value !== '全部' && categories.includes(value)) : null;
+  const selectedAges = Array.isArray(opts.ageGroups)
+    ? opts.ageGroups.filter(value => recipeAges.ageGroups.some(group => group.value === value)) : [];
+  return listRecipes(state, { category: selected ? '全部' : opts.category }).filter(recipe =>
+    (!selected || !selected.length || selected.includes(recipe.category)) &&
+    recipeAges.matchesAgeGroups(recipe, selectedAges) &&
+    (!opts.skipDisliked || recipe.rating !== 1));
+}
+
 function randomRecipe(state, options, rng) {
   const opts = Object.assign({ category: '全部', skipDisliked: true, lastId: null }, options || {});
-  const pool = listRecipes(state, { category: opts.category }).filter(recipe => !opts.skipDisliked || recipe.rating !== 1);
+  const pool = randomCandidates(state, opts);
   const candidates = pool.length > 1 ? pool.filter(recipe => recipe.id !== opts.lastId) : pool;
   if (!candidates.length) return null;
   const random = (rng || Math.random)();
@@ -151,6 +165,7 @@ function listLogs(state, filter) {
 }
 
 module.exports = {
+  ageGroups: recipeAges.ageGroups, recipeAgeGroups: recipeAges.recipeAgeGroups,
   categories, textures, ratings, pantryItems, today, normalizeIngredient,
-  ratingOf, enrichRecipe, listRecipes, matchRecipes, randomRecipe, stats, listLogs
+  ratingOf, enrichRecipe, listRecipes, matchRecipes, randomCandidates, randomRecipe, stats, listLogs
 };

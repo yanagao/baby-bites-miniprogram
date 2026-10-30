@@ -1,0 +1,82 @@
+<view class="profile-top">
+  <t-navbar class="profile-navbar" z-index="100" title="{{isTab ? '我的' : ''}}" placeholder left-arrow="{{!isTab}}" delta="{{0}}" bind:go-back="back" />
+  <view class="profile-cover" aria-hidden="true">
+    <view class="cover-sun"></view><view class="cover-hill cover-hill-left"></view><view class="cover-hill cover-hill-right"></view>
+    <view class="cover-food cover-food-one"><food-art name="西兰花" size="100" /></view><view class="cover-food cover-food-two"><food-art name="胡萝卜" size="80" /></view><view class="cover-food cover-food-three"><food-art name="番茄" size="90" /></view>
+  </view>
+  <view class="profile-toolbar"><button wx:if="{{socialEnabled}}" class="profile-tool profile-share-trigger" bindtap="requestShare" aria-label="分享主页" disabled="{{loading || !!error}}"><t-icon name="share" size="28rpx" /></button><button wx:if="{{isSelf}}" class="profile-tool" bindtap="openSettings" aria-label="设置与备份"><t-icon name="setting" size="28rpx" /></button></view>
+</view>
+<view wx:if="{{error}}" class="profile-state"><t-empty icon="info-circle" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty></view>
+<view wx:elif="{{loading && !isSelf}}" class="profile-state muted">正在打开口袋主页…</view>
+<view wx:else class="profile-sheet">
+  <view class="profile-identity">
+    <button class="profile-avatar-button" bindtap="edit" disabled="{{!isSelf || loading}}" aria-label="{{isSelf ? '编辑我的主页' : '用户头像'}}"><image class="profile-avatar" src="{{avatarPath}}" mode="aspectFit" /></button>
+    <view class="profile-name">{{profile && profile.name ? profile.name : isSelf ? '我的小口袋' : ''}}</view>
+    <button wx:if="{{isSelf && socialEnabled}}" class="profile-baby-age profile-baby-age-edit" bindtap="edit" disabled="{{loading || !profile}}" aria-label="设置宝宝生日">{{babyAgeLabel || '设置宝宝生日'}}<t-icon name="chevron-right" size="24rpx" /></button>
+    <view wx:elif="{{babyAgeLabel}}" class="profile-baby-age">{{babyAgeLabel}}</view>
+    <view wx:if="{{profile.bio}}" class="profile-bio muted">{{profile.bio}}</view>
+    <view wx:if="{{isSelf}}" class="profile-primary"><t-button class="profile-edit-trigger" theme="primary" shape="round" size="small" disabled="{{loading}}" bind:tap="edit">编辑资料</t-button></view>
+    <view wx:elif="{{!isSelf}}" class="profile-primary"><t-button theme="{{following ? 'default' : 'primary'}}" variant="{{following ? 'outline' : 'base'}}" shape="round" size="small" loading="{{followBusy}}" disabled="{{followBusy}}" bind:tap="toggleFollow">{{following ? (followedBy ? '互相关注' : '已关注') : (followedBy ? '回关' : '关注')}}</t-button></view>
+    <view wx:if="{{needsProfile}}" class="profile-setup-note"><text>保存主页资料，方便朋友认出你。</text><t-button theme="primary" variant="text" size="small" bind:tap="openMine">完善我的主页</t-button></view>
+  </view>
+  <view class="profile-stats">
+    <button class="profile-stat" data-value="recipes" bindtap="changeContentTab"><text class="profile-stat-number">{{isSelf ? recipeCount : publishedCount === null ? '—' : publishedCount}}</text><text>菜谱</text></button>
+    <button class="profile-stat" bindtap="openFollowers" disabled="{{!isSelf || !socialEnabled || loading || !!publicationError}}"><text class="profile-stat-number">{{loading || publicationError ? '—' : followerCount}}</text><text>粉丝</text></button>
+    <button class="profile-stat" bindtap="openFollowing" disabled="{{!isSelf || !socialEnabled || loading || !!publicationError}}"><text class="profile-stat-number">{{loading || publicationError ? '—' : followingCount}}</text><text>关注</text></button>
+  </view>
+  <view class="profile-content-tabs" aria-label="主页内容">
+    <button class="profile-content-tab {{contentTab === 'recipes' ? 'profile-content-tab-active' : ''}}" data-value="recipes" bindtap="changeContentTab" aria-selected="{{contentTab === 'recipes'}}">菜谱</button>
+    <button wx:if="{{isSelf}}" class="profile-content-tab {{contentTab === 'favorites' ? 'profile-content-tab-active' : ''}}" data-value="favorites" bindtap="changeContentTab" aria-selected="{{contentTab === 'favorites'}}">收藏</button>
+    <button wx:if="{{isSelf}}" class="profile-content-tab {{contentTab === 'records' ? 'profile-content-tab-active' : ''}}" data-value="records" bindtap="changeContentTab" aria-selected="{{contentTab === 'records'}}">记录</button>
+  </view>
+  <view wx:if="{{isSelf && contentTab === 'recipes'}}" class="profile-visibility-tabs" aria-label="菜谱公开状态"><button class="profile-filter {{visibility === 'all' ? 'profile-filter-active' : ''}}" data-value="all" bindtap="changeVisibility">全部</button><button wx:if="{{socialEnabled}}" class="profile-filter {{visibility === 'public' ? 'profile-filter-active' : ''}}" data-value="public" bindtap="changeVisibility">公开</button><button wx:if="{{socialEnabled}}" class="profile-filter {{visibility === 'private' ? 'profile-filter-active' : ''}}" data-value="private" bindtap="changeVisibility">私密</button></view>
+  <view wx:if="{{publicationError && isSelf}}" class="profile-status muted"><text>{{publicationError}}</text><button bindtap="reload">重试</button></view>
+  <view wx:if="{{contentTab !== 'records'}}" class="profile-recipe-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" show-visibility="{{isSelf && socialEnabled}}" bind:open="openRecipe" bind:photoerror="photoError" /></view>
+  <view wx:if="{{contentTab !== 'records' && !recipes.length}}" class="profile-empty"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view>{{loading ? '正在读取菜谱…' : contentTab === 'favorites' ? '还没有收藏的菜谱' : isSelf && visibility !== 'all' && !publicationReady ? '联网后查看菜谱公开状态' : isSelf && visibility === 'private' ? '还没有私密菜谱' : visibility === 'public' || !isSelf ? '还没有公开菜谱' : '收好你的第一道菜谱'}}</view><text wx:if="{{!loading}}" class="muted">{{contentTab === 'favorites' ? '在菜谱里点一下爱心，就会出现在这里。' : isSelf ? '只有你主动公开的菜谱，才会展示给朋友。' : 'TA 公开的新菜谱会展示在这里。'}}</text></view>
+  <view wx:if="{{isSelf && contentTab === 'records'}}" class="profile-records"><view class="profile-record-heading"><text class="muted">{{logCount}} 条用餐记录 · 仅自己可见</text><button bindtap="openRecords">查看日历 <t-icon name="chevron-right" size="24rpx" /></button></view><button wx:for="{{logs}}" wx:key="id" class="profile-log" data-id="{{item.id}}" bindtap="openLog"><image wx:if="{{item.displayPhoto}}" src="{{item.displayPhoto}}" mode="aspectFill" /><view wx:else class="profile-log-art"><t-icon name="rice" size="44rpx" /></view><view class="profile-log-copy"><text class="profile-log-name">{{item.recipeName}}</text><text class="profile-log-date">{{item.date}}</text><view class="profile-log-meta"><text>{{item.ratingName}}</text><text wx:if="{{item.portion}}"> · {{item.portion}}</text></view></view><t-icon name="chevron-right" size="28rpx" /></button><view wx:if="{{!logs.length}}" class="profile-empty">还没有用餐记录<text class="muted">记下宝宝每一餐的小喜好。</text></view></view>
+  <view wx:if="{{nextOffset !== null && !isSelf}}" class="profile-more"><t-button theme="primary" variant="text" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">加载更多</t-button></view>
+</view>
+<t-popup visible="{{editing && isSelf}}" placement="bottom" bind:visible-change="editVisibilityChange">
+  <view class="profile-edit">
+    <view class="profile-edit-heading"><text class="section-title">编辑资料</text><button bindtap="cancelEdit" disabled="{{saving}}" aria-label="关闭编辑"><t-icon name="close" size="34rpx" /></button></view>
+    <scroll-view class="profile-edit-scroll" scroll-y enhanced show-scrollbar="{{false}}">
+      <view class="profile-edit-fields">
+        <view wx:if="{{socialEnabled && !profile}}" class="profile-edit-offline muted">联网后可编辑生日与公开资料</view>
+        <view wx:if="{{socialEnabled}}" class="profile-field-card {{saving || !profile ? 'profile-field-disabled' : ''}}">
+          <t-input label="公开昵称" layout="vertical" borderless value="{{name}}" maxlength="20" disabled="{{saving || !profile}}" bind:change="changeName" placeholder="想让好友怎么称呼你" />
+        </view>
+        <view class="profile-field-card {{saving ? 'profile-field-disabled' : ''}}">
+          <t-input label="宝宝称呼" layout="vertical" borderless value="{{babyNickname}}" maxlength="20" disabled="{{saving}}" bind:change="changeBabyNickname" placeholder="用于首页问候，留空使用宝宝" />
+        </view>
+        <block wx:if="{{socialEnabled}}">
+          <view class="profile-field-card profile-birthday-card {{saving || !profile ? 'profile-field-disabled' : ''}}">
+            <picker class="profile-age-picker" mode="date" start="1900-01-01" end="{{birthDateToday}}" value="{{babyBirthDate || birthDateToday}}" disabled="{{saving || !profile}}" bindchange="changeBabyBirthDate"><view class="profile-age-field"><text class="profile-field-label">宝宝生日 · 选填</text><view class="profile-age-value {{!babyBirthDate ? 'muted' : ''}}"><text>{{babyBirthDate || '请选择生日'}}</text><t-icon name="chevron-right" size="30rpx" /></view></view></picker>
+            <view wx:if="{{profile}}" class="profile-birthday-meta"><text>{{birthdayAgeLabel ? '当前' + birthdayAgeLabel + '，月龄会自动更新。' : birthdayDirty ? '保存后不再展示月龄。' : babyAgeLabel ? '当前为手动月龄，填写生日后会自动计算。' : '选择生日后会自动计算月龄。'}}</text><t-button wx:if="{{babyBirthDate || (babyAgeLabel && !birthdayDirty)}}" theme="primary" variant="text" size="small" disabled="{{saving}}" bind:tap="clearBabyBirthDate" aria-label="清除生日和月龄">清除月龄信息</t-button></view>
+          </view>
+          <view class="profile-birthday-privacy">宝宝称呼和生日仅自己可见，月龄会展示在分享后的主页。</view>
+          <view class="profile-field-card {{saving || !profile ? 'profile-field-disabled' : ''}}">
+            <t-textarea label="一句介绍 · 选填" value="{{bio}}" maxlength="120" indicator disabled="{{saving || !profile}}" bind:change="changeBio" placeholder="分享你的小厨房日常" autosize fixed />
+          </view>
+          <view class="profile-edit-note muted">公开昵称和介绍审核通过后会展示在分享后的主页。收藏和用餐记录仅自己可见。</view>
+        </block>
+        <view wx:else class="profile-edit-note muted">宝宝称呼仅自己可见，用于首页问候。</view>
+      </view>
+    </scroll-view>
+    <view class="profile-edit-footer">
+      <view wx:if="{{profileSaveError || babyNicknameError}}" class="profile-edit-error" role="alert">{{profileSaveError || babyNicknameError}}</view>
+      <t-button theme="primary" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">{{saving ? (profileModerating ? '正在审核并保存…' : '正在保存…') : '保存资料'}}</t-button>
+    </view>
+  </view>
+</t-popup>
+<t-popup visible="{{shareVisible}}" placement="center" bind:visible-change="shareVisibilityChange">
+  <view class="profile-share">
+    <view class="profile-share-heading"><text>分享主页</text><button bindtap="closeShare" aria-label="关闭分享"><t-icon name="close" size="34rpx" /></button></view>
+    <scroll-view class="profile-share-scroll" scroll-y enhanced show-scrollbar="{{false}}">
+      <image wx:if="{{posterPath}}" src="{{posterPath}}" class="profile-share-image" mode="widthFix" show-menu-by-longpress bindtap="previewPoster" aria-label="长按识别或保存主页分享图" />
+      <view wx:else class="profile-share-placeholder"><image src="{{avatarPath}}" mode="aspectFit" /><view class="profile-share-name">{{profile.name}}</view><view class="muted">{{shareLoading ? '正在准备主页分享码…' : '分享我的口袋小厨房'}}</view></view>
+      <view wx:if="{{shareError}}" class="profile-share-note muted">{{shareError}}</view>
+    </scroll-view>
+    <view class="profile-share-actions"><t-button wx:if="{{posterPath}}" theme="primary" block disabled="{{savingPoster}}" loading="{{savingPoster}}" bind:tap="savePoster">保存分享图</t-button><t-button wx:elif="{{!shareLoading}}" theme="primary" block bind:tap="openShare">重新生成分享图</t-button><t-button theme="primary" variant="text" block open-type="share">发送给朋友</t-button><t-button wx:if="{{albumDenied}}" theme="primary" variant="text" size="small" bind:tap="albumSettings">设置相册权限</t-button></view>
+  </view>
+</t-popup>
+<canvas canvas-id="profile-share-canvas" class="profile-share-canvas" aria-hidden="true" />

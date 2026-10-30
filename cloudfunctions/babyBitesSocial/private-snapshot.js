@@ -3,6 +3,7 @@
 const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
 const CATEGORIES = ['早餐饼', '肉饼肉丸', '面包糕点', '粥饭主食', '蔬菜手抓', '蒸蛋豆腐', '汤羹炖菜'];
 const TEXTURES = ['细腻泥糊', '软烂颗粒', '手指食物'];
+const AGE_GROUPS = ['6-8', '9-11', '12-17', '18+'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const string = (value, max) => typeof value === 'string' && value.length <= max;
 const nonempty = (value, max) => string(value, max) && Boolean(value.trim()) && !/[\u0000-\u001f]/.test(value);
@@ -15,6 +16,13 @@ function reject(message, code = 'INVALID_SNAPSHOT') {
   const error = new Error(message);
   error.code = code;
   throw error;
+}
+
+function normalizeAgeGroups(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > AGE_GROUPS.length ||
+    !value.every(item => AGE_GROUPS.includes(item))) reject('请选择有效的适用月龄。');
+  return AGE_GROUPS.filter(item => value.includes(item));
 }
 
 function keys(value, allowed) {
@@ -58,7 +66,7 @@ function validateSnapshot(content, {env, owner, now = Date.now()}) {
   const recipeIds = new Set();
   data.recipes.forEach(recipe => {
     if (!keys(recipe, ['id', 'name', 'category', 'minutes', 'texture', 'ingredients', 'steps', 'note', 'photo',
-      'imageKey', 'favorite', 'isExample', 'createdAt', 'updatedAt', 'source']) ||
+      'imageKey', 'favorite', 'isExample', 'createdAt', 'updatedAt', 'source', 'ageGroups']) ||
       !nonempty(recipe.id, 100) || recipeIds.has(recipe.id) || !nonempty(recipe.name, 60) ||
       !CATEGORIES.includes(recipe.category) || !TEXTURES.includes(recipe.texture) ||
       !Number.isFinite(recipe.minutes) || recipe.minutes < 1 || recipe.minutes > 480 ||
@@ -77,6 +85,8 @@ function validateSnapshot(content, {env, owner, now = Date.now()}) {
     if (recipe.photo !== '' && !ownedFile(recipe.photo, env, owner, 'photos')) {
       reject('菜谱照片必须属于当前微信账号的云端照片。');
     }
+    const ageGroups = normalizeAgeGroups(recipe.ageGroups);
+    if (ageGroups !== undefined) recipe.ageGroups = ageGroups;
     recipeIds.add(recipe.id);
   });
   const logIds = new Set();
@@ -102,4 +112,4 @@ function validateSnapshot(content, {env, owner, now = Date.now()}) {
   return snapshot;
 }
 
-module.exports = {MAX_SNAPSHOT_BYTES, ownedFile, validateSnapshot, reject};
+module.exports = {MAX_SNAPSHOT_BYTES, ownedFile, validateSnapshot, normalizeAgeGroups, reject};

@@ -1,16 +1,28 @@
-<t-navbar z-index="100" title="公开食谱" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
-<view class="page-shell detail-page">
+<t-navbar z-index="100" class="{{recipe && !loading && !error ? 'detail-navbar' : ''}}" t-class-left="{{recipe && !loading && !error ? 'detail-back' : ''}}" title="{{recipe && !loading && !error ? '' : '公开食谱'}}" placeholder="{{!recipe || loading || error}}" left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="detail-page public-detail-page">
   <view wx:if="{{loading}}" class="empty-note">正在打开这道菜谱…</view>
   <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
   <block wx:elif="{{recipe}}">
-    <view class="public-author" bindtap="openAuthor" hover-class="public-pressed" aria-role="button" aria-label="{{'打开' + author.name + '的主页'}}"><t-icon name="user" size="34rpx" /><text>{{author.name}}的口袋食谱</text><t-icon name="chevron-right" size="28rpx" /></view>
-    <image wx:if="{{recipe.photoURL && !photoFailed}}" class="detail-photo" src="{{recipe.photoURL}}" mode="aspectFill" binderror="photoError" bindtap="previewPhoto" aria-label="预览成品照片" /><view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
-    <view class="detail-heading"><view class="detail-title brush">{{recipe.name}}</view></view>
-    <view class="detail-meta"><view><t-icon name="time" size="28rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="28rpx" />{{recipe.texture}}</view><text class="muted">{{recipe.category}}</text></view>
-    <view class="ingredients-panel panel"><view class="ingredients-heading"><text class="brush">需要准备</text><text>食材与用量</text></view><view wx:for="{{recipe.ingredients}}" wx:key="index" class="ingredient-row"><food-art name="{{item.name}}" size="60" /><text>{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view></view>
+    <view class="detail-cover">
+    <image wx:if="{{recipe.photoURL && !photoFailed}}" class="detail-photo" src="{{recipe.photoURL}}" mode="aspectFill" binderror="photoError" bindtap="previewPhoto" aria-label="预览成品照片" /><image wx:elif="{{recipe.displayPhoto && !photoFailed}}" class="detail-photo" src="{{recipe.displayPhoto}}" mode="aspectFill" binderror="photoError" aria-label="{{recipe.name + '成品示意图'}}" /><view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
+    </view>
+    <view class="detail-body">
+    <view class="detail-heading"><view class="detail-title">{{recipe.name}}</view><t-button theme="primary" variant="text" size="small" icon="share" open-type="share">分享</t-button></view>
+    <view class="detail-meta"><view><t-icon name="time" size="22rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="22rpx" />{{recipe.texture}}</view><view wx:if="{{recipe.category}}" class="detail-category">{{recipe.category}}</view></view>
+    <view class="public-author">
+      <view class="public-author-link" bindtap="openAuthor" hover-class="public-pressed" aria-role="button" aria-label="{{'打开' + author.name + '的主页'}}"><image class="public-author-avatar" src="{{author.avatar}}" mode="aspectFit" aria-hidden="true" /><view class="public-author-copy"><view class="public-author-name">{{author.name}}</view><view class="public-author-caption">{{followedBy && !authorIsSelf ? (following ? '你们已互相关注' : 'TA 已关注你') : '公开分享的口袋食谱'}}</view></view><t-icon name="chevron-right" size="24rpx" /></view>
+      <t-button wx:if="{{relationReady && !authorIsSelf}}" theme="{{following ? 'default' : 'primary'}}" variant="{{following ? 'outline' : 'base'}}" size="small" shape="round" loading="{{followBusy}}" disabled="{{followBusy}}" aria-label="{{following ? '取消关注作者' : followedBy ? '回关作者' : '关注作者'}}" bind:tap="toggleFollow">{{following ? (followedBy ? '互相关注' : '已关注') : (followedBy ? '回关' : '关注')}}</t-button>
+      <text wx:elif="{{relationLoading}}" class="public-relation-loading">读取关注状态…</text>
+      <t-button wx:elif="{{!relationReady && relationError}}" size="small" theme="primary" variant="text" bind:tap="refreshAuthorRelationship">重试关注状态</t-button>
+    </view>
+    <view wx:if="{{relationError}}" class="public-relation-error">{{relationError}}</view>
+    <view wx:if="{{needsProfile}}" class="public-profile-setup"><text>先保存主页资料，方便作者认出你并回关。</text><t-button theme="primary" variant="text" size="small" bind:tap="openProfileSetup">完善我的主页</t-button></view>
+    <view class="ingredients-panel"><view class="ingredients-heading"><text class="brush">需要准备</text><text>食材与用量</text></view><view wx:for="{{recipe.ingredients}}" wx:key="index" class="ingredient-row"><food-art name="{{item.name}}" size="48" /><text class="ingredient-name">{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view></view>
     <view class="steps-section"><view class="section-title">怎么做</view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
     <t-button wx:if="{{recipe.source}}" theme="primary" variant="text" size="small" bind:tap="openSource">参考自 {{recipe.source.authorName}}</t-button>
-    <view class="copy-explanation muted">{{importedId ? '已收进自己的食谱，可继续编辑、收藏或记录用餐。' : '添加后是你自己的副本，可以调整做法。原作者之后的修改不会改变这份副本。'}}</view>
-    <view class="detail-bottom-space" /><view class="detail-bottom public-bottom"><t-button theme="primary" shape="round" block icon="{{importedId ? 'check' : 'add'}}" loading="{{adding}}" disabled="{{adding}}" bind:tap="add">{{importedId ? '已添加 · 查看我的食谱' : '添加到我的食谱'}}</t-button></view>
+    <view class="copy-explanation muted">{{importedId ? '已保存为自己的私密菜谱，可继续编辑、收藏或记录用餐。' : '保存后成为你自己的私密菜谱，可以调整做法。原作者之后的修改或撤回不会影响这份副本。'}}</view>
+    <view class="detail-bottom-space" />
+    </view>
+    <view class="detail-bottom public-bottom"><t-button theme="primary" shape="round" block icon="{{importedId ? 'check' : 'add'}}" loading="{{adding}}" disabled="{{adding}}" bind:tap="add">{{importedId ? '已保存 · 查看我的食谱' : '保存到我的食谱'}}</t-button></view>
   </block>
 </view>

@@ -23,13 +23,13 @@ function setup(options = {}) {
   const storage = new Map([['baby-bites-v1', {version: 1, nickname: '宝宝私密称呼', profileUpdatedAt: 1,
     recipes: [original], logs: [{id: 'meal', recipeId: 'one', rating: 2, date: '2020-01-01', portion: '', note: '', createdAt: 1}]}]]);
   const hooks = {};
-  const calls = {mine: 0, publish: 0, unpublish: 0, deletes: 0, backs: 0, navigation: [], errors: [], toasts: [], updates: 0};
+  const calls = {mine: 0, publish: 0, unpublish: 0, deletes: 0, backs: 0, navigation: [], navigationOptions: [], errors: [], toasts: [], updates: 0};
   let published = Boolean(options.published);
   const wx = {
     getStorageSync(key) { return copy(storage.get(key)); },
     setStorageSync(key, value) { if (hooks.storage) hooks.storage(); storage.set(key, copy(value)); },
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
-    navigateTo(args) { calls.navigation.push(args.url); },
+    navigateTo(args) { calls.navigation.push(args.url); calls.navigationOptions.push(args); },
     showToast(args) { calls.toasts.push(args.title); },
     previewImage() { calls.navigation.push('preview'); }
   };
@@ -121,7 +121,7 @@ test('a missing public profile opens setup without publishing', async () => {
   page.requestPublish();
   assert.equal(app.calls.publish, 0);
   assert.equal(page.data.publishVisible, false);
-  assert.deepEqual(app.calls.navigation, ['/pages/profile/index']);
+  assert.deepEqual(app.calls.navigation, ['/pages/profile/index?edit=1&returnToRecipe=1']);
 });
 
 test('failed publication preserves private recipe and previous public status, then supports retry', async () => {
@@ -311,4 +311,64 @@ test('a stale publication load cannot overwrite a newer result or update an unlo
   page.onUnload();
   await page.refreshPublication();
   assert.equal(app.calls.mine, count);
+});
+
+test('the publish entry reads unknown status on demand and still requires explicit confirmation', async () => {
+  const app = setup(); app.page.refresh();
+  await app.page.requestPublish();
+  assert.equal(app.page.data.publicReady, true); assert.equal(app.page.data.publishVisible, true);
+  assert.equal(app.calls.publish, 0);
+});
+
+test('saving a nickname returns to a fresh confirmation; cancel and duplicate taps never publish', async () => {
+  const options = {profileExists: false}; const app = setup(options); const page = await app.open();
+  page.requestPublish(); page.requestPublish(); assert.equal(app.calls.navigation.length, 1);
+  options.profileExists = true; app.calls.navigationOptions[0].events.profileSaved();
+  await page.onShow(); assert.equal(page.data.publishVisible, true); assert.equal(app.calls.publish, 0);
+  page.cancelPublish(); await page.onShow(); assert.equal(page.data.publishVisible, false);
+  await page.confirmPublish(); assert.equal(app.calls.publish, 0);
+  page.requestPublish(); await page.confirmPublish(); assert.equal(app.calls.publish, 1);
+});
+
+test('leaving nickname setup without saving does not resume publishing even if profile state changed elsewhere', async () => {
+  const options = {profileExists: false}; const app = setup(options); const page = await app.open();
+  page.requestPublish(); options.profileExists = true;
+  await page.onShow(); assert.equal(page.data.publishVisible, false); assert.equal(app.calls.publish, 0);
+  app.calls.navigationOptions[0].events.profileSaved();
+  await page.onShow(); assert.equal(page.data.publishVisible, false, 'a late callback from the abandoned editor is ignored');
+});
+
+test('setup navigation failure clears its lock and allows retrying the visible publish entry', async () => {
+  const app = setup({profileExists:false}); const page = await app.open(); page.requestPublish();
+  app.calls.navigationOptions[0].fail(); page.requestPublish();
+  assert.equal(app.calls.navigation.length, 2); assert.equal(page.data.publishVisible, false); assert.equal(app.calls.publish, 0);
+});
+
+test('returning from setup offline retains a retryable state and cannot assume privacy or publish', async () => {
+  const options={profileExists:false}; const app=setup(options); const page=await app.open(); page.requestPublish();
+  options.profileExists=true; app.calls.navigationOptions[0].events.profileSaved();
+  app.hooks.mine=()=>{throw Error('暂时离线');}; await page.onShow();
+  assert.equal(page.data.publicReady,false); assert.equal(page.data.publicLoading,false); assert.equal(page.data.publishVisible,false);
+  assert.match(page.data.publicError,/离线/); assert.equal(app.calls.publish,0);
+  delete app.hooks.mine; await page.requestPublish(); assert.equal(page.data.publishVisible,true); assert.equal(app.calls.publish,0);
+});
+
+test('a removed recipe, account change or unload cannot resume publishing from an old editor', async () => {
+  for (const mode of ['deleted','account','unloaded']) {
+    const options={profileExists:false}; const app=setup(options); const page=await app.open(); page.requestPublish();
+    if(mode==='deleted') app.store.deleteRecipe('one');
+    if(mode==='account') app.store.bindAccount(OTHER);
+    if(mode==='unloaded') page.onUnload();
+    options.profileExists=true; app.calls.navigationOptions[0].events.profileSaved(); await page.onShow();
+    assert.equal(page.data.publishVisible,false,mode); assert.equal(app.calls.publish,0,mode);
+  }
+});
+
+test('invalid visibility responses stay unknown and a backend identity mismatch clears pending publication', async () => {
+  const app=setup(); const page=await app.open();
+  app.hooks.mine=()=>({profile:{exists:true},published:null}); await page.refreshPublication();
+  assert.equal(page.data.publicReady,false); assert.equal(page.data.publicLoading,false); assert.match(page.data.publicError,/确认公开状态/);
+  app.hooks.mine=()=>{throw Object.assign(Error('old owner'),{code:'ACCOUNT_CHANGED'});}; await page.refreshPublication();
+  assert.equal(page.data.recipe,null); assert.equal(page.data.publicInfo,null); assert.equal(page._accountLocked,true);
+  page.requestPublish(); assert.equal(app.calls.publish,0);
 });

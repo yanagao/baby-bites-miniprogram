@@ -1,0 +1,19 @@
+<t-navbar z-index="100" placeholder><view slot="left" class="discover-navbar-title">发现</view></t-navbar>
+<view class="page-shell discover-page">
+  <view class="discover-search"><t-search value="{{search}}" placeholder="搜索用户、菜谱、食材…" shape="round" maxlength="60" action="搜索" bind:change="searchInput" bind:submit="submitSearch" bind:action-click="submitSearch" bind:clear="clearSearch" /></view>
+  <view class="discover-toolbar"><view class="discover-tabs"><t-tabs value="{{tab}}" space-evenly="{{false}}" split="{{false}}" bind:change="changeTab"><t-tab-panel value="recommended" label="推荐" /><t-tab-panel value="latest" label="最新" /><t-tab-panel value="following" label="关注" /></t-tabs></view><button class="discover-people" bindtap="openFollowing" aria-label="查看关注的人"><t-icon name="usergroup" size="32rpx" /></button></view>
+  <view wx:if="{{query}}" class="discover-query muted">搜索「{{query}}」</view>
+  <view wx:if="{{loading}}" class="discover-state muted">{{tab === 'following' ? '正在看看好友的新菜…' : query ? '正在寻找好吃的…' : '正在打开大家的小厨房…'}}</view>
+  <t-empty wx:elif="{{error}}" icon="info-circle" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
+  <block wx:else>
+    <view wx:if="{{!recipes.length}}" class="panel discover-state">
+      <view class="discover-empty-title">{{nextCursor ? '这页暂无匹配菜谱' : tab === 'following' ? '还没有关注的菜谱' : query ? '没有找到这道味道' : '小厨房还在准备中'}}</view>
+      <view class="muted">{{nextCursor ? '可以继续加载，看看后面的菜谱。' : tab === 'following' ? '关注喜欢的作者，TA 公开的菜谱会出现在这里。' : query ? '换个菜名、食材或作者试试吧。' : '大家公开分享的菜谱会出现在这里。'}}</view>
+      <view wx:if="{{!nextCursor}}" class="discover-empty-action"><t-button wx:if="{{tab === 'following'}}" theme="primary" variant="outline" size="small" bind:tap="showLatest">去发现新菜谱</t-button><t-button wx:elif="{{query}}" theme="primary" variant="outline" size="small" bind:tap="clearSearch">看看全部公开菜谱</t-button></view>
+    </view>
+    <view class="discover-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" show-author bind:open="openRecipe" bind:author="openProfile" bind:photoerror="photoError" /></view>
+    <view wx:if="{{nextCursor}}" class="discover-more"><view wx:if="{{loadMoreError}}" class="discover-page-error">{{loadMoreError}}</view><t-button theme="primary" variant="text" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">{{loadMoreError ? '重试加载' : '加载更多'}}</t-button></view>
+    <view wx:elif="{{recipes.length}}" class="discover-end muted">{{tab === 'following' ? '已经看完关注的小厨房啦' : '已经看到这里的最后一道啦'}}</view>
+  </block>
+</view>
+<bottom-navigation id="bottom-navigation" />

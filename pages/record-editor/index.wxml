@@ -1,35 +1,18 @@
 <t-navbar z-index="100" title="{{editing ? '编辑用餐记录' : '记录用餐'}}" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
 <block wx:if="{{recipe}}">
-  <t-cell-group title="用餐信息">
-    <t-cell title="菜谱" note="{{recipe.name}}" />
-    <t-cell class="form-error" title="用餐日期" note="{{date}}" description="{{dateError}}" arrow hover="{{!saving && !deleting}}" bind:click="openDate" />
-  </t-cell-group>
-  <t-cell-group title="本次喜好">
-    <t-radio-group icon="dot" value="{{rating}}" options="{{ratingOptions}}" disabled="{{saving || deleting}}" bind:change="rate" />
-    <t-cell class="form-error" wx:if="{{ratingError}}" description="{{ratingError}}" />
-  </t-cell-group>
-  <t-collapse disabled="{{saving || deleting}}">
-    <t-collapse-panel value="portion" header="食量（选填）" header-right-content="{{portions[portionIndex]}}">
-      <t-radio-group icon="dot" value="{{portionIndex}}" options="{{portionOptions}}" disabled="{{saving || deleting}}" bind:change="portion" />
-    </t-collapse-panel>
-  </t-collapse>
-  <t-cell-group title="备注（选填）">
-    <t-textarea value="{{note}}" bind:change="note" maxlength="500" indicator autosize="{{true}}" disabled="{{saving || deleting}}" placeholder="记录宝宝这次的用餐情况" />
-  </t-cell-group>
-  <t-cell class="form-error" wx:if="{{error}}" title="未能保存" description="{{error}}" />
-  <t-cell-group>
-    <t-cell>
-      <t-button slot="title" theme="default" disabled="{{saving || deleting}}" bind:tap="back">取消</t-button>
-      <t-button slot="note" theme="primary" loading="{{saving}}" disabled="{{saving || deleting}}" bind:tap="save">保存记录</t-button>
-    </t-cell>
-  </t-cell-group>
-  <t-cell-group wx:if="{{editing}}" title="管理记录">
-    <t-cell><t-button slot="title" theme="danger" variant="text" block loading="{{deleting}}" disabled="{{saving || deleting}}" bind:tap="deleteLog">删除这条用餐记录</t-button></t-cell>
-  </t-cell-group>
+  <view class="page-shell meal-editor">
+    <view class="meal-date"><t-button theme="default" variant="text" icon="chevron-left" size="small" data-delta="-1" disabled="{{saving || deleting || date <= minDate}}" aria-label="前一天" bind:tap="moveDate" /><button class="meal-date-value" disabled="{{saving || deleting}}" bindtap="openDate">{{date}}<t-icon name="calendar" size="24rpx" /></button><t-button theme="default" variant="text" icon="chevron-right" size="small" data-delta="1" disabled="{{saving || deleting || date >= maxDate}}" aria-label="后一天" bind:tap="moveDate" /></view>
+    <view wx:if="{{dateError}}" class="meal-error">{{dateError}}</view>
+    <view class="meal-recipe"><image wx:if="{{recipe.displayPhoto}}" src="{{recipe.displayPhoto}}" mode="aspectFill" /><view wx:else class="meal-recipe-art"><food-art name="{{recipe.ingredients[0].name}}" size="90" /></view><view class="meal-recipe-copy"><view class="meal-recipe-name">{{recipe.name}}</view><view class="meal-recipe-meta"><text>{{recipe.minutes}} 分钟</text><text>{{recipe.texture}}</text></view></view></view>
+    <view class="meal-section"><view class="meal-section-title">宝宝吃得怎么样？</view><view class="meal-ratings" aria-role="radiogroup"><button wx:for="{{ratingOptions}}" wx:key="value" class="meal-rating {{rating === item.value ? 'meal-rating-selected' : ''}}" disabled="{{saving || deleting}}" data-value="{{item.value}}" bindtap="tapRating" aria-role="radio" aria-checked="{{rating === item.value}}"><view class="meal-rating-face"><t-icon name="{{item.icon}}" size="54rpx" /></view><text>{{item.label}}</text></button></view><view wx:if="{{ratingError}}" class="meal-error">{{ratingError}}</view></view>
+    <view class="meal-section"><view class="meal-section-title">吃了多少？<text class="meal-optional">选填</text></view><view class="meal-portions" aria-role="radiogroup"><button wx:for="{{portionOptions}}" wx:key="value" class="meal-portion {{portionIndex === item.value ? 'meal-portion-selected' : ''}}" disabled="{{saving || deleting}}" data-value="{{item.value}}" bindtap="tapPortion" aria-role="radio" aria-checked="{{portionIndex === item.value}}">{{item.label}}</button></view></view>
+    <view class="meal-section meal-note-section"><view class="meal-section-title">备注<text class="meal-optional">选填</text></view><view class="meal-note"><t-textarea value="{{note}}" bind:change="note" maxlength="500" indicator autosize="{{true}}" disabled="{{saving || deleting}}" placeholder="今天吃得怎样，还想再吃吗？" /></view></view>
+    <view wx:if="{{error}}" class="meal-error">未能保存：{{error}}</view>
+    <view wx:if="{{editing}}" class="meal-management"><t-collapse><t-collapse-panel value="manage" header="管理这条记录"><t-button theme="danger" variant="text" block loading="{{deleting}}" disabled="{{saving || deleting}}" bind:tap="deleteLog">删除这条用餐记录</t-button></t-collapse-panel></t-collapse></view>
+  </view>
+  <view class="meal-save"><t-button theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving || deleting}}" bind:tap="save">保存记录</t-button></view>
   <t-date-time-picker visible="{{dateVisible}}" value="{{date}}" start="{{minDate}}" end="{{maxDate}}" mode="date" format="YYYY-MM-DD" title="用餐日期" bind:confirm="changeDate" bind:cancel="closeDate" bind:close="closeDate" />
   <t-dialog visible="{{discardVisible}}" title="放弃修改？" content="本次修改尚未保存。" confirm-btn="{{ {content: '放弃修改', theme: 'danger'} }}" cancel-btn="继续编辑" bind:confirm="discard" bind:cancel="continueEditing" />
   <t-dialog visible="{{deleteVisible}}" title="删除这条用餐记录？" content="{{deleteContent}}" confirm-btn="{{deleteConfirmButton}}" cancel-btn="取消" bind:confirm="confirmDelete" bind:cancel="cancelDelete" />
 </block>
-<t-empty wx:else description="{{missingMessage}}">
-  <t-button slot="action" theme="primary" bind:tap="back">返回</t-button>
-</t-empty>
+<t-empty wx:else description="{{missingMessage}}"><t-button slot="action" theme="primary" bind:tap="back">返回</t-button></t-empty>

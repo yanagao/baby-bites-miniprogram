@@ -32,6 +32,14 @@
   "packOptions": {
     "ignore": [
       {
+        "value": "output",
+        "type": "folder"
+      },
+      {
+        "value": "assets/fonts/pocket-brush.js",
+        "type": "file"
+      },
+      {
         "value": "tests",
         "type": "folder"
       },

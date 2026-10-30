@@ -6,6 +6,7 @@
     "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
     "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
     "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-loading": "/miniprogram_npm/tdesign-miniprogram/loading/loading",
     "food-art": "/components/food-art/index"
   }
 }

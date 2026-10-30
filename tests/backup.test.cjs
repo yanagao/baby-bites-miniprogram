@@ -71,6 +71,32 @@ function settingsPage(app) {
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
+test('portable photo backup round-trips explicit ages and preserves missing metadata on legacy recipes', async () => {
+  const app = setup();
+  const recipe = app.store.getState().recipes[0];
+  app.files.set('wxfile://usr/age-photo.png', png);
+  app.store.saveRecipe({...recipe, ageGroups: ['18+', '9-11'], photo: 'wxfile://usr/age-photo.png'});
+  const exported = await app.backup.exportText();
+  const data = JSON.parse(exported);
+  assert.deepEqual(data.recipes.find(item => item.id === recipe.id).ageGroups, ['9-11', '18+']);
+  const legacy = data.recipes[1]; delete legacy.ageGroups;
+  const restored = setup({version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []});
+  await restored.backup.importText(JSON.stringify(data));
+  assert.deepEqual(restored.store.getRecipe(recipe.id).ageGroups, ['9-11', '18+']);
+  assert.deepEqual(restored.files.get(restored.store.getRecipe(recipe.id).photo), png);
+  assert.equal(Object.hasOwn(restored.store.getRecipe(legacy.id), 'ageGroups'), false);
+});
+
+test('invalid ages in an imported photo backup roll back the staged photo and preserve existing data', async () => {
+  const app = setup();
+  const before = app.store.getState(), data = imageBackup(app);
+  data.recipes[0].ageGroups = ['not-a-month-group'];
+  await assert.rejects(app.backup.importText(JSON.stringify(data)), /适用月龄/);
+  assert.deepEqual(app.store.getState(), before);
+  assert.equal(app.files.size, 0);
+  assert.equal(app.writes.length, 1); assert.deepEqual(app.removed, app.writes);
+});
+
 test('photo backup detects content type without an extension and restores on another device', async () => {
   const app = setup();
   const recipe = app.store.getState().recipes[0];

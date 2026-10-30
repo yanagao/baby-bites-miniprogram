@@ -56,6 +56,8 @@ function setup(options = {}) {
       if (name === './utils/cloud-sync') return cloudSync;
       if (name === './assets/fonts/pocket-brush') return {};
       if (name === './utils/tdesign-font') return {loadTDesignIcons: () => Promise.resolve('available')};
+      if (name === './utils/cover-loader') return {isReady: () => true, prepare: () => Promise.resolve(true), subscribe: () => () => {}};
+      if (name === './utils/recipe-covers') return require('../utils/recipe-covers');
       throw Error('Unexpected app require: ' + name);
     }
   });
@@ -70,6 +72,7 @@ function setup(options = {}) {
         if (dependency === '../../config/cloud') return {socialEnabled: true};
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};
         if (dependency === '../../utils/selectors') return selectors;
+        if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/tab-bar') return {syncTabBar() {}};
         if (dependency === '../../utils/backup') return backup;
         if (dependency === '../../utils/ui') return {error(error) { calls.errors.push(error.message); }, back() {}};
@@ -105,35 +108,47 @@ function setup(options = {}) {
     show(page) { currentPages = page ? [page] : []; }};
 }
 
-test('background sync preserves the unsaved nickname while refreshing settings counts and status', () => {
+test('background sync refreshes settings counts and warnings without replacing a backup draft', () => {
   const fixture = setup();
   const page = fixture.open('settings');
-  page.nickname({detail: {value: '正在输入的称呼'}});
+  page.inputBackup({detail: {value: '正在粘贴的备份内容'}});
+  assert.equal(page.data.counts.recipeCount, 2);
+  let warning = '有部分数据需要检查';
+  fixture.store.getWarning = () => warning;
   fixture.remoteUpdate(data => {
-    data.nickname = '另一台设备的称呼'; data.profileUpdatedAt = 10;
     data.recipes.push(recipe('remote'));
+    data.logs.push({id: 'remote-meal', recipeId: 'remote', rating: 3, date: '2026-10-29',
+      note: '同步的用餐记录', createdAt: 10, updatedAt: 10});
   });
   fixture.publish({state: 'synced', message: '已同步当前微信账号', lastSyncedAt: 1000});
-  assert.equal(page.data.nickname, '正在输入的称呼');
-  assert.equal(fixture.store.getState().nickname, '另一台设备的称呼');
-  assert.equal(page.data.counts.recipeCount, 3);
+  assert.equal(page.data.backupText, '正在粘贴的备份内容');
+  assert.deepEqual(page.data.counts, {recipeCount: 3, triedCount: 1, likedCount: 1, logCount: 1});
+  assert.equal(page.data.warning, warning);
   assert.equal(page.data.syncTitle, '已同步');
+  assert.equal(page.data.syncMessage, '已同步当前微信账号');
+  warning = '';
   page.onShow();
-  assert.equal(page.data.nickname, '正在输入的称呼');
-  page.saveNickname();
-  assert.equal(fixture.store.getState().nickname, '正在输入的称呼');
-  assert.equal(page._nicknameDirty, false);
+  assert.equal(page.data.warning, '');
+  assert.equal(page.data.backupText, '正在粘贴的备份内容');
+  assert.deepEqual(fixture.calls.toasts, []);
 });
 
-test('settings without a nickname draft follows cloud profile updates and unsubscribes on unload', () => {
+test('settings refreshes after store updates and unsubscribes from store and sync status on unload', () => {
   const fixture = setup();
+  const subscribe = fixture.store.subscribe;
+  let storeUnsubscribes = 0;
+  fixture.store.subscribe = listener => {
+    const unsubscribe = subscribe(listener);
+    return () => { storeUnsubscribes++; unsubscribe(); };
+  };
   const page = fixture.open('settings');
-  fixture.remoteUpdate(data => { data.nickname = '云端称呼'; data.profileUpdatedAt = 5; });
-  assert.equal(page.data.nickname, '云端称呼');
+  fixture.remoteUpdate(data => { data.recipes.push(recipe('remote')); });
+  assert.equal(page.data.counts.recipeCount, 3);
   page.onUnload();
+  assert.equal(storeUnsubscribes, 1);
   const updates = fixture.calls.updates.length;
   fixture.publish({state: 'syncing'});
-  fixture.remoteUpdate(data => { data.nickname = '更新后的称呼'; data.profileUpdatedAt = 6; });
+  fixture.remoteUpdate(data => { data.recipes.push(recipe('after-unload')); });
   assert.equal(fixture.calls.updates.length, updates);
   assert.equal(fixture.syncListeners.size, 0);
 });
@@ -184,17 +199,18 @@ test('visible recipe lists refresh after sync without losing search or filter se
   assert.deepEqual(fixture.calls.errors, []);
 });
 
-test('home refresh keeps the chosen dish and reflects synchronized nickname and recipe changes', () => {
+test('home refresh updates true recommendations and nickname without replacing the search draft', () => {
   const fixture = setup();
   const page = fixture.open('home');
-  const selected = page.data.result.id;
+  const selected = page.data.recommendations[0].id;
+  page.search({detail: {value: '南瓜'}});
   fixture.remoteUpdate(data => {
     data.nickname = '小麦'; data.profileUpdatedAt = 10;
     const chosen = data.recipes.find(item => item.id === selected);
     chosen.name = '更新后的做法'; chosen.updatedAt = 10;
   });
-  assert.equal(page.data.result.id, selected);
-  assert.equal(page.data.result.name, '更新后的做法');
+  assert.equal(page.data.recommendations.find(item => item.id === selected).name, '更新后的做法');
+  assert.equal(page.data.search, '南瓜');
   assert.equal(page.data.nickname, '小麦');
   assert.deepEqual(fixture.calls.errors, []);
 });
@@ -244,31 +260,42 @@ function fillNewRecipe(page) {
   }
 }
 
-test('a nickname draft from account A cannot be saved into account B', () => {
+test('a settings backup action opened by account A cannot export after switching to account B', async () => {
   const fixture = setup();
   const page = fixture.open('settings');
-  page.nickname({detail: {value: '账号 A 的草稿'}});
+  fixture.backup.exportText = async () => { assert.fail('another account backup must not be prepared'); };
+  fixture.wx.setClipboardData = () => { assert.fail('another account backup must not reach the clipboard'); };
   fixture.store.bindAccount(OTHER);
   const before = copy(fixture.store.getState());
-  page.saveNickname();
+  await page.copyBackup();
   assert.deepEqual(copy(fixture.store.getState()), before);
-  assert.match(fixture.calls.errors.at(-1), /账号已切换.*重新打开/);
-  assert.equal(page.data.nickname, '账号 A 的草稿');
-  assert.equal(page._nicknameDirty, true);
+  assert.match(page.data.error, /账号已切换.*重新打开/);
+  assert.equal(page.data.busy, false);
 });
 
-test('first null-to-A binding permits a nickname draft, but a later A-to-B switch is still locked', () => {
+test('first account binding permits backup export but a later account switch is still locked', async () => {
   const fixture = setup({unbound: true});
   const page = fixture.open('settings');
-  page.nickname({detail: {value: '首次绑定前输入'}});
+  let exports = 0;
+  const clipboard = [];
+  fixture.backup.exportText = async () => { exports++; return fixture.store.exportBackup(); };
+  fixture.wx.setClipboardData = options => { clipboard.push(options.data); options.success({}); };
   fixture.store.bindAccount(OWNER);
-  page.saveNickname();
-  assert.equal(fixture.store.getState().nickname, '首次绑定前输入');
-  page.nickname({detail: {value: '再次输入'}});
+  const firstState = copy(fixture.store.getState());
+  await page.copyBackup();
+  assert.equal(exports, 1);
+  assert.equal(clipboard.length, 1);
+  assert.deepEqual(JSON.parse(clipboard[0]), JSON.parse(fixture.store.exportBackup()));
+  assert.deepEqual(copy(fixture.store.getState()), firstState);
+  assert.equal(page.data.error, '');
   fixture.store.bindAccount(OTHER);
-  page.saveNickname();
-  assert.equal(fixture.store.getState().nickname, '宝宝');
-  assert.match(fixture.calls.errors.at(-1), /账号已切换/);
+  const otherState = copy(fixture.store.getState());
+  await page.copyBackup();
+  assert.equal(exports, 1);
+  assert.equal(clipboard.length, 1);
+  assert.deepEqual(copy(fixture.store.getState()), otherState);
+  assert.match(page.data.error, /账号已切换/);
+  assert.equal(page.data.busy, false);
 });
 
 test('new and existing recipe drafts cannot write after account A switches to B', async () => {

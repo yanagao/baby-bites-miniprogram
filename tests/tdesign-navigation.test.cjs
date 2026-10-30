@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
+const {evaluatePage} = require('./page-runtime.cjs');
 
 // WeChat caches each tab page and its own in-page navigation component.
 // Deliberately rely on Page.onShow, not component pageLifetimes.show forwarding.
@@ -11,10 +12,11 @@ function navigationHarness() {
   let active;
   let component;
   const requests = [];
+  const editorRequests = [];
   const pages = {};
   const common = {
     getCurrentPages: () => active ? [active] : [],
-    wx: {nextTick: callback => callback(), switchTab: options => requests.push(options)}
+    wx: {nextTick: callback => callback(), switchTab: options => requests.push(options), navigateTo: options => editorRequests.push(options)}
   };
   let helpers;
   const loadHelpers = () => {
@@ -29,13 +31,13 @@ function navigationHarness() {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'components/bottom-navigation/index.js'), 'utf8'), {
     ...common, require: requireModule, Component: value => { component = value; }
   });
-  for (const name of ['home', 'recipes', 'ingredients', 'records']) {
+  for (const name of ['home', 'discover', 'mine', 'records']) {
     let definition;
-    vm.runInNewContext(fs.readFileSync(path.join(root, `pages/${name}/index.js`), 'utf8'), {
-      ...common, require: requireModule, Page: value => { definition = value; }
+    evaluatePage(name, {
+      ...common, tabBar: loadHelpers(), require: requireModule, Page: value => { definition = value; }
     });
     const page = {
-      ...definition, route: `pages/${name}/index`, refresh() {},
+      ...definition, route: `pages/${name}/index`, refresh() {}, load() {},
       selectComponent(selector) {
         assert.equal(selector, '#bottom-navigation');
         return this.tab;
@@ -58,7 +60,7 @@ function navigationHarness() {
   }
   function tap(name) { active.tab.change({detail: {value: `/pages/${name}/index`}}); }
   function finish(index, name) { activate(name); requests[index].success(); }
-  return {pages, requests, activate, tap, finish};
+  return {pages, requests, editorRequests, activate, tap, finish};
 }
 
 test('navigation placeholder is rendered after tab-page content, outside the native tab-bar host', () => {
@@ -82,22 +84,22 @@ test('navigation placeholder is rendered after tab-page content, outside the nat
 test('cached tab pages retain their own highlight when switching away and returning', () => {
   const h = navigationHarness();
   const home = h.activate('home');
-  h.tap('recipes');
-  h.finish(0, 'recipes');
+  h.tap('discover');
+  h.finish(0, 'discover');
   assert.equal(home.data.value, '/pages/home/index', 'the hidden source bar must not adopt the destination');
-  assert.equal(h.pages.recipes.tab.data.value, '/pages/recipes/index');
+  assert.equal(h.pages.discover.tab.data.value, '/pages/discover/index');
   h.tap('home');
   h.finish(1, 'home');
   assert.equal(home.data.value, '/pages/home/index');
-  h.tap('recipes');
+  h.tap('discover');
   assert.equal(h.requests.length, 3, 'returning to a cached page must not swallow the next tap');
-  h.finish(2, 'recipes');
-  assert.equal(h.pages.recipes.tab.data.value, '/pages/recipes/index');
+  h.finish(2, 'discover');
+  assert.equal(h.pages.discover.tab.data.value, '/pages/discover/index');
 });
 
 test('every tab synchronizes on page show and when its bar becomes ready', () => {
   const h = navigationHarness();
-  for (const name of ['home', 'recipes', 'ingredients', 'records']) {
+  for (const name of ['home', 'discover', 'mine', 'records']) {
     const tab = h.activate(name);
     assert.equal(tab.data.value, `/pages/${name}/index`);
     tab.data.value = '/pages/not-the-visible-page/index';
@@ -110,13 +112,13 @@ test('every tab synchronizes on page show and when its bar becomes ready', () =>
 test('tap decisions use the displayed page even if the bar state is stale', () => {
   const h = navigationHarness();
   const home = h.activate('home');
-  home.data.value = '/pages/recipes/index';
-  h.tap('recipes');
+  home.data.value = '/pages/discover/index';
+  h.tap('discover');
   assert.equal(h.requests.length, 1);
-  assert.equal(h.requests[0].url, '/pages/recipes/index');
+  assert.equal(h.requests[0].url, '/pages/discover/index');
   h.requests[0].fail();
   assert.equal(home.data.value, '/pages/home/index');
-  home.data.value = '/pages/recipes/index';
+  home.data.value = '/pages/discover/index';
   h.tap('home');
   assert.equal(h.requests.length, 1, 'tapping the actual current page must not navigate again');
   assert.equal(home.data.value, '/pages/home/index');
@@ -127,24 +129,38 @@ test('tap decisions use the displayed page even if the bar state is stale', () =
 test('late navigation callbacks cannot overwrite the visible tab with an older destination', () => {
   const h = navigationHarness();
   h.activate('home');
-  h.tap('recipes');
-  h.activate('recipes');
-  h.tap('ingredients');
-  h.finish(1, 'ingredients');
+  h.tap('discover');
+  h.activate('discover');
+  h.tap('mine');
+  h.finish(1, 'mine');
   h.requests[0].success();
-  assert.equal(h.pages.ingredients.tab.data.value, '/pages/ingredients/index');
+  assert.equal(h.pages.mine.tab.data.value, '/pages/mine/index');
   assert.equal(h.pages.home.tab.data.value, '/pages/home/index');
-  assert.equal(h.pages.recipes.tab.data.value, '/pages/recipes/index');
+  assert.equal(h.pages.discover.tab.data.value, '/pages/discover/index');
 });
 
 test('a failed switch preserves the displayed tab and allows retrying', () => {
   const h = navigationHarness();
   const tab = h.activate('records');
-  h.tap('ingredients');
+  h.tap('mine');
   h.requests[0].fail();
   assert.equal(tab.data.value, '/pages/records/index');
-  h.tap('ingredients');
+  h.tap('mine');
   assert.equal(h.requests.length, 2);
-  h.finish(1, 'ingredients');
-  assert.equal(h.pages.ingredients.tab.data.value, '/pages/ingredients/index');
+  h.finish(1, 'mine');
+  assert.equal(h.pages.mine.tab.data.value, '/pages/mine/index');
+});
+
+test('center add action opens a form once and preserves the current tab highlight', () => {
+  const h = navigationHarness();
+  const mine = h.activate('mine');
+  mine.change({detail: {value: 'add'}});
+  mine.change({detail: {value: 'add'}});
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.editorRequests.length, 1);
+  assert.equal(h.editorRequests[0].url, '/pages/editor/index');
+  assert.equal(mine.data.value, '/pages/mine/index');
+  h.editorRequests[0].complete();
+  mine.change({detail: {value: 'add'}});
+  assert.equal(h.editorRequests.length, 2);
 });

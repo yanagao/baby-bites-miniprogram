@@ -1,0 +1,19 @@
+:host {display:block;min-width:0;}
+.recipe-tile {min-width:0;padding-bottom:8rpx;color:#345158;}
+.recipe-tile-open {min-width:0;}
+.recipe-tile-image {height:250rpx;position:relative;overflow:hidden;border-radius:23rpx;background:#eff8f8;}
+.recipe-tile-photo {display:block;width:100%;height:100%;}
+.recipe-tile-art {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8rpx;width:100%;height:100%;background:#eff8f8;}
+.recipe-tile-art>text {font-size:var(--font-caption);color:#8b9fa4;}
+.recipe-tile-name {font-size:var(--font-card-title);font-weight:600;line-height:1.45;margin:12rpx 3rpx 5rpx;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.recipe-tile-meta {margin:0 3rpx;font-size:var(--font-caption);color:#90a1a5;line-height:1.6;overflow-wrap:anywhere;}
+.recipe-tile-badge,.recipe-tile-category {position:absolute;right:10rpx;top:10rpx;display:flex;align-items:center;gap:5rpx;padding:4rpx 10rpx;border-radius:12rpx;font-size:var(--font-caption);line-height:1.4;background:rgba(255,255,255,.94);color:#5d8590;}
+.recipe-tile-badge.public {background:#fff1b8;color:#345158;}
+.recipe-tile-badge.private {background:#55bba4;color:#345158;}
+.recipe-tile-favorite {position:absolute;right:10rpx;bottom:10rpx;width:36rpx;height:36rpx;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.96);color:#f28b70;}
+.recipe-tile-note {margin:4rpx 3rpx 0;font-size:var(--font-caption);line-height:1.5;color:#90a1a5;}
+.recipe-tile-author {display:flex;align-items:center;gap:8rpx;margin:11rpx 3rpx 0;font-size:var(--font-caption);color:#82969a;min-height:48rpx;}
+.recipe-tile-avatar {width:48rpx;height:48rpx;flex:none;display:flex;align-items:center;justify-content:center;background:#eff8f8;border-radius:50%;overflow:hidden;}
+.recipe-tile-avatar-image {display:block;width:40rpx;height:40rpx;}
+.recipe-tile-author>text {min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.recipe-tile-pressed {opacity:.72;}

@@ -4,7 +4,9 @@ This is the exact version referenced by tdesign-miniprogram 1.17.0 icon.wxss.
 License: MIT, Tencent. See LICENSE in this directory.
 SHA-256: 377024275d01176d32461000713af752fbefb0d2520c49b0aeda82a3a3150b54
 
-The original font is loaded through wx.loadFontFace in app.js. No TDesign
+The original font module is in recipe-media/fonts/tdesign-icons-0.4.5.js.
+utils/tdesign-font.js loads it via require.async and then wx.loadFontFace;
+app.js starts preparation and retries failures on foreground return. No TDesign
 styles, font glyphs, size, color, or component source files are modified.
 
 Official WeChat API source:

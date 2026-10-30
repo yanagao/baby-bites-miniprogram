@@ -1,7 +1,6 @@
 const store = require('../../utils/store');
 const backup = require('../../utils/backup');
 const {stats} = require('../../utils/selectors');
-const ui = require('../../utils/ui');
 const cloudSync = require('../../utils/cloud-sync');
 
 const syncTitles = {unconfigured: '云同步未启用', syncing: '正在同步', synced: '已同步', pending: '等待同步', error: '同步未完成'};
@@ -36,7 +35,7 @@ function exportError(error) {
 
 Page({
   data: {
-    nickname: '宝宝', counts: {}, warning: '', backupText: '', showPaste: false, busy: false, error: '',
+    counts: {}, warning: '', backupText: '', showPaste: false, busy: false, error: '',
     syncState: 'pending', syncTitle: '等待同步', syncMessage: '', syncTime: '', storageDescription: '',
     importVisible: false, importConfirmButton: {content: '合并导入', theme: 'primary'},
     exportVisible: false, exportDescription: '', exportConfirmButton: {content: '分享备份文件', theme: 'primary'}
@@ -68,17 +67,9 @@ Page({
   },
   refresh() {
     const state = store.getState();
-    const next = {counts: stats(state), warning: store.getWarning()};
-    if (!this._nicknameDirty) next.nickname = state.nickname || '宝宝';
-    this.setData(next);
+    this.setData({counts: stats(state), warning: store.getWarning()});
   },
-  nickname(event) { if (!this.data.busy) { this._nicknameDirty = true; this.setData({nickname: event.detail.value}); } },
   syncNow() { return cloudSync.syncNow(); },
-  saveNickname() {
-    if (this.data.busy) return;
-    try { this.assertDraftAccount(); store.setNickname(this.data.nickname.trim() || '宝宝'); this._nicknameDirty = false; this.refresh(); wx.showToast({title: '已保存', icon: 'success'}); }
-    catch (error) { ui.error(error); }
-  },
   togglePaste() { if (!this.data.busy) this.setData({showPaste: !this.data.showPaste, error: ''}); },
   inputBackup(event) { if (!this.data.busy) this.setData({backupText: event.detail.value, error: ''}); },
   async exportBackup() {

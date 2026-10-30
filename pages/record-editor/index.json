@@ -1,11 +1,10 @@
 {
   "navigationBarTitleText": "记录用餐",
   "usingComponents": {
-    "t-radio-group": "/miniprogram_npm/tdesign-miniprogram/radio-group/radio-group",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "food-art": "/components/food-art/index",
     "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-cell": "/miniprogram_npm/tdesign-miniprogram/cell/cell",
-    "t-cell-group": "/miniprogram_npm/tdesign-miniprogram/cell-group/cell-group",
     "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
     "t-date-time-picker": "/miniprogram_npm/tdesign-miniprogram/date-time-picker/date-time-picker",
     "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",

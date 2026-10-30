@@ -1,5 +1,7 @@
 # Pocket Brush title font
 
+Archived since 2026-10-29: all current UI text uses the system sans-serif stack. `app.js` no longer loads this font. The source module now lives outside the mini-program project at workspace `output/cute-assets-original/pocket-brush.js`; its license and rebuilding notes remain here. `project.config.json` also excludes the old asset path to prevent accidentally packaging it again.
+
 `pocket-brush.js` exports `family: 'PocketBrush'`, `base64`, and a complete `dataUrl` for the subset WOFF. It is intended for short illustrated headings and recipe names. Ordinary text and any unsupported user-entered characters should retain a system-font fallback.
 
 Example source for `wx.loadFontFace`: `'url("' + font.dataUrl + '")'`. This asset file does not itself load or apply the font.

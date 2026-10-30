@@ -1,4 +1,4 @@
-<t-navbar z-index="100" title="用餐记录" placeholder />
+<t-navbar z-index="100" title="" placeholder />
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="page-shell records-page">
   <view class="journal-heading">

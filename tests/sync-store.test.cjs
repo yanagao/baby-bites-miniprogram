@@ -42,6 +42,25 @@ function oneRecipe(id, updatedAt, name = id) {
 function empty() { return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []}; }
 function dataWith(recipes) { return Object.assign(empty(), {recipes}); }
 
+test('recipe age metadata survives sync merge, account restore and explicit clearing without filling legacy rows', () => {
+  const legacy = oneRecipe('legacy-age', 1), tagged = {...oneRecipe('tagged-age', 2), ageGroups: ['9-11', '18+']};
+  delete legacy.ageGroups;
+  const incoming = snapshot(dataWith([legacy, tagged]));
+  const app = setup(); app.store.bindAccount(A);
+  const info = app.store.getSyncInfo();
+  app.store.applySyncedSnapshot(incoming, {owner: A, sequence: info.sequence, revision: 1});
+  assert.deepEqual(app.store.getRecipe(tagged.id).ageGroups, ['9-11', '18+']);
+  assert.equal(Object.hasOwn(app.store.getRecipe(legacy.id), 'ageGroups'), false);
+  assert.deepEqual(app.reload().getRecipe(tagged.id).ageGroups, ['9-11', '18+']);
+  const cleared = snapshot(dataWith([{...tagged, ageGroups: [], updatedAt: 3}]));
+  const merged = mergeSnapshots(incoming, cleared);
+  assert.deepEqual(merged.data.recipes.find(item => item.id === tagged.id).ageGroups, []);
+  assert.equal(Object.hasOwn(merged.data.recipes.find(item => item.id === legacy.id), 'ageGroups'), false);
+  assert.deepEqual(mergeSnapshots(cleared, incoming), merged);
+  const fresh = setup(); fresh.store.bindAccount(B);
+  assert.equal(fresh.store.getRecipe(tagged.id), null);
+});
+
 test('new-device examples are not included in upload and legacy migration preserves identities and dates', () => {
   const original = baseline();
   const fresh = setup();

@@ -1,0 +1,16 @@
+<view wx:if="{{recipe}}" class="recipe-tile">
+  <view class="recipe-tile-open" bindtap="open" hover-class="recipe-tile-pressed" aria-role="button" aria-label="{{'查看' + recipe.name + '的做法'}}">
+    <view class="recipe-tile-image">
+      <image wx:if="{{imageSource && !photoFailed}}" src="{{imageSource}}" class="recipe-tile-photo" mode="aspectFill" data-id="{{recipe.id}}" data-url="{{imageSource}}" binderror="photoError" />
+      <view wx:else class="recipe-tile-art"><food-art name="{{recipe.ingredients[0].name || ''}}" size="146" /><text>{{recipe.category || '口袋食谱'}}</text></view>
+      <view wx:if="{{showVisibility && (recipe.visibility === 'public' || recipe.visibility === 'private')}}" class="recipe-tile-badge {{recipe.visibility}}"><t-icon name="{{recipe.visibility === 'public' ? 'internet' : 'lock-on'}}" size="20rpx" /><text>{{recipe.visibility === 'public' ? '公开' : '私密'}}</text></view>
+      <view wx:elif="{{!showVisibility && recipe.category}}" class="recipe-tile-category">{{recipe.category}}</view>
+      <view wx:if="{{recipe.favorite}}" class="recipe-tile-favorite" aria-label="已收藏"><t-icon name="heart-filled" size="24rpx" /></view>
+    </view>
+    <view class="recipe-tile-name">{{recipe.name}}</view>
+    <view class="recipe-tile-meta"><text wx:if="{{recipe.minutes}}">{{recipe.minutes}} 分钟</text><text wx:if="{{recipe.minutes && recipe.texture}}"> · </text><text>{{recipe.texture}}</text></view>
+    <view wx:if="{{showVisibility && recipe.visibility === 'unknown'}}" class="recipe-tile-note">公开状态待确认</view>
+    <view wx:elif="{{showVisibility && recipe.publicChanged}}" class="recipe-tile-note">有修改待公开更新</view>
+  </view>
+  <view wx:if="{{showAuthor && recipe.authorName}}" class="recipe-tile-author" catchtap="author" hover-class="recipe-tile-pressed" aria-role="button" aria-label="{{'打开' + recipe.authorName + '的主页'}}"><view class="recipe-tile-avatar"><image class="recipe-tile-avatar-image" src="{{authorAvatar}}" mode="aspectFit" aria-hidden="true" /></view><text>{{recipe.authorName}}</text></view>
+</view>

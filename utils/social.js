@@ -3,6 +3,10 @@
 const config = require('../config/cloud');
 const store = require('./store');
 const cloudSync = require('./cloud-sync');
+const {withCover} = require('./recipe-covers');
+const coverLoader = require('./cover-loader');
+const {isValidBirthDate} = require('./baby-age');
+const {normalizeAgeGroups} = require('./recipe-ages');
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const imports = new Map();
 let fileSequence = 0;
@@ -59,19 +63,27 @@ const errors = {
   RECIPE_NOT_FOUND: '这道菜谱已取消公开，或暂时无法查看。',
   NOT_PUBLIC: '这道菜谱已取消公开，或暂时无法查看。',
   INVALID_PROFILE: '公开昵称请填写 1–20 个字，简介不超过 120 个字。',
+  PROFILE_NAME_REJECTED: '昵称未通过内容审核，请修改后重试。',
+  PROFILE_BIO_REJECTED: '简介未通过内容审核，请修改后重试。',
+  PROFILE_MODERATION_UNAVAILABLE: '内容审核暂时不可用，资料尚未保存，请稍后重试。',
+  INVALID_BABY_AGE: '宝宝月龄请填写 0–120 之间的整数，留空可取消展示。',
+  INVALID_BABY_BIRTH_DATE: '请选择有效的宝宝生日，不能晚于今天。',
   INVALID_INPUT: '信息不完整，请刷新页面后重试。',
   INVALID_REQUEST: '信息不完整，请刷新页面后重试。',
   INVALID_ACCOUNT: '暂时无法确认当前账号，请重新打开页面。',
   CONFLICT: '资料已发生变化，请刷新页面后重试。',
   SELF_FOLLOW: '这是你自己的主页，无需关注。',
   FOLLOW_LIMIT: '关注人数已达到上限，请整理后重试。',
-  PROFILE_REQUIRED: '请先保存公开昵称，再公开菜谱。',
+  PROFILE_REQUIRED: '请先设置公开主页，再关注好友或公开菜谱。',
   SYNC_REQUIRED: '请先完成菜谱同步，再公开这道菜谱。',
   SOURCE_NOT_FOUND: '这道菜谱还未同步，或已被删除，请返回食谱后重试。',
   INVALID_SNAPSHOT: '菜谱尚未完整同步，请完成同步后重试。',
   INVALID_PHOTO: '这张照片暂时无法公开，请重新选择照片并同步后重试。',
   STORAGE_ERROR: '照片暂时无法读取，请稍后重试。',
-  STORAGE_FAILED: '照片暂时无法读取，请稍后重试。'
+  STORAGE_FAILED: '照片暂时无法读取，请稍后重试。',
+  SHARE_CODE_UNAVAILABLE: '分享码暂不可用，可以先发送主页给朋友。',
+  SHARE_CODE_FAILED: '分享码暂时生成失败，可以重试或先发送主页给朋友。',
+  SHARE_CODE_NOT_PUBLISHED: '正式版主页尚未发布，暂时无法生成正式版分享码。'
 };
 async function request(action, data, owner) {
   assertOwner(owner);
@@ -89,6 +101,13 @@ async function request(action, data, owner) {
   if (result.error) {
     const code = result.error.code;
     fail(errors[code] || '操作暂未完成，请稍后重试。', code);
+  }
+  // Public artwork sources are presentation-only. Individual ready sources can
+  // render while other covers load; copying still reads only the author's photoURL.
+  if (object(result.recipe) || Array.isArray(result.recipes)) {
+    Promise.resolve().then(() => coverLoader.prepare()).catch(() => {});
+    if (object(result.recipe)) result.recipe = withCover(result.recipe);
+    if (Array.isArray(result.recipes)) result.recipes = result.recipes.map(withCover);
   }
   return result;
 }
@@ -137,7 +156,22 @@ function saveProfile(input) {
     typeof input.bio !== 'string' || input.bio.trim().length > 120 || /[\u0000-\u001f]/.test(input.name + input.bio)) {
     fail(errors.INVALID_PROFILE, 'INVALID_PROFILE');
   }
-  return invoke('updateProfile', {name: input.name.trim(), bio: input.bio.trim()});
+  const profile = {name: input.name.trim(), bio: input.bio.trim()};
+  if (Object.prototype.hasOwnProperty.call(input, 'babyAgeMonths')) {
+    const age = input.babyAgeMonths;
+    if (age !== null && (!Number.isSafeInteger(age) || age < 0 || age > 120)) {
+      fail(errors.INVALID_BABY_AGE, 'INVALID_BABY_AGE');
+    }
+    profile.babyAgeMonths = age;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'babyBirthDate')) {
+    const birthDate = input.babyBirthDate;
+    if (birthDate !== null && !isValidBirthDate(birthDate)) {
+      fail(errors.INVALID_BABY_BIRTH_DATE, 'INVALID_BABY_BIRTH_DATE');
+    }
+    profile.babyBirthDate = birthDate;
+  }
+  return invoke('updateProfile', profile);
 }
 function getProfile(id, start) { checkProfileId(id); return invoke('profile', {profileId: id, offset: offset(start)}); }
 function getRecipe(id) { checkRecipeId(id); return invoke('recipe', {recipeId: id}); }
@@ -164,7 +198,20 @@ function setFollowing(id, following) {
   return invoke('follow', {profileId: id, following});
 }
 function getFollowing(start) { return invoke('following', {offset: offset(start)}); }
+function getFollowers(start) { return invoke('followers', {offset: offset(start)}); }
 function getFeed(cursor) { return invoke('feed', cursor == null ? {} : {cursor}); }
+function getDiscover(input = {}) {
+  if (!object(input) || (input.search !== undefined && (typeof input.search !== 'string' || input.search.length > 60)) ||
+    (input.cursor != null && (typeof input.cursor !== 'string' || input.cursor.length > 4000))) {
+    fail('搜索或分页信息不正确，请重试。', 'INVALID_INPUT');
+  }
+  return invoke('discover', {search: (input.search || '').trim(), ...(input.cursor == null ? {} : {cursor: input.cursor})});
+}
+function getShareCode(id, envVersion) {
+  checkProfileId(id);
+  if (!['develop', 'trial', 'release'].includes(envVersion)) fail('暂时无法确认小程序版本，请重新打开后重试。', 'INVALID_INPUT');
+  return invoke('shareCode', {profileId: id, envVersion});
+}
 function findImportedRecipe(id) { return publicId(id) ? store.getRecipe('shared-' + id) : null; }
 function fs() { return wx.getFileSystemManager(); }
 async function removeLocal(filePath) {
@@ -224,12 +271,13 @@ async function importRecipe(id) {
   const response = await request('recipe', {recipeId: id}, owner);
   const recipe = response.recipe;
   if (!object(recipe) || recipe.id !== id || !profileId(recipe.profileId)) fail('这道公开菜谱的信息不完整，请重新打开。');
+  const ageGroups = normalizeAgeGroups(recipe.ageGroups);
   let photo = '';
   let keepPhoto = false;
   try {
     photo = await copyPhoto(recipe.photoURL, owner);
     assertOwner(owner);
-    const result = store.addPublicRecipe(Object.assign({}, recipe, {photo}), owner.id);
+    const result = store.addPublicRecipe(Object.assign({}, recipe, {photo}, ageGroups === undefined ? {} : {ageGroups}), owner.id);
     keepPhoto = result.added;
     return result;
   } finally {
@@ -246,4 +294,4 @@ function addToCookbook(id) {
 }
 
 module.exports = {getMine, saveProfile, getProfile, getRecipe, publishRecipe, unpublishRecipe,
-  setFollowing, getFollowing, getFeed, addToCookbook, findImportedRecipe};
+  setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe};

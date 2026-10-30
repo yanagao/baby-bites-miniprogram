@@ -13,7 +13,15 @@ function invalidate(page) {
   if (!page.accountSession || page.accountSession.disposed) return;
   page.accountSession.changed = true;
   page.request++;
-  const cleared = {profile: null, recipe: null, author: null, recipes: [], profiles: [], importedId: '', editing: false, name: '', bio: '', loading: false, loadingMore: false, saving: false, adding: false, followBusy: false, nextCursor: null, nextOffset: null};
+  if (typeof page.disposeShare === 'function') page.disposeShare();
+  if (typeof page.disposeLocalContent === 'function') page.disposeLocalContent();
+  const cleared = {profile: null, recipe: null, author: null, recipes: [], profiles: [], importedId: '', editing: false, name: '', bio: '', loading: false, loadingMore: false, saving: false, adding: false, followBusy: false, followBusyId: '', needsProfile: false, following: false, followedBy: false, followingCount: 0, followerCount: 0, publishedCount: 0, nextCursor: null, nextOffset: null};
+  Object.assign(cleared, {logs: [], isSelf: false, recipeCount: 0, favoriteCount: 0, logCount: 0,
+    publicCount: 0, privateCount: 0, publicationReady: false, publicationLoading: false,
+    publicationError: '', contentTab: 'recipes', visibility: 'all', babyAgeMonths: null, babyAgeLabel: '',
+    babyBirthDate: null, birthdayDirty: false, birthdayAgeLabel: '', birthDateToday: '',
+    babyNickname: '', babyNicknameBase: '', babyNicknameDirty: false, babyNicknameError: '',
+    profileSaveError: '', profileModerating: false, avatarPath: '/assets/cute/pocket-mascot.png'});
   const update = {error: MESSAGE};
   Object.keys(cleared).forEach(key => { if (key in page.data) update[key] = cleared[key]; });
   page.setData(update);

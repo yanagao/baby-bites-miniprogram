@@ -8,5 +8,5 @@
     <view wx:elif="{{recipe.rating > 0}}" class="recipe-preference preference-{{recipe.rating}}">上次{{recipe.ratingName}}</view>
     <view wx:else class="recipe-ingredients">{{recipe.ingredientText}}</view>
   </view>
-  <t-icon name="chevron-right" size="32rpx" color="#765e50" />
+  <t-icon name="chevron-right" size="32rpx" color="#82969a" />
 </view>
