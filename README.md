@@ -1,6 +1,6 @@
 # 小口袋 · 微信小程序
 
-版本 1.2.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+版本 1.3.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
 
 ## 打开与试用
 

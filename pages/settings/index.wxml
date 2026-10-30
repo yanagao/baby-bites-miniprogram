@@ -61,7 +61,7 @@
   </view>
   <view class="settings-version">
     <text class="settings-version-name">小口袋</text>
-    <text class="settings-version-number">版本 1.2.0</text>
+    <text class="settings-version-number">版本 1.3.0</text>
   </view>
 </view>
 <t-dialog visible="{{importVisible}}" title="合并这份备份？" content="将菜谱和用餐记录合并到本机；相同内容保留较新的修改。" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
