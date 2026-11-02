@@ -10,6 +10,12 @@ const {isValidBirthDate} = require('./baby-age');
 const {normalizeAgeGroups} = require('./recipe-ages');
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const imports = new Map();
+const COOKSNAP_PHOTO_BYTES = 1024 * 1024;
+const SAVE_RECEIPT_PREFIX = 'baby-bites-save-receipts:';
+const saveReceiptMemory = new Map();
+const saveReceiptFlights = new Map();
+const cooksnapUploads = new Map();
+const cooksnapFlights = new Map();
 const READ_TTL = 30 * 1000;
 const MAX_CACHE_ENTRIES = 32;
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
@@ -36,6 +42,7 @@ store.subscribe(info => {
   if (info.owner !== observedOwner) {
     observedOwner = info.owner; ownerEpoch += 1;
     observedRevision = info.revision; observedPublication = 0; observedIdentityInvalid = false;
+    cooksnapUploads.clear();
     forgetIdentity();
   }
 });
@@ -51,6 +58,7 @@ if (typeof cloudSync.subscribe === 'function') cloudSync.subscribe(status => {
     observedPublication = status.publicationVersion; changed = true;
   }
   if (changed) invalidateReads();
+  if (status.state === 'synced' && !status.identityInvalid) flushSaveReceipts(false).catch(() => {});
 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const publicId = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -124,7 +132,14 @@ const errors = {
   STORAGE_FAILED: '照片暂时无法读取，请稍后重试。',
   SHARE_CODE_UNAVAILABLE: '分享码暂不可用，可以先发送主页给朋友。',
   SHARE_CODE_FAILED: '分享码暂时生成失败，可以重试或先发送主页给朋友。',
-  SHARE_CODE_NOT_PUBLISHED: '正式版主页尚未发布，暂时无法生成正式版分享码。'
+  SHARE_CODE_NOT_PUBLISHED: '正式版主页尚未发布，暂时无法生成正式版分享码。',
+  SELF_FEEDBACK: '这是你自己的菜谱，无需记录跟做。',
+  INVALID_COOKSNAP: '请添加一张成品照和 1–120 字的做后反馈。',
+  INVALID_COOKSNAP_PHOTO: '请使用不超过 1 MB 的 JPG 或 PNG 成品照。',
+  COOKSNAP_TEXT_REJECTED: '这句话未通过内容审核，请修改后重试。',
+  COOKSNAP_PHOTO_REJECTED: '这张照片未通过内容审核，请更换成品照后重试。',
+  COOKSNAP_MODERATION_UNAVAILABLE: '内容审核暂时不可用，跟做尚未发布，请稍后重试。',
+  FEEDBACK_NOT_SAVED: '菜谱保存记录正在同步，请稍后重试。'
 };
 async function request(action, data, owner) {
   assertOwner(owner);
@@ -420,7 +435,7 @@ async function copyPhoto(url, owner) {
 async function importRecipe(id) {
   const owner = await ready();
   const existing = findImportedRecipe(id);
-  if (existing) return {recipeId: existing.id, added: false};
+  if (existing) { queueSaveReceipt(owner, id, existing.id); return {recipeId: existing.id, added: false}; }
   const response = await request('recipe', {recipeId: id}, owner);
   const recipe = response.recipe;
   if (!object(recipe) || recipe.id !== id || !profileId(recipe.profileId)) fail('这道菜谱的信息不完整，请重新打开。');
@@ -432,6 +447,7 @@ async function importRecipe(id) {
     assertOwner(owner);
     const result = store.addPublicRecipe(Object.assign({}, recipe, {photo}, ageGroups === undefined ? {} : {ageGroups}), owner.id);
     keepPhoto = result.added;
+    queueSaveReceipt(owner, id, result.recipeId);
     return result;
   } finally {
     if (!keepPhoto) await removeLocal(photo);
@@ -446,5 +462,192 @@ function addToCookbook(id) {
   return work;
 }
 
+// A receipt is only an intent to report a completed local save. The server
+// verifies the committed snapshot before it creates the unique author event.
+function saveReceipts(owner) {
+  if (saveReceiptMemory.has(owner)) return saveReceiptMemory.get(owner);
+  let stored;
+  try { stored = wx.getStorageSync(SAVE_RECEIPT_PREFIX + owner); } catch (_) {}
+  const result = Array.isArray(stored) ? stored.filter(item => object(item) && publicId(item.recipeId) &&
+    typeof item.localRecipeId === 'string' && item.localRecipeId.length <= 100).slice(0, 2000)
+    .map(item => ({recipeId: item.recipeId, localRecipeId: item.localRecipeId})) : [];
+  saveReceiptMemory.set(owner, result);
+  return result;
+}
+function writeSaveReceipts(owner, receipts) {
+  saveReceiptMemory.set(owner, receipts);
+  try { wx.setStorageSync(SAVE_RECEIPT_PREFIX + owner, receipts); } catch (_) {
+    // Quota errors must not turn a successfully saved recipe into a failed save.
+    // The in-memory queue still retries while this app session remains open.
+  }
+}
+function queueSaveReceipt(owner, recipeId, localRecipeId) {
+  assertOwner(owner);
+  const receipts = saveReceipts(owner.id);
+  if (!receipts.some(item => item.recipeId === recipeId)) {
+    writeSaveReceipts(owner.id, receipts.concat({recipeId, localRecipeId}).slice(-2000));
+  }
+  flushSaveReceipts(true).catch(() => {});
+}
+function flushSaveReceipts(syncFirst) {
+  const owner = {id: store.getSyncInfo().owner, epoch: ownerEpoch};
+  if (!owner.id || !saveReceipts(owner.id).length) return Promise.resolve();
+  const key = owner.epoch + ':' + owner.id;
+  if (saveReceiptFlights.has(key)) return saveReceiptFlights.get(key);
+  const work = Promise.resolve().then(async () => {
+    assertOwner(owner);
+    const session = syncFirst ? await ready() : await readyIdentity(true);
+    assertOwner(owner);
+    // Bounded work prevents an old imported library delaying foreground work.
+    for (const item of saveReceipts(owner.id).slice(0, 20)) {
+      assertOwner(owner);
+      const local = store.getRecipe(item.localRecipeId);
+      if (local && local.source && local.source.recipeId === item.recipeId) {
+        try {
+          const result = await request('recordSave', item, session);
+          if (!result || typeof result.recorded !== 'boolean') return;
+          invalidateReads();
+        } catch (error) {
+          // Removed originals and self-saves can never become an author receipt.
+          // A temporary sync/network failure retains the queue for another run.
+          if (!['NOT_FOUND', 'RECIPE_NOT_FOUND', 'NOT_PUBLIC', 'SELF_FEEDBACK'].includes(error.code)) throw error;
+        }
+      }
+      assertOwner(owner);
+      writeSaveReceipts(owner.id, saveReceipts(owner.id).filter(receipt => receipt.recipeId !== item.recipeId));
+    }
+  }).finally(() => { if (saveReceiptFlights.get(key) === work) saveReceiptFlights.delete(key); });
+  saveReceiptFlights.set(key, work);
+  return work;
+}
+function feedbackText(value, max, empty = false) {
+  return typeof value === 'string' && value.length <= max && (empty || value.trim()) && !/[\u0000-\u001f\u007f]/.test(value);
+}
+function feedbackPhoto(value) {
+  return typeof value === 'string' && value.length <= 8000 && /^https:\/\/[^\s/@]+(?:\/|$)/.test(value);
+}
+function invalidFeedback() { fail('反馈信息暂时无法读取，请刷新重试。', 'INVALID_FEEDBACK'); }
+function normalizeCooksnap(item) {
+  if (!object(item) || !publicId(item.id) || !publicId(item.recipeId) || !object(item.author) ||
+    !profileId(item.author.id) || !feedbackText(item.author.name, 30) || !feedbackText(item.text, 120) ||
+    !feedbackPhoto(item.photoURL) || !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 || typeof item.isSelf !== 'boolean') invalidFeedback();
+  return {id: item.id, recipeId: item.recipeId, author: {id: item.author.id, name: item.author.name},
+    photoURL: item.photoURL, text: item.text, createdAt: item.createdAt, isSelf: item.isSelf};
+}
+function feedbackPage(result, field, normalize) {
+  if (!object(result) || !Number.isSafeInteger(result.saveCount) || result.saveCount < 0 ||
+    !Number.isSafeInteger(result.cooksnapCount) || result.cooksnapCount < 0 || !Array.isArray(result[field]) ||
+    result[field].length > 20 || !(result.nextOffset === null || Number.isSafeInteger(result.nextOffset) && result.nextOffset >= 0)) invalidFeedback();
+  return {saveCount: result.saveCount, cooksnapCount: result.cooksnapCount,
+    [field]: result[field].map(normalize), nextOffset: result.nextOffset};
+}
+async function getRecipeFeedback(id, start = 0, options) {
+  checkRecipeId(id);
+  const result = feedbackPage(await read('recipeFeedback', {recipeId: id, offset: offset(start)}, options), 'cooksnaps', normalizeCooksnap);
+  if (result.cooksnaps.some(item => item.recipeId !== id) || result.nextOffset !== null && result.nextOffset <= offset(start)) invalidFeedback();
+  return result;
+}
+async function getFeedbackInbox(start = 0, options) {
+  const result = feedbackPage(await read('feedbackInbox', {offset: offset(start)}, options), 'items', item => {
+    if (!object(item) || !publicId(item.id) || !['save', 'cooksnap'].includes(item.type) || !publicId(item.recipeId) ||
+      !feedbackText(item.recipeName, 60) || !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 ||
+      (item.type === 'cooksnap' && (!feedbackText(item.actorName, 30) || !feedbackText(item.text, 120) || !feedbackPhoto(item.photoURL)))) invalidFeedback();
+    return {id: item.id, type: item.type, recipeId: item.recipeId, recipeName: item.recipeName, createdAt: item.createdAt,
+      ...(item.type === 'cooksnap' ? {actorName: item.actorName, photoURL: item.photoURL, text: item.text} : {photoURL: '', text: ''})};
+  });
+  if (result.nextOffset !== null && result.nextOffset <= offset(start)) invalidFeedback();
+  return result;
+}
+function ownsCooksnapPhoto(fileID, owner, cloudPath) {
+  const match = typeof fileID === 'string' && /^cloud:\/\/([A-Za-z0-9_-]+)\.([A-Za-z0-9._-]+)\/(.+)$/.exec(fileID);
+  return !!match && match[1] === config.env && match[3] === cloudPath &&
+    cloudPath.indexOf('users/' + owner.id + '/photos/') === 0;
+}
+async function prepareCooksnapPhoto(photoPath, owner) {
+  let temporary = '';
+  try {
+    let info = await call(fs(), 'getFileInfo', {filePath: photoPath});
+    assertOwner(owner);
+    if (!Number.isFinite(info.size) || info.size <= 0 || info.size > 10 * 1024 * 1024) fail('请选择不超过 10 MB 的成品照片。', 'INVALID_COOKSNAP_PHOTO');
+    let dimensions = await call(wx, 'getImageInfo', {src: photoPath});
+    assertOwner(owner);
+    const validSize = value => Number.isSafeInteger(value.width) && value.width > 0 && Number.isSafeInteger(value.height) && value.height > 0;
+    if (!validSize(dimensions)) fail('照片尺寸无法读取，请重新选择。', 'INVALID_COOKSNAP_PHOTO');
+    if (info.size > COOKSNAP_PHOTO_BYTES || Math.max(dimensions.width, dimensions.height) > 750) {
+      const scale = Math.min(1, 750 / Math.max(dimensions.width, dimensions.height));
+      const compressed = await call(wx, 'compressImage', {src: photoPath, quality: 70,
+        compressedWidth: Math.max(1, Math.floor(dimensions.width * scale)),
+        compressedHeight: Math.max(1, Math.floor(dimensions.height * scale))});
+      if (compressed && typeof compressed.tempFilePath === 'string' && compressed.tempFilePath && compressed.tempFilePath !== photoPath) temporary = compressed.tempFilePath;
+      assertOwner(owner);
+      if (!compressed || typeof compressed.tempFilePath !== 'string' || !compressed.tempFilePath) fail('照片压缩未完成，请换一张较小的照片。', 'INVALID_COOKSNAP_PHOTO');
+      photoPath = compressed.tempFilePath;
+      info = await call(fs(), 'getFileInfo', {filePath: photoPath});
+      assertOwner(owner);
+      dimensions = await call(wx, 'getImageInfo', {src: photoPath});
+      assertOwner(owner);
+    }
+    if (!validSize(dimensions) || Math.max(dimensions.width, dimensions.height) > 750 ||
+      !Number.isFinite(info.size) || info.size <= 0 || info.size > COOKSNAP_PHOTO_BYTES) {
+      fail('照片压缩后仍然过大，请换一张较小的 JPG 或 PNG 成品照。', 'INVALID_COOKSNAP_PHOTO');
+    }
+    const bytes = await call(fs(), 'readFile', {filePath: photoPath});
+    assertOwner(owner);
+    const extension = photoType(bytes && bytes.data);
+    if (!['png', 'jpg'].includes(extension) || bytes.data.byteLength > COOKSNAP_PHOTO_BYTES) fail(errors.INVALID_COOKSNAP_PHOTO, 'INVALID_COOKSNAP_PHOTO');
+    fileSequence++;
+    const cloudPath = 'users/' + owner.id + '/photos/cooksnap-' + Date.now() + '-' + fileSequence + '-' + Math.random().toString(36).slice(2, 12) + '.' + extension;
+    const upload = await call(wx.cloud, 'uploadFile', {cloudPath, filePath: photoPath, config: {env: config.env}});
+    assertOwner(owner);
+    if (!upload || !ownsCooksnapPhoto(upload.fileID, owner, cloudPath)) fail('照片上传归属无法确认，请重试。', 'INVALID_COOKSNAP_PHOTO');
+    return upload.fileID;
+  } catch (error) {
+    if (error && error.userMessage) throw error;
+    fail('成品照未能上传，请检查网络后重试。', 'COOKSNAP_UPLOAD_FAILED');
+  } finally { if (temporary) await removeLocal(temporary); }
+}
+function addCooksnap(id, input) {
+  checkRecipeId(id);
+  if (!object(input) || !feedbackText(input.text, 120) || typeof input.photoPath !== 'string' || !input.photoPath ||
+    input.photoPath.length > 2000 || typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(input.requestId)) {
+    fail(errors.INVALID_COOKSNAP, 'INVALID_COOKSNAP');
+  }
+  input = {photoPath: input.photoPath, text: input.text.trim(), requestId: input.requestId};
+  const key = ownerEpoch + ':' + (store.getSyncInfo().owner || '') + ':' + input.requestId;
+  const fingerprint = JSON.stringify([id, input.photoPath, input.text.trim()]);
+  const existing = cooksnapUploads.get(key);
+  if (existing && existing.fingerprint !== fingerprint) fail('这次跟做内容已变化，请重新确认后发布。', 'CONFLICT');
+  if (cooksnapFlights.has(key)) return cooksnapFlights.get(key);
+  const upload = existing || {fingerprint, fileID: ''};
+  // Limit retry metadata retained during a long-lived mini program session.
+  if (!existing && cooksnapUploads.size >= MAX_CACHE_ENTRIES) {
+    for (const oldKey of cooksnapUploads.keys()) {
+      if (!cooksnapFlights.has(oldKey)) { cooksnapUploads.delete(oldKey); break; }
+    }
+  }
+  cooksnapUploads.set(key, upload);
+  const work = Promise.resolve().then(async () => {
+    const owner = await readyIdentity();
+    if (key !== owner.epoch + ':' + owner.id + ':' + input.requestId) fail(errors.ACCOUNT_CHANGED, 'ACCOUNT_CHANGED');
+    if (!upload.fileID) upload.fileID = await prepareCooksnapPhoto(input.photoPath, owner);
+    assertOwner(owner);
+    const result = await mutate('addCooksnap', {recipeId: id, requestId: input.requestId, photoFileID: upload.fileID, text: input.text.trim()}, owner);
+    const cooksnap = normalizeCooksnap(result && result.cooksnap);
+    if (cooksnap.recipeId !== id || !cooksnap.isSelf) invalidFeedback();
+    // Keep the original upload for safe retries after a lost response. Never
+    // remove a cloud file when the server's commit outcome may be unknown.
+    return {cooksnap};
+  }).finally(() => { if (cooksnapFlights.get(key) === work) cooksnapFlights.delete(key); });
+  cooksnapFlights.set(key, work);
+  return work;
+}
+async function deleteCooksnap(id) {
+  checkRecipeId(id);
+  const result = await mutate('deleteCooksnap', {id});
+  if (!result || result.deleted !== true) invalidFeedback();
+  return {deleted: true};
+}
+
 module.exports = {getMine, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
-  setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe};
+  setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe,
+  getRecipeFeedback, getFeedbackInbox, addCooksnap, deleteCooksnap};

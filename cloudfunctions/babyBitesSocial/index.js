@@ -5,9 +5,10 @@ const {ownedFile, validateSnapshot, normalizeAgeGroups, reject} = require('./pri
 const {getImageKey, isBuiltinRecipeId} = require('./recipe-covers');
 const {todayString, isValidBirthDate, ageInMonths} = require('./baby-age');
 const {checkProfile} = require('./profile-moderation');
+const {ACTIONS: FEEDBACK_ACTIONS, createFeedback} = require('./feedback');
 const COLLECTIONS = {
   accounts: 'baby_bites_accounts', profiles: 'baby_bites_profiles',
-  recipes: 'baby_bites_public_recipes', follows: 'baby_bites_follows'
+  recipes: 'baby_bites_public_recipes', follows: 'baby_bites_follows', feedback: 'baby_bites_recipe_feedback'
 };
 const PAGE_SIZE = 20;
 const MAX_OFFSET = 1000;
@@ -480,6 +481,9 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     return written ? {updated: true, record: {_id: publicId, ...record}} : {updated: false};
   }
 
+  const feedback = createFeedback({cloud, db, get, write, collection, profile, isPublished, profileIdFor,
+    defaultProfileName, committedSnapshot, activeRecipe, assertCommitted, publicInventory, now, unique});
+
   return async function handle(event) {
     const progress = {updated: 0, removed: 0};
     try {
@@ -496,6 +500,8 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       const ownProfileId = profileIdFor(owner);
       const today = todayString(now());
       const isBuiltin = builtinChecker();
+
+      if (FEEDBACK_ACTIONS.has(event.action)) return await feedback(event, {owner, env: ENV, openid: OPENID, isBuiltin});
 
       if (event.action === 'mine') {
         const [ownProfile, follows] = await Promise.all([profile(ownProfileId), get('follows', owner)]);
@@ -905,7 +911,9 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         'INVALID_SNAPSHOT', 'INVALID_PHOTO', 'STORAGE_FAILED', 'SYNC_REQUIRED', 'PROFILE_REQUIRED',
         'NOT_FOUND', 'CONFLICT', 'FOLLOW_LIMIT', 'ACCOUNT_CHANGED', 'SHARE_CODE_UNAVAILABLE',
         'SHARE_CODE_FAILED', 'SHARE_CODE_NOT_PUBLISHED', 'PROFILE_NAME_REJECTED',
-        'PROFILE_BIO_REJECTED', 'PROFILE_MODERATION_UNAVAILABLE', 'CLIENT_UPDATE_REQUIRED', 'PREVIEW_REQUIRED', 'PREVIEW_STALE']);
+        'PROFILE_BIO_REJECTED', 'PROFILE_MODERATION_UNAVAILABLE', 'SELF_FEEDBACK', 'INVALID_COOKSNAP',
+        'INVALID_COOKSNAP_PHOTO', 'COOKSNAP_TEXT_REJECTED', 'COOKSNAP_PHOTO_REJECTED',
+        'COOKSNAP_MODERATION_UNAVAILABLE', 'FEEDBACK_NOT_SAVED', 'CLIENT_UPDATE_REQUIRED', 'PREVIEW_REQUIRED', 'PREVIEW_STALE']);
       const extra = event && event.action === 'syncPublications' ? {...progress, hasMore: true} : {};
       if (allowed.has(error && error.code)) return {...extra, error: {code: error.code, message: error.message}};
       return {...extra, error: {code: 'SOCIAL_FAILED', message: '暂时无法完成，请稍后重试。'}};

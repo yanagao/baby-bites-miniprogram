@@ -1,0 +1,31 @@
+<t-navbar title="我做过这道菜" left-arrow placeholder delta="{{0}}" bind:go-back="back" />
+<view class="cooksnap-editor-page">
+  <view wx:if="{{loading}}" class="cooksnap-loading">正在打开这道菜谱…</view>
+  <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button wx:if="{{!isSelf}}" slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
+  <block wx:elif="{{recipe}}">
+    <view class="cooksnap-recipe"><view class="cooksnap-eyebrow">{{submitted ? '跟做已分享' : '这次做了'}} · {{author.name}} 的菜谱</view><view class="cooksnap-title">{{recipe.name}}</view></view>
+    <block wx:if="{{!submitted}}">
+      <view class="cooksnap-intro">一张成品照，一句做后的感受。让作者知道，这道菜也来到你家的餐桌。</view>
+      <view class="cooksnap-label">我的成品照</view>
+      <view wx:if="{{photo}}" class="cooksnap-photo-wrap"><image class="cooksnap-editor-photo" src="{{photo}}" mode="aspectFill" bindtap="previewPhoto" aria-label="预览我的成品照" /><view class="cooksnap-photo-actions"><t-button theme="primary" variant="text" size="small" disabled="{{saving || choosingPhoto}}" bind:tap="choosePhoto">换一张</t-button><t-button theme="default" variant="text" size="small" disabled="{{saving || choosingPhoto}}" bind:tap="clearPhoto">移除</t-button></view></view>
+      <t-button wx:else class="cooksnap-add-photo" theme="primary" variant="outline" block icon="camera" loading="{{choosingPhoto}}" disabled="{{saving || choosingPhoto}}" bind:tap="choosePhoto">添加成品照</t-button>
+      <view wx:if="{{photoError}}" class="cooksnap-field-error">{{photoError}}</view>
+      <view class="cooksnap-label cooksnap-text-label">留一句做后的反馈</view>
+      <t-textarea value="{{text}}" maxlength="120" indicator autosize="{{false}}" height="180" placeholder="例如：南瓜多放了一点，煮得软软的，宝宝很喜欢。" disabled="{{saving}}" bind:change="changeText" />
+      <view wx:if="{{textError}}" class="cooksnap-field-error">{{textError}}</view>
+      <view class="cooksnap-disclosure">分享后，你的公开昵称、这张成品照和这句话会展示在本菜谱和作者收到的反馈里。无需完善资料，也不需要另写一份菜谱。</view>
+      <view wx:if="{{submitError}}" class="cooksnap-field-error">{{submitError}}</view>
+      <t-button class="cooksnap-submit" theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving || choosingPhoto}}" bind:tap="submit">{{saving ? '正在分享…' : '分享跟做'}}</t-button>
+    </block>
+    <view wx:else class="cooksnap-success">
+      <image class="cooksnap-editor-photo" src="{{photo}}" mode="aspectFill" bindtap="previewPhoto" aria-label="预览已分享的成品照" />
+      <view class="cooksnap-shared-text">{{text}}</view>
+      <view class="cooksnap-success-title">作者能看到你的成品了</view>
+      <view class="cooksnap-intro">有自己的调整？愿意的话，可以整理成你的做法，原作者来源会保留。</view>
+      <view wx:if="{{submitError}}" class="cooksnap-field-error">{{submitError}}</view>
+      <t-button theme="primary" variant="outline" shape="round" block loading="{{arranging}}" disabled="{{arranging}}" bind:tap="arrangeRecipe">{{importedId ? '整理我的做法' : '保存菜谱并整理做法'}}</t-button>
+      <t-button class="cooksnap-done" theme="default" variant="text" block disabled="{{arranging}}" bind:tap="back">完成，返回菜谱</t-button>
+    </view>
+  </block>
+</view>
+<t-dialog visible="{{discardVisible}}" title="先不分享了吗？" content="离开后，这次未分享的照片和文字将丢弃。" confirm-btn="继续填写" cancel-btn="离开" bind:confirm="continueEditing" bind:cancel="discard" />

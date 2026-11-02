@@ -12,3 +12,21 @@
 .copy-explanation {margin-top:26rpx;padding:18rpx;background:#eff8f8;border-radius:16rpx;font-size:var(--font-secondary);line-height:var(--line-height-body);color:#82969a;}
 .public-bottom {display:block;}
 .public-detail-end {height:calc(32rpx + env(safe-area-inset-bottom));}
+.cooksnap-section {margin-top:36rpx;padding-top:28rpx;border-top:1rpx solid #e2edf0;}
+.cooksnap-heading {display:flex;flex-direction:column;gap:10rpx;margin-bottom:20rpx;}
+.cooksnap-heading .section-title {margin:0;}
+.cooksnap-heading-row {display:flex;align-items:center;justify-content:space-between;gap:12rpx;}
+.cooksnap-heading-row>.section-title {flex:1;min-width:0;}
+.cooksnap-count,.cooksnap-caption,.cooksnap-empty {font-size:var(--font-caption);color:#82969a;line-height:var(--line-height-body);}
+.cooksnap-invitation {display:flex;flex-direction:column;align-items:flex-start;gap:18rpx;padding:22rpx;background:#eff8f8;border-radius:18rpx;margin-bottom:24rpx;}
+.cooksnap-invitation-title {font-size:var(--font-body);font-weight:600;margin-bottom:6rpx;line-height:var(--line-height-body);}
+.cooksnap-empty {padding:18rpx 0;}
+.cooksnap-card {overflow:hidden;border:1rpx solid #e2edf0;border-radius:20rpx;background:#fff;margin-top:20rpx;}
+.cooksnap-photo {display:block;width:100%;height:340rpx;background:#eff8f8;}
+.cooksnap-photo-missing {display:flex;align-items:center;justify-content:center;color:#82969a;font-size:var(--font-caption);}
+.cooksnap-copy {padding:22rpx;}
+.cooksnap-author {font-weight:600;font-size:var(--font-secondary);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.cooksnap-text {margin-top:10rpx;font-size:var(--font-body);line-height:var(--line-height-body);white-space:pre-wrap;overflow-wrap:anywhere;}
+.cooksnap-footer {display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin-top:12rpx;color:#82969a;font-size:var(--font-caption);}
+.cooksnap-error {display:flex;align-items:center;gap:12rpx;font-size:var(--font-secondary);line-height:var(--line-height-body);color:#b36f55;}
+.cooksnap-error>text {flex:1;overflow-wrap:anywhere;}

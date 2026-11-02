@@ -157,6 +157,11 @@ Page({
   openPublicRecipe() {
     if (this.data.socialEnabled && this.actionAllowed() && this.data.publicInfo) wx.navigateTo({url: '/pages/public-recipe/index?id=' + encodeURIComponent(this.data.publicInfo.id)});
   },
+  openCooksnap() {
+    if (!this.data.socialEnabled || !this.actionAllowed() || this.data.builtIn) return;
+    const source = this.data.recipe && this.data.recipe.source;
+    if (source && /^[a-f0-9]{64}$/.test(source.recipeId)) wx.navigateTo({url: '/pages/cooksnap-editor/index?id=' + encodeURIComponent(source.recipeId)});
+  },
   shareAvailable() {
     const data = this.data;
     return !this._unloaded && !this._accountLocked && data.socialEnabled && !!data.recipe &&

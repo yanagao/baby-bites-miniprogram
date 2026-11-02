@@ -23,7 +23,8 @@
     <view wx:if="{{recipe.source}}" class="publication-source">来自 {{recipe.source.authorName}} 的菜谱</view>
     <view wx:if="{{publicError}}" class="publication-error"><text>{{publicError}}</text><t-button size="small" theme="primary" variant="text" disabled="{{publicLoading || publicBusy || deleting}}" bind:tap="refreshPublication">重试</t-button></view>
     <view wx:if="{{shareError}}" class="publication-error"><text>{{shareError}}</text><t-button size="small" theme="primary" variant="text" disabled="{{publicLoading || shareLoading || publicBusy || deleting}}" bind:tap="requestShare">重试分享</t-button></view>
-    <view wx:if="{{publicReady && publicInfo}}" class="publication-actions"><t-button size="small" theme="primary" variant="text" disabled="{{publicBusy || deleting}}" bind:tap="openPublicRecipe">查看分享页</t-button></view>
+    <view wx:if="{{publicReady && publicInfo}}" class="publication-actions"><t-button size="small" theme="primary" variant="text" disabled="{{publicBusy || deleting}}" bind:tap="openPublicRecipe">查看分享页与大家的反馈</t-button></view>
+    <view wx:if="{{recipe.source && !builtIn}}" class="publication-actions"><t-button size="small" theme="primary" variant="text" disabled="{{publicBusy || deleting}}" bind:tap="openCooksnap">我做过这道菜</t-button></view>
   </view>
   <view class="ingredients-panel">
     <view class="ingredients-heading"><text class="brush">需要准备</text><text>{{builtIn ? '示例用量' : '食材与用量'}}</text></view>

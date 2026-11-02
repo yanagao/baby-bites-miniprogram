@@ -1,0 +1,27 @@
+<t-navbar title="收到的反馈" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="feedback-page">
+  <view wx:if="{{loading}}" class="empty-note">正在看看大家的反馈…</view>
+  <view wx:elif="{{error}}" class="feedback-empty"><text>{{error}}</text><t-button theme="primary" variant="text" bind:tap="reload">重新加载</t-button></view>
+  <block wx:else>
+    <view class="feedback-heading">{{saveCount || cooksnapCount ? '你的做法，帮上忙了' : '等待第一份小小的回应'}}</view>
+    <view class="feedback-intro muted">每一次收进食谱，每一份跟做成品，都是来自其他家长的真实反馈。</view>
+    <view class="feedback-stats">
+      <view><text class="feedback-count">{{saveCount}}</text><text>次收进食谱</text></view>
+      <view><text class="feedback-count">{{cooksnapCount}}</text><text>份跟做反馈</text></view>
+    </view>
+    <view wx:if="{{!items.length}}" class="feedback-empty"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view>{{saveCount === 0 && cooksnapCount === 0 && nextOffset === null ? '还没有收到反馈' : '这一页暂没有可展示的反馈'}}</view><text class="muted">{{nextOffset !== null ? '可以继续查看更早的反馈。' : saveCount || cooksnapCount ? '部分菜谱或反馈已有变化，下拉刷新后再看看。' : '分享做法后，其他家长的保存和跟做会出现在这里。'}}</text></view>
+    <view wx:for="{{items}}" wx:key="id" class="feedback-card">
+      <view class="feedback-card-heading"><text class="feedback-tag">{{item.type === 'save' ? '被保存' : '被跟做'}}</text><text class="feedback-date">{{item.dateLabel}}</text></view>
+      <view class="feedback-message">{{item.type === 'save' ? '有人把你的菜谱收进了自己的食谱' : item.actorName + ' 做了这道菜'}}</view>
+      <button class="feedback-recipe" data-id="{{item.id}}" bindtap="openRecipe" aria-label="{{'查看' + item.recipeName}}"><text>{{item.recipeName}}</text><t-icon name="chevron-right" size="28rpx" /></button>
+      <block wx:if="{{item.type === 'cooksnap'}}">
+        <image wx:if="{{item.photoURL && !item.photoFailed}}" class="feedback-photo" src="{{item.photoURL}}" mode="aspectFill" data-id="{{item.id}}" bindtap="previewPhoto" binderror="photoError" aria-label="预览跟做成品照" />
+        <view wx:else class="feedback-photo-unavailable muted">照片暂时无法显示</view>
+        <view class="feedback-text">{{item.text}}</view>
+      </block>
+    </view>
+    <view wx:if="{{moreError}}" class="feedback-more-error">{{moreError}}</view>
+    <view wx:if="{{nextOffset !== null}}" class="feedback-more"><t-button theme="primary" variant="text" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">{{moreError ? '重试加载' : '查看更多反馈'}}</t-button></view>
+    <view wx:if="{{items.length}}" class="feedback-footnote muted">同一位家长保存同一道菜只记一次。仅展示仍可查看菜谱的反馈。</view>
+  </block>
+</view>

@@ -16,7 +16,9 @@
     "pages/profile/index",
     "pages/following/index",
     "pages/public-recipe/index",
-    "pages/share-preview/index"
+    "pages/share-preview/index",
+    "pages/feedback/index",
+    "pages/cooksnap-editor/index"
   ],
   "window": {
     "navigationBarTitleText": "小口袋",

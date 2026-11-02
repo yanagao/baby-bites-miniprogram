@@ -156,3 +156,29 @@
 参考：[微信服务端 SDK 与类型定义](https://github.com/wechat-miniprogram/wx-server-sdk)、[CloudBase 文件管理](https://docs.cloudbase.net/storage/sdk)、[查询操作符](https://docs.cloudbase.net/en/api-reference/webv2/database/command)、[数据库查询](https://github.com/TencentCloudBase/node-sdk/blob/master/docs/database/database.md)。
 
 **2026-10-29 生日自动月龄部署与验收**：本次新增 `baby-age.js` 与 `babyBirthDate` 合约已通过 CLI 部署，8 个文件、36.4 KB。部署后 CLI 确认 Active、30 秒超时、Node.js 16.13；CLI 不返回内存，本次未再次访问云控制台。全量 554 项测试和 16 页、192 个 JS/WXS 脚本与原生 WXML/WXSS 编译通过。真实只读 `mine` 确认本人额外获得 `babyBirthDate:null`，现有 `profile.exists:false`；界面测试仅选择并取消生日草稿，没有创建公开主页或保存测试生日，云端资料与本机业务数据摘要前后一致。公开资料不含生日、按日期更新月龄、旧客户端兼容、清除及二维码事务并发由本地测试覆盖；实际双微信账号保存后的展示仍待真机验收。见 [生日验收报告](../../../output/birthday/qa.json)。
+
+## 菜谱被保存与跟做反馈（2026-11-02，待部署）
+
+新增云端集合 `baby_bites_recipe_feedback`。部署前先依据 [feedback-database.json](./feedback-database.json) 创建集合、三个复合索引，并将集合权限设为所有客户端 `read:false, write:false`；这是可审阅的配置清单，不会仅因上传云函数而自动应用。所有读写由 `babyBitesSocial` 云函数按可信微信身份完成。新增 `config.json` 权限 `security.imgSecCheck`，保留 `security.msgSecCheck` 及主页码权限。当前代码仅本地验证，尚未部署、初始化线上集合或写入真实用户反馈。
+
+| Action | 输入 | 输出 |
+| --- | --- | --- |
+| `recordSave` | `recipeId,localRecipeId` | `{recorded:boolean}` |
+| `recipeFeedback` | `recipeId,offset?` | `{saveCount,cooksnapCount,cooksnaps,nextOffset}` |
+| `feedbackInbox` | `offset?` | `{saveCount,cooksnapCount,items,nextOffset}` |
+| `addCooksnap` | `recipeId,requestId,photoFileID,text` | `{cooksnap}` |
+| `deleteCooksnap` | `id` | `{deleted:true}` |
+
+所有操作支持既有 `expectedOwner` 账号保护。`recordSave` 必须找到当前调用者权威已提交快照中的有效副本，其 `source.recipeId`、`source.profileId` 要匹配当前仍分享的菜谱及作者，并在事务内复核快照未变化。每位保存者与每道菜谱采用唯一事件 ID，重试、重复保存与删后重存不会增加人数；阅读、点击、自己保存自己的菜谱均不计数。事件表示真实发生过的保存，之后从自己的食谱删除副本不撤销这段历史。保存反馈对作者只展示匿名事件，不暴露保存者姓名、账号、宝宝资料或私人副本信息。该操作之外的反馈读写不下载私人快照。
+
+跟做只接受一张成品照与 1–120 字反馈，`requestId` 为 8–100 位字母、数字、下划线或短横线。照片必须来自当前云环境中当前调用者的 `users/<owner>/photos/`，限 JPG/PNG、1 MB、750×1334 像素以内；客户端压缩长边到 750 像素。服务端读取原始字节检查格式、尺寸与大小，再调用 `msgSecCheck({version:2,scene:2,openid,content})` 和 `imgSecCheck({media:{contentType,value:Buffer}})`。文字必须明确成功且 `result.suggest=pass`，图片必须明确成功码；违规、待复核、缺失结果、接口缺失或任一审核超过 8 秒均不公开，不降级放行。
+
+审核通过后才复制至 `social/<profileId>/cooksnaps/<id>/<unique>.jpg|png`，事务重新验证原菜谱仍有效且版本未变。跟做 ID 绑定当前账号和 `requestId`，幂等摘要绑定菜谱、文字及图片字节；同一请求重传同一照片仍返回原记录，改内容重用请求 ID 返回 `CONFLICT`。公开 DTO 严格仅含 `{id,recipeId,author:{id,name},photoURL,text,createdAt,isSelf}`。无公开资料时采用稳定系统昵称，无需先完善资料，也不创建公开主页或访问私人宝宝资料。
+
+`deleteCooksnap` 只允许跟做者本人操作；成功后保留不可复活的墓碑，计数与列表立即排除，旧请求不能恢复它。事务提交后尽力删除这条跟做独立的公开照片，绝不删除私人原图；重复删除可重试清理。已签发 URL 的 300 秒寿命及用户已下载图片不保证立即消失。仅能证明未被提交引用的新副本才在失败时清理；事务结果不明确则保留，以免误删已发布照片。
+
+`recipeFeedback` 只读取仍分享且非内置的菜谱，返回完整真实保存人数/跟做次数及每页最多 20 条跟做。`feedbackInbox` 仅当前作者可见，忽略请求中的其他身份字段；仅统计仍分享的非内置菜谱。总数由数据库 count 获取，按至多 20 个菜谱 ID 分组，既不按当前页长度冒充总数，也不扫描全部反馈。列表沿用现有 offset 约定，范围 0–1000，每次读取最多 21 行、返回最多 20 行；超出范围明确拒绝。总数不受列表窗口限制。原菜谱移除或变为内置后，后续读取不返回对应反馈；删除或撤回发生在签发照片 URL 期间也会再次检查，避免返回已撤内容。
+
+集合中的 `owner`（反馈者）、`authorOwner`（菜谱作者）、幂等摘要和照片 fileID 均仅服务端内部使用；公开返回使用签名 HTTPS URL。作者收件箱的保存事件只含 `{id,type,recipeId,recipeName,createdAt,photoURL:'',text:''}`；跟做事件额外提供公开 `actorName`、照片 URL 和一句反馈。无评论回复、点赞或订阅消息发送。
+
+图片审核 API 参考：[微信图片安全检查](https://developers.weixin.qq.com/miniprogram/dev/server/API/sec-center/sec-check/api_imgseccheck.html)、[官方云函数 SDK](https://github.com/wechat-miniprogram/wx-server-sdk)。部署后仍需通过真实微信云调用验收新增图片审核权限和数据库索引；本地模拟测试不代表线上服务已可用。

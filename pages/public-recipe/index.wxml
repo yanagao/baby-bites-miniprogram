@@ -20,6 +20,22 @@
     <view class="ingredients-panel"><view class="ingredients-heading"><text class="brush">需要准备</text><text>食材与用量</text></view><view wx:for="{{recipe.ingredients}}" wx:key="index" class="ingredient-row"><food-art name="{{item.name}}" size="48" /><text class="ingredient-name">{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view></view>
     <view class="steps-section"><view class="section-title">怎么做</view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
     <t-button wx:if="{{recipe.source}}" theme="primary" variant="text" size="small" bind:tap="openSource">参考自 {{recipe.source.authorName}}</t-button>
+    <view class="cooksnap-section">
+      <view class="cooksnap-heading"><view class="cooksnap-heading-row"><text class="section-title">这道菜，被用上了</text><t-button wx:if="{{feedbackReady}}" theme="primary" variant="text" size="small" loading="{{feedbackLoading}}" disabled="{{feedbackLoading || feedbackMore || !!deletingCooksnap}}" bind:tap="retryFeedback">刷新反馈</t-button></view><text wx:if="{{feedbackReady}}" class="cooksnap-count">{{saveCount}} 位家长保存 · {{cooksnapCount}} 条跟做</text></view>
+      <view wx:if="{{authorKnown && !authorIsSelf}}" class="cooksnap-invitation">
+        <view><view class="cooksnap-invitation-title">做过这道菜？给作者看看吧</view><view class="cooksnap-caption">一张成品照，一句做后的感受就够了。</view></view>
+        <t-button theme="primary" variant="outline" shape="round" size="small" bind:tap="openCooksnap">我做过这道菜</t-button>
+      </view>
+      <view wx:if="{{feedbackLoading}}" class="cooksnap-empty">正在读取大家的跟做…</view>
+      <view wx:elif="{{feedbackReady && !cooksnaps.length && !feedbackError}}" class="cooksnap-empty">{{feedbackOffset !== null ? '这一页暂没有可展示的跟做，可以继续查看。' : cooksnapCount ? '跟做反馈已有变化，刷新后再看看。' : authorIsSelf ? '还没有跟做反馈。有人照着做，成品照会出现在这里。' : '还没有跟做反馈。做完后，可以留下你的第一张成品照。'}}</view>
+      <view wx:for="{{cooksnaps}}" wx:key="id" class="cooksnap-card">
+        <image wx:if="{{!item.photoFailed}}" class="cooksnap-photo" src="{{item.photoURL}}" mode="aspectFill" data-id="{{item.id}}" bindtap="previewCooksnap" binderror="cooksnapPhotoError" aria-label="{{'预览' + item.author.name + '的跟做成品照'}}" />
+        <view wx:else class="cooksnap-photo cooksnap-photo-missing">成品照暂时无法显示</view>
+        <view class="cooksnap-copy"><view class="cooksnap-author">{{item.author.name}}</view><view class="cooksnap-text">{{item.text}}</view><view class="cooksnap-footer"><text>{{item.dateLabel}}</text><t-button wx:if="{{item.isSelf}}" theme="default" variant="text" size="small" disabled="{{!!deletingCooksnap}}" loading="{{deletingCooksnap === item.id}}" data-id="{{item.id}}" bind:tap="deleteCooksnap">删除我的跟做</t-button></view></view>
+      </view>
+      <view wx:if="{{feedbackError}}" class="cooksnap-error"><text>{{feedbackError}}</text><t-button theme="primary" variant="text" size="small" bind:tap="retryFeedback">重试</t-button></view>
+      <t-button wx:if="{{feedbackOffset !== null}}" block theme="default" variant="text" loading="{{feedbackMore}}" disabled="{{feedbackMore || !!deletingCooksnap}}" bind:tap="moreFeedback">查看更多跟做</t-button>
+    </view>
     <view wx:if="{{authorKnown && !authorIsSelf}}" class="copy-explanation muted">{{importedId ? '已保存到你的菜谱，可继续编辑、收藏或记录用餐，并保留原作者来源。保存副本不会自动公开。' : '保存后先留在你的食谱里，并保留原作者来源。你可以调整做法，原作者之后的修改或删除不会影响这份副本。'}}</view>
     <view class="{{authorKnown && !authorIsSelf ? 'detail-bottom-space' : 'public-detail-end'}}" />
     </view>

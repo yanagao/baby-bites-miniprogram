@@ -119,7 +119,8 @@ function fakeEnvironment(options = {}) {
         getWXContext: () => ({OPENID: openid, APPID, ENV}),
         database(options) { assert.equal(options.throwOnNotFound, false); return database; },
         openapi: {
-          security: {async msgSecCheck(args) { moderationRequests.push(clone(args)); return moderation(args); }},
+          security: {async msgSecCheck(args) { moderationRequests.push(clone(args)); return moderation(args); },
+            async imgSecCheck(args) { moderationRequests.push({image: true, contentType: args.media.contentType, bytes: args.media.value.length}); return {errCode: 0}; }},
           wxacode: {async getUnlimited(args) { codeRequests.push(clone(args)); return {buffer: PNG}; }}
         },
         async downloadFile({fileID}) {
@@ -2842,4 +2843,256 @@ test('a fresh confirmation publishes changed fields even if a snapshot reused it
   assert.equal(confirmed.recipe.id, initial.recipe.id);
   assert.deepEqual(confirmed.recipe.steps, input.data.recipes[0].steps);
   assert.deepEqual(env.table('recipes').get(initial.recipe.id).steps, input.data.recipes[0].steps);
+});
+
+function cooksnapFixture(env, openid = 'bob', path = 'cooksnap.png') {
+  // Small fixture with a PNG IHDR. Image decoding/content validity is checked by
+  // the platform moderation API; this fixture exercises our size/dimension gate.
+  const bytes = Buffer.alloc(32);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes);
+  bytes.write('IHDR', 12); bytes.writeUInt32BE(640, 16); bytes.writeUInt32BE(480, 20);
+  const photoFileID = privateFile(ownerFor(openid), 'photos/' + path);
+  env.files.set(photoFileID, bytes);
+  return photoFileID;
+}
+function savedCopy(env, openid, publicId, author = 'alice') {
+  const data = snapshot(openid);
+  data.data.recipes[0].id = 'shared-' + publicId;
+  data.data.recipes[0].source = {recipeId: publicId, profileId: profileIdFor(ownerFor(author)), authorName: '作者'};
+  data.data.logs = [];
+  env.commit(openid, data);
+  return data.data.recipes[0].id;
+}
+function cooksnapInput(env, overrides = {}) {
+  return {action: 'addCooksnap', recipeId: env.addPublished('alice'), requestId: 'cooksnap-request-1',
+    photoFileID: cooksnapFixture(env), text: '南瓜蒸软后更香，宝宝很喜欢。', ...overrides};
+}
+
+test('saving feedback verifies committed saved-copy attribution, counts only one event per saver and recipe', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice'), handler = env.handler('bob');
+  const localRecipeId = savedCopy(env, 'bob', recipeId);
+  assert.deepEqual(await handler({action: 'recordSave', recipeId, localRecipeId}), {recorded: true});
+  assert.deepEqual(await handler({action: 'recordSave', recipeId, localRecipeId}), {recorded: false});
+  assert.equal(env.table('feedback').size, 1);
+  const view = await env.handler('alice')({action: 'recipeFeedback', recipeId});
+  assert.deepEqual(view, {saveCount: 1, cooksnapCount: 0, cooksnaps: [], nextOffset: null});
+  const inbox = await env.handler('alice')({action: 'feedbackInbox', owner: ownerFor('bob')});
+  assert.equal(inbox.saveCount, 1); assert.equal(inbox.items[0].type, 'save');
+  assert.deepEqual(Object.keys(inbox.items[0]).sort(), ['id', 'type', 'recipeId', 'recipeName', 'createdAt', 'photoURL', 'text'].sort());
+  assert.ok(!JSON.stringify(inbox).includes(ownerFor('bob')));
+  assert.ok(!JSON.stringify(inbox).includes('PRIVATE'));
+  assert.deepEqual(await env.handler('bob')({action: 'feedbackInbox', owner: ownerFor('alice')}),
+    {saveCount: 0, cooksnapCount: 0, items: [], nextOffset: null});
+});
+
+test('save receipt cannot be fabricated by a view, mismatched author, local id, or deleted copy', async () => {
+  for (const variant of ['missing', 'author', 'local', 'deleted']) {
+    const env = fakeEnvironment(), recipeId = env.addPublished('alice');
+    let localRecipeId = savedCopy(env, 'bob', recipeId), data = snapshot('bob');
+    if (variant !== 'missing') {
+      data.data.recipes[0].id = localRecipeId;
+      data.data.recipes[0].source = {recipeId, profileId: profileIdFor(ownerFor(variant === 'author' ? 'charlie' : 'alice')), authorName: '作者'};
+      data.data.logs = [];
+      if (variant === 'deleted') data.deleted.recipes.push({id: localRecipeId, updatedAt: NOW});
+      if (variant === 'local') localRecipeId = 'missing';
+    }
+    env.commit('bob', data);
+    const result = await env.handler('bob')({action: 'recordSave', recipeId, localRecipeId});
+    assert.equal(result.error.code, 'FEEDBACK_NOT_SAVED', variant);
+    assert.equal(env.table('feedback').size, 0);
+  }
+});
+
+test('own recipes and built-in recipes cannot collect fabricated self-feedback', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice');
+  assert.equal((await env.handler('alice')({action: 'recordSave', recipeId, localRecipeId: 'recipe-1'})).error.code, 'SELF_FEEDBACK');
+  const photoFileID = cooksnapFixture(env, 'alice');
+  assert.equal((await env.handler('alice')({action: 'addCooksnap', recipeId, photoFileID, requestId: 'self-test-1', text: '很好吃'})).error.code, 'SELF_FEEDBACK');
+  env.table('recipes').get(recipeId).builtin = true;
+  assert.equal((await env.handler('bob')({action: 'recipeFeedback', recipeId})).error.code, 'NOT_FOUND');
+  assert.equal((await env.handler('bob')({action: 'addCooksnap', recipeId, photoFileID: cooksnapFixture(env), requestId: 'test-0001', text: '很好吃'})).error.code, 'NOT_FOUND');
+  assert.equal(env.table('feedback').size, 0);
+});
+
+test('concurrent saves are idempotent and a changed committed snapshot cannot create a receipt', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice'), localRecipeId = savedCopy(env, 'bob', recipeId);
+  const input = {action: 'recordSave', recipeId, localRecipeId};
+  const both = await Promise.all([env.handler('bob')(input), env.handler('bob')(input)]);
+  assert.deepEqual(both.map(item => item.recorded).sort(), [false, true]);
+  const race = fakeEnvironment(), raceId = race.addPublished('alice'), saved = savedCopy(race, 'bob', raceId);
+  const handler = race.handler('bob', {async downloadFile({fileID}) {
+    const content = race.files.get(fileID); race.commit('bob'); return {statusCode: 200, fileContent: content};
+  }});
+  assert.equal((await handler({action: 'recordSave', recipeId: raceId, localRecipeId: saved})).error.code, 'SYNC_REQUIRED');
+  assert.equal(race.table('feedback').size, 0);
+});
+
+test('cooksnap publishes only the photo and short feedback, using a default author without profile completion', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env);
+  const result = await env.handler('bob')(input);
+  assert.ok(result.cooksnap, JSON.stringify(result));
+  assert.equal(result.cooksnap.isSelf, true); assert.equal(result.cooksnap.text, input.text);
+  assert.match(result.cooksnap.author.name, /^小.+\d{4}$/);
+  assert.equal(env.table('profiles').has(profileIdFor(ownerFor('bob'))), false);
+  assert.equal(env.uploads.length, 1);
+  assert.match(env.uploads[0].cloudPath, /^social\/[a-f0-9]{32}\/cooksnaps\/[a-f0-9]{64}\//);
+  assert.deepEqual(env.moderationRequests[0], {openid: 'bob', version: 2, scene: 2, content: input.text});
+  assert.deepEqual(env.moderationRequests[1], {image: true, contentType: 'image/png', bytes: 32});
+  const view = await env.handler('charlie')({action: 'recipeFeedback', recipeId: input.recipeId});
+  assert.equal(view.cooksnapCount, 1); assert.equal(view.cooksnaps[0].isSelf, false);
+  assert.deepEqual(Object.keys(view.cooksnaps[0]).sort(), ['id','recipeId','author','photoURL','text','createdAt','isSelf'].sort());
+  assert.deepEqual(Object.keys(view.cooksnaps[0].author).sort(), ['id', 'name']);
+  assert.ok(!JSON.stringify(view).includes(ownerFor('bob')));
+  const inbox = await env.handler('alice')({action: 'feedbackInbox'});
+  assert.equal(inbox.cooksnapCount, 1); assert.equal(inbox.items[0].type, 'cooksnap');
+  assert.equal(inbox.items[0].actorName, result.cooksnap.author.name);
+});
+
+test('cooksnap successful retry with the same photo bytes is idempotent across private re-uploads', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), handler = env.handler('bob');
+  const first = await handler(input);
+  const second = await handler({...input, photoFileID: cooksnapFixture(env, 'bob', 'retry.png')});
+  assert.deepEqual(second, first); assert.equal(env.table('feedback').size, 1); assert.equal(env.uploads.length, 1);
+  assert.equal(env.moderationRequests.length, 2);
+  assert.equal((await handler({...input, text: '换个做法'})).error.code, 'CONFLICT');
+  assert.equal(env.uploads.length, 1);
+});
+
+test('concurrent cooksnap submissions converge to one event and delete only their unused copied photo', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), deleted = [];
+  const overrides = {async deleteFile({fileList}) { deleted.push(...fileList); }};
+  const result = await Promise.all([env.handler('bob', overrides)(input), env.handler('bob', overrides)(input)]);
+  assert.ok(result.every(item => item.cooksnap), JSON.stringify(result));
+  assert.equal(result[0].cooksnap.id, result[1].cooksnap.id); assert.equal(env.table('feedback').size, 1);
+  const stored = Array.from(env.table('feedback').values())[0];
+  assert.equal(deleted.includes(stored.photoFileID), false);
+  assert.equal(deleted.length, env.uploads.length - 1);
+});
+
+test('cooksnap rejects invalid short text, request IDs, other-account/env photos and malformed image bytes', async () => {
+  const cases = [{text: ''}, {text: 'x'.repeat(121)}, {text: 'a\nb'}, {requestId: 'tiny'},
+    {photoFileID: privateFile(ownerFor('charlie'), 'photos/fake.png')},
+    {photoFileID: 'cloud://other.bucket/users/' + ownerFor('bob') + '/photos/fake.png'}];
+  for (const patch of cases) {
+    const env = fakeEnvironment(), result = await env.handler('bob')(cooksnapInput(env, patch));
+    assert.ok(result.error, JSON.stringify(patch)); assert.equal(env.uploads.length, 0); assert.equal(env.table('feedback').size, 0);
+  }
+  for (const bytes of [Buffer.from('not an image'), Buffer.alloc(1024 * 1024 + 1), JPG]) {
+    const env = fakeEnvironment(), input = cooksnapInput(env); env.files.set(input.photoFileID, bytes);
+    assert.equal((await env.handler('bob')(input)).error.code, 'INVALID_COOKSNAP_PHOTO');
+    assert.equal(env.uploads.length, 0);
+  }
+  const env = fakeEnvironment(), input = cooksnapInput(env); env.files.get(input.photoFileID).writeUInt32BE(751, 16);
+  assert.equal((await env.handler('bob')(input)).error.code, 'INVALID_COOKSNAP_PHOTO');
+});
+
+for (const verdict of ['review', 'risky', undefined]) test('cooksnap text moderation does not publish verdict ' + verdict, async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env);
+  env.setModeration(async () => ({errCode: 0, result: {suggest: verdict}}));
+  const result = await env.handler('bob')(input);
+  assert.equal(result.error.code, verdict ? 'COOKSNAP_TEXT_REJECTED' : 'COOKSNAP_MODERATION_UNAVAILABLE');
+  assert.equal(env.uploads.length, 0); assert.equal(env.table('feedback').size, 0);
+});
+
+for (const response of [{errCode: 87014}, {}, {errcode: 500}]) test('cooksnap image moderation requires explicit success ' + JSON.stringify(response), async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env);
+  const result = await env.handler('bob', {openapi: {security: {
+    async msgSecCheck() { return {errCode: 0, result: {suggest: 'pass'}}; }, async imgSecCheck() { return response; }
+  }}})(input);
+  assert.equal(result.error.code, response.errCode === 87014 ? 'COOKSNAP_PHOTO_REJECTED' : 'COOKSNAP_MODERATION_UNAVAILABLE');
+  assert.equal(env.uploads.length, 0); assert.equal(env.table('feedback').size, 0);
+});
+
+test('cooksnap unavailable moderation and thrown risky-image codes do not publish', async () => {
+  for (const risky of [false, true]) {
+    const env = fakeEnvironment(), input = cooksnapInput(env);
+    const result = await env.handler('bob', {openapi: {security: {
+      async msgSecCheck() { return {errCode: 0, result: {suggest: 'pass'}}; },
+      async imgSecCheck() { if (risky) throw {errcode: 87014}; throw Error('secret moderation detail'); }
+    }}})(input);
+    assert.equal(result.error.code, risky ? 'COOKSNAP_PHOTO_REJECTED' : 'COOKSNAP_MODERATION_UNAVAILABLE');
+    assert.ok(!JSON.stringify(result).includes('secret')); assert.equal(env.uploads.length, 0);
+  }
+});
+
+test('only the cooksnap author can delete, deletion is idempotent and old submission cannot revive it', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), handler = env.handler('bob');
+  const {cooksnap} = await handler(input);
+  for (const actor of ['alice', 'charlie']) assert.equal((await env.handler(actor)({action: 'deleteCooksnap', id: cooksnap.id})).error.code, 'NOT_FOUND');
+  assert.deepEqual(await handler({action: 'deleteCooksnap', id: cooksnap.id}), {deleted: true});
+  assert.deepEqual(await handler({action: 'deleteCooksnap', id: cooksnap.id}), {deleted: true});
+  const feedback = await env.handler('alice')({action: 'recipeFeedback', recipeId: input.recipeId});
+  assert.equal(feedback.cooksnapCount, 0); assert.deepEqual(feedback.cooksnaps, []);
+  assert.equal((await handler(input)).error.code, 'CONFLICT');
+  assert.equal(env.table('feedback').size, 1);
+});
+
+test('withdrawn or newly built-in source hides both save and cooksnap feedback and does not allow new submissions', async () => {
+  for (const field of ['published', 'builtin']) {
+    const env = fakeEnvironment(), input = cooksnapInput(env);
+    await env.handler('bob')(input);
+    await env.handler('charlie')({action: 'recordSave', recipeId: input.recipeId, localRecipeId: savedCopy(env, 'charlie', input.recipeId)});
+    env.table('recipes').get(input.recipeId)[field] = field === 'builtin';
+    assert.equal((await env.handler('bob')({action: 'recipeFeedback', recipeId: input.recipeId})).error.code, 'NOT_FOUND');
+    assert.equal((await env.handler('bob')({...input, requestId: 'new-request-2'})).error.code, 'NOT_FOUND');
+    assert.deepEqual(await env.handler('alice')({action: 'feedbackInbox'}), {saveCount: 0, cooksnapCount: 0, items: [], nextOffset: null});
+  }
+});
+
+test('recipe withdrawal while image is copied aborts the new cooksnap and cleans only the new copy', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), deleted = [];
+  const handler = env.handler('bob', {
+    async uploadFile({cloudPath, fileContent}) {
+      const fileID = cloudFile(cloudPath); env.files.set(fileID, fileContent); env.table('recipes').get(input.recipeId).published = false;
+      return {fileID};
+    }, async deleteFile({fileList}) { deleted.push(...fileList); }
+  });
+  assert.equal((await handler(input)).error.code, 'NOT_FOUND');
+  assert.equal(env.table('feedback').size, 0); assert.equal(deleted.length, 1);
+  assert.notEqual(deleted[0], input.photoFileID);
+});
+
+test('deletion while preparing signed URLs never returns the deleted cooksnap', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env); await env.handler('bob')(input);
+  const handler = env.handler('alice', {async getTempFileURL({fileList}) {
+    Array.from(env.table('feedback').values()).forEach(item => { item.active = false; });
+    return {fileList: fileList.map(item => ({fileID: item.fileID, tempFileURL: 'https://signed.example/photo.png', status: 0}))};
+  }});
+  const result = await handler({action: 'recipeFeedback', recipeId: input.recipeId});
+  assert.deepEqual(result.cooksnaps, []);
+});
+
+test('feedback pages advance bounded offsets and inbox never reveals another author feedback', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), handler = env.handler('bob');
+  for (let i = 0; i < 23; i++) await handler({...input, requestId: 'page-test-' + String(i).padStart(3, '0')});
+  const first = await env.handler('alice')({action: 'recipeFeedback', recipeId: input.recipeId});
+  const second = await env.handler('alice')({action: 'recipeFeedback', recipeId: input.recipeId, offset: first.nextOffset});
+  assert.equal(first.cooksnapCount, 23); assert.equal(first.cooksnaps.length, 20); assert.equal(first.nextOffset, 20);
+  assert.equal(second.cooksnaps.length, 3); assert.equal(second.nextOffset, null);
+  assert.equal(new Set(first.cooksnaps.concat(second.cooksnaps).map(item => item.id)).size, 23);
+  const inbox = await env.handler('alice')({action: 'feedbackInbox'});
+  assert.equal(inbox.items.length, 20); assert.equal(inbox.nextOffset, 20); assert.equal(inbox.cooksnapCount, 23);
+  const other = env.addPublished('charlie');
+  await handler({...input, recipeId: other, requestId: 'charlie-recipe-1'});
+  const own = await env.handler('alice')({action: 'feedbackInbox', authorOwner: ownerFor('charlie')});
+  assert.equal(own.cooksnapCount, 23); assert.ok(own.items.every(item => item.recipeId === input.recipeId));
+  for (const offset of [-1, 0.1, 1001, '20']) {
+    assert.equal((await env.handler('alice')({action: 'recipeFeedback', recipeId: input.recipeId, offset})).error.code, 'INVALID_REQUEST');
+    assert.equal((await env.handler('alice')({action: 'feedbackInbox', offset})).error.code, 'INVALID_REQUEST');
+  }
+});
+
+test('cooksnap deletion cleans only its public copy after the tombstone and retries failed cleanup safely', async () => {
+  const env = fakeEnvironment(), input = cooksnapInput(env), created = await env.handler('bob')(input);
+  const id = created.cooksnap.id, deletes = [], photo = env.table('feedback').get(id).photoFileID;
+  const handler = env.handler('bob', {async deleteFile({fileList}) {
+    assert.equal(env.table('feedback').get(id).active, false);
+    deletes.push(...fileList);
+    if (deletes.length === 1) throw Error('temporary storage failure');
+  }});
+  assert.deepEqual(await handler({action: 'deleteCooksnap', id}), {deleted: true});
+  assert.deepEqual(await handler({action: 'deleteCooksnap', id}), {deleted: true});
+  assert.deepEqual(deletes, [photo, photo]);
+  assert.equal(deletes.includes(input.photoFileID), false);
+  assert.equal((await handler(input)).error.code, 'CONFLICT');
 });

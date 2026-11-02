@@ -1,0 +1,21 @@
+{
+  "collection": "baby_bites_recipe_feedback",
+  "permissions": {"read": false, "write": false},
+  "indexes": [
+    {
+      "name": "recipe_feedback_page",
+      "unique": false,
+      "keys": {"recipeId": 1, "active": 1, "type": 1, "createdAt": -1, "_id": 1}
+    },
+    {
+      "name": "author_feedback_page",
+      "unique": false,
+      "keys": {"authorOwner": 1, "active": 1, "createdAt": -1, "_id": 1}
+    },
+    {
+      "name": "author_recipe_feedback_counts",
+      "unique": false,
+      "keys": {"authorOwner": 1, "active": 1, "recipeId": 1, "type": 1}
+    }
+  ]
+}

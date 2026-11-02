@@ -19,7 +19,7 @@ const publicRecipe = () => ({id: PUBLIC_ID, profileId: PROFILE_ID, authorName: '
   category: '粥饭主食', texture: '软烂颗粒', minutes: 20, ingredients: [{name: '南瓜', amount: '20 克'}],
   steps: ['切碎蒸熟。'], imageKey: 'pumpkin', photoURL: '', updatedAt: 100, publishedAt: 100});
 function setup(options = {}) {
-  const storage = new Map();
+  const storage = options.storage || new Map();
   const files = new Map();
   const calls = [];
   const hooks = {};
@@ -52,6 +52,18 @@ function setup(options = {}) {
     setStorageSync(key, value) { if (hooks.storage) hooks.storage(key); storage.set(key, copy(value)); },
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
     getFileSystemManager() { return manager; },
+    getImageInfo(args) { dispatch(args, async () => {
+      calls.push({action: 'imageInfo', src: args.src});
+      if (hooks.imageInfo) return hooks.imageInfo(args);
+      return {width: 640, height: 480};
+    }); },
+    compressImage(args) { dispatch(args, async () => {
+      calls.push({action: 'compress', width: args.compressedWidth, height: args.compressedHeight});
+      if (hooks.compress) return hooks.compress(args);
+      const tempFilePath = 'wxfile://tmp/compressed-photo';
+      files.set(tempFilePath, PNG);
+      return {tempFilePath};
+    }); },
     downloadFile(args) { dispatch(args, async () => {
       calls.push({action: 'download', url: args.url});
       if (hooks.download) await hooks.download();
@@ -59,7 +71,11 @@ function setup(options = {}) {
       files.set(tempFilePath, PNG);
       return {tempFilePath, statusCode: 200};
     }); },
-    cloud: {init() {}, callFunction(args) { dispatch(args, async () => {
+    cloud: {init() {}, uploadFile(args) { dispatch(args, async () => {
+      calls.push({action: 'upload', cloudPath: args.cloudPath, filePath: args.filePath});
+      if (hooks.upload) return hooks.upload(args);
+      return {fileID: 'cloud://social-test.bucket/' + args.cloudPath};
+    }); }, callFunction(args) { dispatch(args, async () => {
       calls.push(copy(args.data));
       if (args.data.action === 'identity') {
         if (hooks.identity) return {result: await hooks.identity()};
@@ -900,4 +916,257 @@ test('stable shared IDs from a synced second device prevent importing another co
   const count = second.store.getState().recipes.length;
   assert.equal(second.store.addPublicRecipe(publicRecipe(), OWNER).added, false);
   assert.equal(second.store.getState().recipes.length, count);
+});
+
+const COOKSNAP_ID = 'f'.repeat(64);
+const cooksnapView = () => ({id: COOKSNAP_ID, recipeId: PUBLIC_ID, author: {id: PROFILE_ID, name: '小南瓜'},
+  photoURL: 'https://storage.example/cooksnap?sign=123', text: '蒸得很软，宝宝喜欢。', createdAt: 1234, isSelf: true});
+const feedbackResult = () => ({saveCount: 2, cooksnapCount: 1, cooksnaps: [cooksnapView()], nextOffset: null});
+const cooksnapInput = () => ({photoPath: 'wxfile://tmp/my-dish', text: '蒸得很软，宝宝喜欢。', requestId: 'cooksnap-request-1234'});
+const flushTasks = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+test('feedback reads cache and coalesce while stripping all nonpublic response fields', async () => {
+  const app = setup();
+  app.hooks.request = () => {
+    const result = feedbackResult();
+    Object.assign(result.cooksnaps[0], {owner: OWNER, babyBirthDate: '2025-01-01', privatePhoto: 'cloud://secret'});
+    result.cooksnaps[0].author.babyName = '宝宝';
+    return result;
+  };
+  const [a, b] = await Promise.all([app.social.getRecipeFeedback(PUBLIC_ID), app.social.getRecipeFeedback(PUBLIC_ID)]);
+  assert.deepEqual(copy(a), feedbackResult());
+  a.cooksnaps[0].text = 'local edit';
+  assert.equal(b.cooksnaps[0].text, cooksnapView().text);
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  assert.equal(app.calls.filter(item => item.action === 'recipeFeedback').length, 1);
+  await app.social.getRecipeFeedback(PUBLIC_ID, 0, {force: true});
+  assert.equal(app.calls.filter(item => item.action === 'recipeFeedback').length, 2);
+});
+
+test('feedback rejects malformed photos, wrong recipes and nonadvancing pagination', async () => {
+  for (const change of [r => { r.cooksnaps[0].photoURL = 'http://secret'; }, r => { r.cooksnaps[0].recipeId = OTHER; },
+    r => { r.saveCount = -1; }, r => { r.nextOffset = 0; }, r => { r.cooksnaps[0].isSelf = 'yes'; }]) {
+    const app = setup();
+    app.hooks.request = () => { const r = feedbackResult(); change(r); return r; };
+    await assert.rejects(app.social.getRecipeFeedback(PUBLIC_ID), error => error.code === 'INVALID_FEEDBACK');
+  }
+});
+
+test('author inbox keeps saves anonymous and exposes only the public cooksnap fields', async () => {
+  const app = setup();
+  app.hooks.request = () => ({saveCount: 1, cooksnapCount: 1, nextOffset: null, items: [
+    {id: COOKSNAP_ID, type: 'save', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 100, actorName: 'must not leak', owner: OTHER, photoURL: 'private', text: 'private'},
+    {id: PUBLIC_ID, type: 'cooksnap', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 200, actorName: '家长', photoURL: cooksnapView().photoURL, text: '做成了', owner: OWNER}
+  ]});
+  const result = await app.social.getFeedbackInbox();
+  assert.deepEqual(copy(result.items[0]), {id: COOKSNAP_ID, type: 'save', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 100, photoURL: '', text: ''});
+  assert.equal(Object.hasOwn(result.items[1], 'owner'), false);
+  assert.equal(result.items[1].actorName, '家长');
+});
+
+test('cooksnap submission coalesces taps, uploads an owned image, and strips extra response data', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  app.hooks.request = () => ({cooksnap: {...cooksnapView(), owner: OWNER}});
+  const first = app.social.addCooksnap(PUBLIC_ID, input);
+  assert.equal(app.social.addCooksnap(PUBLIC_ID, input), first);
+  assert.deepEqual(copy(await first), {cooksnap: cooksnapView()});
+  const upload = app.calls.find(item => item.action === 'upload');
+  assert.match(upload.cloudPath, new RegExp('^users/' + OWNER + '/photos/cooksnap-.*\\.png$'));
+  const request = app.calls.find(item => item.action === 'addCooksnap');
+  assert.equal(request.photoFileID, 'cloud://social-test.bucket/' + upload.cloudPath);
+  assert.equal(request.expectedOwner, OWNER);
+  assert.equal(app.calls.filter(item => item.action === 'upload').length, 1);
+  assert.equal(app.files.has(input.photoPath), true);
+});
+
+test('a lost cooksnap response retries the same upload and request without deleting cloud files', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  let first = true;
+  app.hooks.request = () => { if (first) { first = false; throw Error('response lost'); } return {cooksnap: cooksnapView()}; };
+  await assert.rejects(app.social.addCooksnap(PUBLIC_ID, input), error => error.code === 'NETWORK');
+  await app.social.addCooksnap(PUBLIC_ID, input);
+  const requests = app.calls.filter(item => item.action === 'addCooksnap');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].requestId, requests[1].requestId);
+  assert.equal(requests[0].photoFileID, requests[1].photoFileID);
+  assert.equal(app.calls.filter(item => item.action === 'upload').length, 1);
+  assert.throws(() => app.social.addCooksnap(PUBLIC_ID, {...input, text: 'changed'}), error => error.code === 'CONFLICT');
+});
+
+test('large cooksnap input is resized before upload and compressed temporary files are reclaimed', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, Buffer.alloc(2 * 1024 * 1024));
+  app.hooks.imageInfo = args => args.src === input.photoPath ? {width: 3000, height: 2000} : {width: 750, height: 500};
+  app.hooks.request = () => ({cooksnap: cooksnapView()});
+  await app.social.addCooksnap(PUBLIC_ID, input);
+  assert.deepEqual(app.calls.find(item => item.action === 'compress'), {action: 'compress', width: 750, height: 500});
+  assert.equal(app.files.has('wxfile://tmp/compressed-photo'), false);
+  assert.equal(app.files.has(input.photoPath), true);
+});
+
+test('old clients that ignore resize dimensions cannot upload an oversized cooksnap', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  app.hooks.imageInfo = () => ({width: 3000, height: 2000});
+  await assert.rejects(app.social.addCooksnap(PUBLIC_ID, input), error => error.code === 'INVALID_COOKSNAP_PHOTO');
+  assert.equal(app.calls.some(item => item.action === 'upload' || item.action === 'addCooksnap'), false);
+  assert.equal(app.files.has('wxfile://tmp/compressed-photo'), false);
+});
+
+test('cooksnap rejects unsupported bytes, oversized originals, mismatched upload ownership and malformed success', async () => {
+  for (const mode of ['bytes', 'size', 'owner', 'result']) {
+    const app = setup();
+    const input = cooksnapInput();
+    app.files.set(input.photoPath, mode === 'bytes' ? Buffer.from('not-an-image') : PNG);
+    if (mode === 'size') app.hooks.size = 11 * 1024 * 1024;
+    if (mode === 'owner') app.hooks.upload = args => ({fileID: 'cloud://wrong-env.bucket/' + args.cloudPath});
+    if (mode === 'result') app.hooks.request = () => ({cooksnap: {...cooksnapView(), recipeId: OTHER}});
+    await assert.rejects(app.social.addCooksnap(PUBLIC_ID, input));
+    if (mode !== 'result') assert.equal(app.calls.some(item => item.action === 'addCooksnap'), false);
+  }
+});
+
+test('account switches during photo work cannot publish a cooksnap into another session', async () => {
+  for (const phase of ['info', 'imageInfo', 'read', 'upload']) {
+    const app = setup();
+    const input = cooksnapInput();
+    app.files.set(input.photoPath, PNG);
+    app.hooks[phase] = () => { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); return {width: 640, height: 480}; };
+    await assert.rejects(app.social.addCooksnap(PUBLIC_ID, input), error => error.code === 'ACCOUNT_CHANGED');
+    assert.equal(app.calls.some(item => item.action === 'addCooksnap'), false);
+  }
+});
+
+test('cooksnap input is snapshotted before asynchronous identity checks', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  app.hooks.request = () => ({cooksnap: cooksnapView()});
+  const work = app.social.addCooksnap(PUBLIC_ID, input);
+  input.text = 'not approved'; input.requestId = 'another-request';
+  await work;
+  const request = app.calls.find(item => item.action === 'addCooksnap');
+  assert.equal(request.text, cooksnapInput().text);
+  assert.equal(request.requestId, cooksnapInput().requestId);
+});
+
+test('deleting a cooksnap validates success and invalidates cached feedback', async () => {
+  const app = setup();
+  app.hooks.request = args => args.data.action === 'deleteCooksnap' ? {deleted: true} : feedbackResult();
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  assert.deepEqual(copy(await app.social.deleteCooksnap(COOKSNAP_ID)), {deleted: true});
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  assert.equal(app.calls.filter(item => item.action === 'recipeFeedback').length, 2);
+});
+
+test('local cookbook save succeeds immediately while an offline receipt remains for the next successful sync', async () => {
+  const app = setup();
+  app.hooks.request = args => args.data.action === 'recordSave' ? Promise.reject(Error('offline')) : undefined;
+  const result = await app.social.addToCookbook(PUBLIC_ID);
+  assert.equal(result.added, true);
+  await flushTasks();
+  const key = 'baby-bites-save-receipts:' + OWNER;
+  assert.deepEqual(app.storage.get(key), [{recipeId: PUBLIC_ID, localRecipeId: result.recipeId}]);
+  assert.ok(app.store.getRecipe(result.recipeId));
+  app.hooks.request = args => args.data.action === 'recordSave' ? {recorded: true} : undefined;
+  app.emitSync({state: 'synced', owner: OWNER, identityInvalid: false, identityCheckedAt: app.now()});
+  await flushTasks();
+  assert.deepEqual(app.storage.get(key), []);
+});
+
+test('persisted pending save receipts resume after restarting the client', async () => {
+  const first = setup();
+  await first.social.addToCookbook(PUBLIC_ID);
+  await flushTasks();
+  const next = setup({storage: first.storage});
+  next.hooks.request = args => args.data.action === 'recordSave' ? {recorded: false} : undefined;
+  next.emitSync({state: 'synced', owner: OWNER, identityInvalid: false, identityCheckedAt: next.now()});
+  await flushTasks();
+  assert.equal(next.calls.filter(item => item.action === 'recordSave').length, 1);
+  assert.deepEqual(next.storage.get('baby-bites-save-receipts:' + OWNER), []);
+});
+
+test('saved feedback never publishes before snapshot sync completes or follows account switches', async () => {
+  const app = setup();
+  let release;
+  app.hooks.request = args => {
+    if (args.data.action === 'recipe') app.hooks.sync = () => new Promise(resolve => { release = resolve; });
+    return undefined;
+  };
+  const result = await app.social.addToCookbook(PUBLIC_ID);
+  await flushTasks();
+  assert.ok(app.store.getRecipe(result.recipeId));
+  assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
+  app.store.bindAccount(OTHER);
+  release();
+  await flushTasks();
+  assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
+  assert.equal(app.storage.get('baby-bites-save-receipts:' + OWNER).length, 1);
+});
+
+test('deleted local copies and unavailable originals retire obsolete receipts without fake feedback', async () => {
+  for (const removedOriginal of [false, true]) {
+    const app = setup();
+    await app.social.addToCookbook(PUBLIC_ID);
+    await flushTasks();
+    if (!removedOriginal) app.store.deleteRecipe('shared-' + PUBLIC_ID);
+    const before = app.calls.filter(item => item.action === 'recordSave').length;
+    app.hooks.request = args => args.data.action === 'recordSave' ? {error: {code: 'NOT_FOUND'}} : undefined;
+    app.emitSync({state: 'synced', owner: OWNER, identityInvalid: false, identityCheckedAt: app.now()});
+    await flushTasks();
+    assert.deepEqual(app.storage.get('baby-bites-save-receipts:' + OWNER), []);
+    assert.equal(app.calls.filter(item => item.action === 'recordSave').length - before, removedOriginal ? 1 : 0);
+  }
+});
+
+test('receipt storage quota failure does not roll back a successfully saved recipe', async () => {
+  const app = setup();
+  app.hooks.storage = key => { if (key.startsWith('baby-bites-save-receipts:')) throw Error('quota'); };
+  app.hooks.request = args => args.data.action === 'recordSave' ? {recorded: true} : undefined;
+  const result = await app.social.addToCookbook(PUBLIC_ID);
+  await flushTasks();
+  assert.equal(result.added, true);
+  assert.ok(app.store.getRecipe(result.recipeId));
+  assert.equal(app.calls.filter(item => item.action === 'recordSave').length, 1);
+});
+
+test('cooksnap validates required photo, sentence and idempotency key before any request', () => {
+  const app = setup();
+  for (const patch of [{photoPath: ''}, {text: ''}, {text: 'x'.repeat(121)}, {text: 'hidden\u0000text'}, {requestId: '../bad'}]) {
+    assert.throws(() => app.social.addCooksnap(PUBLIC_ID, {...cooksnapInput(), ...patch}), error => error.code === 'INVALID_COOKSNAP');
+  }
+  assert.deepEqual(app.calls, []);
+});
+
+test('an account switch while compression returns still cleans its temporary photo', async () => {
+  const app = setup();
+  const input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  app.hooks.imageInfo = () => ({width: 2000, height: 1000});
+  app.hooks.compress = () => {
+    const tempFilePath = 'wxfile://tmp/compress-late';
+    app.files.set(tempFilePath, PNG);
+    app.store.bindAccount(OTHER); app.store.bindAccount(OWNER);
+    return {tempFilePath};
+  };
+  await assert.rejects(app.social.addCooksnap(PUBLIC_ID, input), error => error.code === 'ACCOUNT_CHANGED');
+  assert.equal(app.files.has('wxfile://tmp/compress-late'), false);
+  assert.equal(app.files.has(input.photoPath), true);
+  assert.equal(app.calls.some(item => item.action === 'upload'), false);
+});
+
+test('a save receipt is never queued when the local cookbook write fails', async () => {
+  const app = setup();
+  app.hooks.request = args => { if (args.data.action === 'recipe') app.hooks.storage = () => { throw Error('disk full'); }; return undefined; };
+  await assert.rejects(app.social.addToCookbook(PUBLIC_ID));
+  await flushTasks();
+  assert.equal(app.social.findImportedRecipe(PUBLIC_ID), null);
+  assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
+  assert.equal(app.storage.has('baby-bites-save-receipts:' + OWNER), false);
 });
