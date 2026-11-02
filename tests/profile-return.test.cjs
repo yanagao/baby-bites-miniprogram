@@ -111,7 +111,7 @@ test('empty nickname and failed save stay in the setup form and a later explicit
   assert.equal(page.data.editing, true); assert.equal(page.data.saving, false);
   assert.equal(page.returnAfterSave, true);
   assert.deepEqual(calls.events, []); assert.deepEqual(calls.backs, []);
-  assert.deepEqual(calls.errors, ['请填写公开昵称', '暂时离线']);
+  assert.deepEqual(calls.errors, ['请填写昵称', '暂时离线']);
   await page.save();
   assert.deepEqual(calls.events, [['profileSaved']]); assert.deepEqual(calls.backs, [1]);
   assert.equal(calls.publishes, 0);

@@ -38,7 +38,7 @@ Page({
       this.refreshAllergies();
       if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
       await this.refreshAuthorRelationship(request, options);
-    } catch (error) { if (account.check(this) && request === this.request) this.setData({loading: false, recipe: null, author: null, importedId: '', error: error.message || '这道菜谱暂时无法查看，可能已取消公开'}); }
+    } catch (error) { if (account.check(this) && request === this.request) this.setData({loading: false, recipe: null, author: null, importedId: '', error: error.message || '这道菜谱暂时无法查看，可能已被删除'}); }
   },
   async refreshAuthorRelationship(pageRequest, options) {
     if (!account.check(this) || this.data.loading || this.data.error || this.data.followBusy || !this.data.author) return;

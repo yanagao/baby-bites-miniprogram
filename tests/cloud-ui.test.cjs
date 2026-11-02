@@ -72,6 +72,7 @@ function setup(options = {}) {
         if (dependency === '../../config/cloud') return {socialEnabled: true};
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};
         if (dependency === '../../utils/selectors') return selectors;
+        if (dependency === '../../utils/recipe-origin') return require('../utils/recipe-origin');
         if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/tab-bar') return {syncTabBar() {}};
         if (dependency === '../../utils/backup') return backup;

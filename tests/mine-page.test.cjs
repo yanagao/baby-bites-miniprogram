@@ -43,12 +43,12 @@ test('mine is the own profile with a local cookbook, authoritative relationship 
   assert.equal(page.data.isTab, true); assert.equal(page.data.isSelf, true);
   assert.equal(page.data.recipeCount, 2); assert.equal(page.data.favoriteCount, 1); assert.equal(page.data.logCount, 1);
   assert.equal(page.data.followingCount, 5); assert.equal(page.data.followerCount, 6); assert.equal(calls.profiles, 0); assert.equal(calls.syncs, 2);
-  assert.deepEqual(page.data.recipes.map(r => r.visibility), ['public', 'private']);
+  assert.ok(page.data.recipes.every(r => !Object.hasOwn(r, 'visibility')));
 });
 
-test('content and visibility tabs filter in place; own recipes and logs open local editors', async () => {
+test('content tabs filter in place; own recipes and logs open local editors', async () => {
   const {page, calls} = setup(); await page.load();
-  page.changeVisibility(tap('private')); assert.deepEqual(page.data.recipes.map(r => r.id), ['2']);
+  assert.equal(page.changeVisibility, undefined); assert.deepEqual(page.data.recipes.map(r => r.id), ['1', '2']);
   page.openRecipe({detail: {id: '2'}});
   page.changeContentTab(tap('favorites')); assert.deepEqual(page.data.recipes.map(r => r.id), ['1']);
   page.changeContentTab(tap('records')); assert.equal(page.data.recipes.length, 0); assert.equal(page.data.logs[0].note, 'PRIVATE NOTE');
@@ -56,7 +56,7 @@ test('content and visibility tabs filter in place; own recipes and logs open loc
   page.openFollowers(); page.openFollowing(); page.openSettings(); page.openRecords();
   assert.deepEqual(calls.routes, ['/pages/detail/index?id=2', '/pages/record-editor/index?logId=log', '/pages/following/index?tab=followers', '/pages/following/index?tab=people', '/pages/settings/index']);
   assert.deepEqual(calls.tabs, ['/pages/records/index']);
-  page.changeContentTab(tap('recipes')); assert.deepEqual(page.data.recipes.map(r => r.id), ['2']);
+  page.changeContentTab(tap('recipes')); assert.deepEqual(page.data.recipes.map(r => r.id), ['1', '2']);
 });
 
 test('profile editing and sharing happen on the mine page without another route', async () => {
@@ -128,12 +128,12 @@ test('a nonexistent visitor profile remains unavailable instead of falling back 
   assert.equal(fixture.page.onShareAppMessage().path, '/pages/home/index');
 });
 
-test('failed public reads retain the local cookbook with unknown visibility and cannot mislabel it private', async () => {
+test('failed profile reads retain the complete local cookbook', async () => {
   let reads = 0;
   const {page} = setup({social: {getMine: async () => { if (++reads === 1) throw Error('暂时离线'); return {profile, published: []}; }}});
   await page.load(); assert.equal(page.data.error, ''); assert.equal(page.data.publicationError, '暂时离线');
-  assert.equal(page.data.recipes.length, 2); assert.ok(page.data.recipes.every(r => r.visibility === 'unknown'));
-  page.changeVisibility(tap('private')); assert.equal(page.data.recipes.length, 0);
+  assert.equal(page.data.recipes.length, 2); assert.ok(page.data.recipes.every(r => !Object.hasOwn(r, 'visibility')));
+  assert.equal(page.data.recipes.length, 2);
   await page.reload(); assert.equal(page.data.publicationError, ''); assert.equal(page.data.recipes.length, 2);
 });
 
@@ -166,12 +166,12 @@ test('backend account mismatches clear private content and disabled social still
   await local.page.requestShare(); assert.equal(local.calls.codes.length, 0);
 });
 
-test('malformed public-state responses stay unknown and cannot turn existing recipes into private ones', async () => {
+test('malformed publication metadata cannot hide local recipes', async () => {
   for (const published of [undefined, null, {}, [{id:'not-a-source-id'}]]) {
     const {page} = setup({social:{getMine: async () => ({profile, published})}});
     await page.load(); assert.equal(page.data.publicationReady, false);
-    assert.ok(page.data.recipes.every(r => r.visibility === 'unknown'));
-    page.changeVisibility(tap('private')); assert.equal(page.data.recipes.length, 0); assert.equal(page.data.privateCount, 0);
+    assert.ok(page.data.recipes.every(r => !Object.hasOwn(r, 'visibility')));
+    assert.equal(page.data.recipes.length, 2); assert.equal(page.changeVisibility, undefined);
   }
 });
 

@@ -5,6 +5,7 @@ const selectors = require('./selectors');
 const {normalizeCategory} = require('./categories');
 const {normalizeAgeGroups} = require('./recipe-ages');
 const {normalizeAllergies} = require('./allergies');
+const {isBuiltInRecipe} = require('./recipe-origin');
 const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
@@ -360,7 +361,7 @@ function saveRecipe(input, initialRating) {
     imageKey: input.imageKey == null ? (existing ? existing.imageKey : '') : input.imageKey,
     ageGroups: input.ageGroups === undefined ? (existing ? existing.ageGroups : undefined) : input.ageGroups,
     favorite: existing ? existing.favorite : Boolean(input.favorite),
-    isExample: false,
+    isExample: isBuiltInRecipe(existing),
     createdAt: existing ? existing.createdAt : Date.now(), updatedAt: timestamp(existing && existing.updatedAt)
   });
   commit(next => {
@@ -384,7 +385,7 @@ function deleteRecipe(recipeId) {
 function addPublicRecipe(input, expectedOwner) {
   init();
   if (!validOwner(expectedOwner) || owner !== expectedOwner) fail('微信账号已切换，请重新打开这道菜谱。');
-  if (!isObject(input) || typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id)) fail('这道公开菜谱的信息不完整。');
+  if (!isObject(input) || typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id)) fail('这道菜谱的信息不完整。');
   const recipeId = 'shared-' + input.id;
   if (getRecipe(recipeId)) return {recipeId, added: false};
   const deletion = sync.deleted.recipes.find(item => item.id === recipeId);

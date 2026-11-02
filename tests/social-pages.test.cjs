@@ -108,7 +108,7 @@ test('profile save requires a nickname and never submits the baby nickname', asy
   });
   await page.onShow();
   page.setData({name: '   ', bio: '介绍'}); await page.save();
-  assert.equal(input, undefined); assert.equal(calls.errors[0], '请填写公开昵称');
+  assert.equal(input, undefined); assert.equal(calls.errors[0], '请填写昵称');
   page.setData({name: ' 我的厨房 ', bio: ' 只分享做法 '}); await page.save();
   assert.equal(input.name, '我的厨房'); assert.equal(input.bio, '只分享做法');
   assert.deepEqual(Object.keys(input).sort(), ['bio', 'name']);

@@ -330,7 +330,7 @@ function syncNow(options = {}) {
       if (!publicationError && config.socialEnabled === true && !store.getSyncInfo().dirty && !disconnected) {
         const owner = store.getSyncInfo().owner;
         const epoch = ownerEpoch;
-        publish({message: '菜谱已保存，正在同步公开内容'});
+        publish({message: '菜谱已保存，正在同步菜谱'});
         try {
           await publicationSync.syncPublished({owner, isCurrent: () =>
             store.getSyncInfo().owner === owner && ownerEpoch === epoch,

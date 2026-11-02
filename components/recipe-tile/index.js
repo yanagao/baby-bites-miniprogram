@@ -3,8 +3,7 @@ const {getProfileAvatar} = require('../../utils/profile-avatar');
 Component({
   properties: {
     recipe: {type: Object, value: null},
-    showAuthor: {type: Boolean, value: false},
-    showVisibility: {type: Boolean, value: false}
+    showAuthor: {type: Boolean, value: false}
   },
   data: {imageSource: '', photoFailed: false, authorAvatar: getProfileAvatar('')},
   observers: {

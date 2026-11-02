@@ -39,6 +39,7 @@ function setup(options = {}) {
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/selectors')) return selectors;
       if (dep.endsWith('/recipe-ages')) return recipeAges;
+      if (dep.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
       if (dep.endsWith('/ui')) return {back() { calls.backs++; }, error(value) { calls.errors.push(value.message); }};
       throw Error(dep);
     }

@@ -99,7 +99,7 @@ function setup(options = {}) {
       callFunction(args) { dispatch(args, async () => {
         if (args.name === 'babyBitesSocial') {
           calls.social.push(copy(args.data));
-          return {result: hooks.social ? await hooks.social(args) : {profile: {exists: false}, published: []}};
+          return {result: hooks.social ? await hooks.social(args) : {updated: 0, removed: 0, hasMore: false}};
         }
         if (args.data.action === 'identity') {
           calls.identity += 1;
@@ -569,24 +569,27 @@ test('a commit response for a changed authenticated owner does not acknowledge l
   assert.ok(app.store.getRecipe('local'));
 });
 
-test('public updates wait for committed private data and retry even after private dirty state is cleared', async () => {
-  const app = setup({socialEnabled: true, initial: state([recipe('published'), recipe('private')])});
-  let publishedAt = 0, failUpdate = true;
+test('recipe reconciliation waits for committed account data and retries even after dirty state is cleared', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('existing'), recipe('new')])});
+  const synchronizedAt = new Map();
+  let failUpdate = true;
   app.hooks.social = args => {
     assert.equal(app.store.getSyncInfo().dirty, false);
     assert.equal(app.getRemote().data.recipes.length, 2);
-    assert.equal(args.data.expectedOwner, OWNER);
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
-    assert.equal(args.data.action, 'updatePublished');
-    assert.equal(args.data.sourceRecipeId, 'published');
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
     if (failUpdate) throw Error('offline');
-    publishedAt = app.getRemote().data.recipes.find(item => item.id === 'published').updatedAt;
-    return {updated: true};
+    let updated = 0;
+    for (const item of app.getRemote().data.recipes) {
+      if (synchronizedAt.get(item.id) !== item.updatedAt) {
+        synchronizedAt.set(item.id, item.updatedAt);
+        updated++;
+      }
+    }
+    return {updated, removed: 0, hasMore: false};
   };
   await app.sync.start();
   assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+  assert.match(app.sync.getStatus().message, /本机修改已保存，菜谱暂未同步完成/);
   assert.equal(app.store.getSyncInfo().dirty, false);
   assert.equal(app.calls.commit, 1);
   assert.equal(app.timerCount(), 0, 'a failed public update does not spin retries');
@@ -594,9 +597,12 @@ test('public updates wait for committed private data and retry even after privat
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'synced');
   assert.equal(app.calls.commit, 1, 'retry does not commit private data again');
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  assert.equal(app.calls.social.length, 2);
+  assert.equal(synchronizedAt.size, 2, 'both existing and newly added user recipes are reconciled');
+  const version = app.sync.getStatus().publicationVersion;
   await app.sync.syncNow();
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2, 'unchanged public data is skipped');
+  assert.equal(app.calls.social.length, 3, 'explicit synchronization checks the server for outstanding work');
+  assert.equal(app.sync.getStatus().publicationVersion, version, 'a no-op batch does not invalidate cached lists');
 });
 
 test('private save failure never runs public reconciliation and reconnect resumes deferred updates', async () => {
@@ -612,27 +618,27 @@ test('private save failure never runs public reconciliation and reconnect resume
   failed.network(true);
   await failed.sync.syncNow();
   assert.equal(failed.sync.getStatus().state, 'synced');
-  assert.ok(failed.calls.social.some(item => item.action === 'mine'));
+  assert.deepEqual(failed.calls.social, [{action: 'syncPublications', expectedOwner: OWNER}]);
 });
 
 test('editing again during public reconciliation synchronizes and reconciles the newer save', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   let publishedAt = 0, first = true;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
     publishedAt = app.getRemote().data.recipes[0].updatedAt;
+    const hasMore = first;
     if (first) {
       first = false;
       app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
     }
-    return {updated: true};
+    return {updated: 1, removed: 0, hasMore};
   };
   await app.sync.start();
   assert.equal(app.sync.getStatus().state, 'synced');
   assert.equal(app.getRemote().data.recipes[0].name, '第二次保存的菜名');
   assert.equal(app.calls.commit, 2);
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  assert.equal(app.calls.social.length, 2, 'a queued local edit is committed before the next batch');
   assert.equal(publishedAt, app.store.getRecipe('published').updatedAt);
 });
 
@@ -640,8 +646,7 @@ test('a failed public update still commits a private save queued while it was in
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   let updates = 0;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
     updates++;
     if (updates === 1) app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
     throw Error('temporary public update failure');
@@ -652,23 +657,24 @@ test('a failed public update still commits a private save queued while it was in
   assert.equal(app.store.getSyncInfo().dirty, false);
   assert.equal(app.calls.commit, 2);
   assert.equal(updates, 1, 'a failed publication must not retry itself while draining private changes');
-  assert.deepEqual(app.calls.social.map(item => item.action), ['mine', 'updatePublished']);
+  assert.deepEqual(app.calls.social.map(item => item.action), ['syncPublications']);
   assert.equal(app.timerCount(), 0);
   assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+  assert.match(app.sync.getStatus().message, /本机修改已保存，菜谱暂未同步完成/);
 });
 
-test('an A to B to A account switch during public lookup cannot publish the stale account request', async () => {
+test('an A to B to A account switch cannot accept a stale reconciliation response or continue its batches', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   app.hooks.social = args => {
-    assert.equal(args.data.action, 'mine');
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
     app.store.bindAccount(OTHER); app.store.bindAccount(OWNER);
-    return {profile: {exists: true}, published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+    return {updated: 8, removed: 0, hasMore: true};
   };
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'error');
   assert.match(app.sync.getStatus().message, /账号已切换/);
   assert.equal(app.calls.social.length, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 0, 'the previous account session cannot update the active cache version');
 });
 
 test('unchanged account revisions skip downloads and store notifications but still check server identity', async () => {
@@ -834,7 +840,7 @@ test('joining an in-flight sync without edits does not queue another identity or
   const entered = deferred(), release = deferred();
   app.hooks.social = async () => {
     entered.resolve(); await release.promise;
-    return {profile: {exists: false}, published: []};
+    return {updated: 0, removed: 0, hasMore: false};
   };
   const first = app.sync.start();
   await entered.promise;
@@ -934,16 +940,15 @@ test('server account mismatches invalidate previously confirmed identity for all
 
 test('publication change versions report partial successes, retry pending work immediately and stay unchanged after no-op checks', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('first'), recipe('second')])});
-  const publishedAt = {first: 0, second: 0};
+  const completed = new Set();
   let failSecond = true;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true}, published: [
-      {id: 'c'.repeat(64), sourceRecipeId: 'first', sourceUpdatedAt: publishedAt.first},
-      {id: 'd'.repeat(64), sourceRecipeId: 'second', sourceUpdatedAt: publishedAt.second}
-    ]};
-    if (args.data.sourceRecipeId === 'second' && failSecond) throw Error('temporary failure');
-    publishedAt[args.data.sourceRecipeId] = 1;
-    return {updated: true};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
+    let updated = 0;
+    if (!completed.has('first')) { completed.add('first'); updated++; }
+    if (failSecond) return {updated, removed: 0, hasMore: true, error: {code: 'STORAGE_FAILED'}};
+    if (!completed.has('second')) { completed.add('second'); updated++; }
+    return {updated, removed: 0, hasMore: false};
   };
   const versions = [];
   app.sync.subscribe(status => versions.push(status.publicationVersion));
@@ -952,6 +957,8 @@ test('publication change versions report partial successes, retry pending work i
   assert.equal(app.sync.getStatus().revision, 1);
   assert.equal(app.sync.getStatus().publicationVersion, 1);
   assert.ok(versions.includes(1));
+  assert.equal(app.calls.social.length, 1, 'a partial batch error does not retry itself');
+  assert.equal(app.timerCount(), 0);
   failSecond = false;
   await app.sync.syncNow({ifNeeded: true});
   assert.equal(app.calls.identity, 2);
@@ -961,4 +968,58 @@ test('publication change versions report partial successes, retry pending work i
   assert.equal(app.sync.getStatus().publicationVersion, 2);
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().publicationVersion, 2);
+});
+
+test('a large recipe import drains bounded reconciliation batches after a single account commit', async () => {
+  const recipes = Array.from({length: 9}, (_, index) => recipe('imported-' + index));
+  const app = setup({socialEnabled: true, initial: state(recipes)});
+  const completed = new Set();
+  app.hooks.social = args => {
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
+    assert.equal(app.store.getSyncInfo().dirty, false);
+    const pending = app.getRemote().data.recipes.filter(item => !completed.has(item.id));
+    const batch = pending.slice(0, 8);
+    batch.forEach(item => completed.add(item.id));
+    return {updated: batch.length, removed: 0, hasMore: pending.length > batch.length};
+  };
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(completed.size, recipes.length);
+  assert.equal(app.calls.social.length, 2);
+  assert.equal(app.calls.identity, 1, 'continuing a batch does not repeat account synchronization');
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
+  assert.equal(app.timerCount(), 0);
+});
+
+test('deletion reconciliation waits for the committed tombstone and invalidates lists for removed-only batches', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('removed')])});
+  let exists = false;
+  app.hooks.social = args => {
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER});
+    assert.equal(app.store.getSyncInfo().dirty, false);
+    const remote = app.getRemote();
+    if (remote.data.recipes.some(item => item.id === 'removed')) {
+      const updated = exists ? 0 : 1;
+      exists = true;
+      return {updated, removed: 0, hasMore: false};
+    }
+    assert.ok(remote.deleted.recipes.some(item => item.id === 'removed'));
+    const removed = exists ? 1 : 0;
+    exists = false;
+    return {updated: 0, removed, hasMore: false};
+  };
+  await app.sync.start();
+  assert.equal(exists, true);
+  assert.equal(app.sync.getStatus().publicationVersion, 1);
+  app.store.deleteRecipe('removed');
+  await app.sync.syncNow();
+  assert.equal(exists, false);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.calls.social.length, 2);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().publicationVersion, 2, 'retrying an acknowledged removal is a no-op');
+  assert.equal(app.calls.commit, 2);
 });

@@ -191,11 +191,11 @@ test('mine overlaps independent reads and projects only publication inventory fi
   assert.deepEqual(result.published, [{id, sourceRecipeId: 'recipe-1', sourceUpdatedAt: NOW}]);
   assert.equal(result.publishedCount, 1);
   assert.deepEqual(reads.starts.slice(0, 2).map(item => item.name), [COLLECTIONS.profiles, COLLECTIONS.follows]);
-  assert.equal(reads.peak, 3, 'inventory and the two counts share one read round');
-  assert.equal(env.gets.length + env.queries.length, 5);
+  assert.equal(reads.peak, 2, 'inventory and follower count share one read round');
+  assert.equal(env.gets.length + env.queries.length, 4);
   const inventory = env.queries.find(item => !item.count);
   assert.deepEqual(Object.keys(inventory.fields).sort(),
-    ['_id', 'owner', 'profileId', 'sourceRecipeId', 'sourceUpdatedAt', 'published'].sort());
+    ['_id', 'owner', 'profileId', 'sourceRecipeId', 'sourceUpdatedAt', 'published', 'generation', 'isExample', 'builtin', 'source'].sort());
   assert.equal(inventory.limit, 1000);
 });
 
@@ -367,7 +367,7 @@ test('recipe age groups are copied from the committed snapshot and preserved by 
 });
 
 test('legacy public recipes remain unannotated and invalid snapshot ages cannot publish or copy photos', async () => {
-  const legacy = fakeEnvironment(), id = legacy.addPublished('alice', 'pumpkin-millet');
+  const legacy = fakeEnvironment(), id = legacy.addPublished('alice', 'legacy-user-recipe');
   const before = clone(legacy.table('recipes').get(id));
   const read = await legacy.handler('visitor')({action: 'recipe', recipeId: id});
   assert.equal(Object.hasOwn(read.recipe, 'ageGroups'), false);
@@ -1113,10 +1113,10 @@ test('sharing code cache transactions retain concurrent birthday edits and expli
   }
 });
 
-test('publishing needs a profile and a committed private snapshot', async () => {
+test('publishing needs the current account committed snapshot before creating a default profile', async () => {
   const env = fakeEnvironment();
   const handler = env.handler();
-  assert.equal((await handler({action: 'publish', sourceRecipeId: 'recipe-1'})).error.code, 'PROFILE_REQUIRED');
+  assert.equal((await handler({action: 'publish', sourceRecipeId: 'recipe-1'})).error.code, 'SYNC_REQUIRED');
   env.addProfile('alice');
   assert.equal((await handler({action: 'publish', sourceRecipeId: 'recipe-1'})).error.code, 'SYNC_REQUIRED');
   env.commit('bob');
@@ -1184,9 +1184,8 @@ test('stock artwork keys cover all 21 seed IDs within the existing imageKey limi
   assert.equal(getImageKey('shared-' + '1'.repeat(64), 'dish:pumpkin-millet'), 'dish:pumpkin-millet');
 });
 
-test('publishing any catalog recipe adds its exact stock key without changing private source data or leaking source IDs', async () => {
+test('all catalog IDs remain private even after an old editor clears isExample', async () => {
   const env = fakeEnvironment();
-  env.addProfile('alice');
   const input = snapshot();
   input.data.recipes = seedRecipes.map((recipe, index) => ({...clone(recipe), photo: '', favorite: false,
     isExample: false, createdAt: NOW - 21 + index, updatedAt: NOW}));
@@ -1195,41 +1194,33 @@ test('publishing any catalog recipe adds its exact stock key without changing pr
   const privateBefore = Array.from(env.files, ([id, bytes]) => [id, Buffer.from(bytes)]);
   const handler = env.handler();
   for (const recipe of seedRecipes) {
-    const response = await handler({action: 'publish', sourceRecipeId: recipe.id, imageKey: 'dish:forged'});
-    assert.equal(response.error, undefined, recipe.id);
-    assert.equal(response.recipe.imageKey, 'dish:' + recipe.id);
-    assert.equal(response.recipe.photoURL, '');
-    assert.equal(response.recipe.sourceRecipeId, undefined);
-    assert.equal(response.recipe.id, recipeIdFor(ownerFor('alice'), recipe.id));
-    assert.equal(env.table('recipes').get(response.recipe.id).imageKey, 'dish:' + recipe.id);
-    assert.equal(JSON.stringify(response).includes(ownerFor('alice')), false);
+    for (const action of ['publish', 'updatePublished']) {
+      assert.equal((await handler({action, sourceRecipeId: recipe.id})).error.code, 'NOT_FOUND', recipe.id);
+    }
   }
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.table('recipes').size, 0); assert.equal(env.table('profiles').size, 0);
   assert.deepEqual(Array.from(env.files), privateBefore);
   assert.equal(env.uploads.length, 0);
 });
 
-test('legacy public catalog recipes receive stock covers in detail, profiles, discovery and following feeds without writes', async () => {
+test('legacy public catalog recipes are hidden from all readers and counts without changing private data', async () => {
   const env = fakeEnvironment();
   const id = env.addPublished('alice', 'pumpkin-millet');
   const profileId = profileIdFor(ownerFor('alice'));
   env.table('follows').set(ownerFor('bob'), {_id: ownerFor('bob'), profileIds: [profileId]});
   const before = clone(Array.from(env.tables, ([name, table]) => [name, Array.from(table)]));
-  const visitor = env.handler('bob');
-  const results = [
-    (await visitor({action: 'recipe', recipeId: id})).recipe,
-    (await visitor({action: 'profile', profileId})).recipes[0],
-    (await visitor({action: 'discover', search: ''})).recipes[0],
-    (await visitor({action: 'feed'})).recipes[0]
-  ];
-  for (const recipe of results) {
-    assert.equal(recipe.id, id);
-    assert.equal(recipe.imageKey, 'dish:pumpkin-millet');
-    assert.equal(recipe.sourceRecipeId, undefined);
+  for (const user of ['alice', 'bob']) {
+    const handler = env.handler(user);
+    assert.equal((await handler({action: 'recipe', recipeId: id})).error.code, 'NOT_FOUND');
+    const profile = await handler({action: 'profile', profileId});
+    assert.deepEqual(profile.recipes, []); assert.equal(profile.publishedCount, 0);
+    assert.deepEqual((await handler({action: 'discover'})).recipes, []);
+    assert.deepEqual((await handler({action: 'feed'})).recipes, []);
   }
+  assert.equal((await env.handler()({action: 'mine'})).publishedCount, 0);
   assert.deepEqual(clone(Array.from(env.tables, ([name, table]) => [name, Array.from(table)])), before);
-  assert.equal(env.table('recipes').get(id).imageKey, 'pumpkin');
-  assert.equal(env.downloads.length, 0);
-  assert.equal(env.uploads.length, 0);
+  assert.equal(env.downloads.length, 0); assert.equal(env.uploads.length, 0);
 });
 
 test('ordinary recipes keep their image keys and saved public copies retain an explicit stock key when republished', async () => {
@@ -1251,23 +1242,14 @@ test('ordinary recipes keep their image keys and saved public copies retain an e
   }
 });
 
-test('a catalog stock key does not replace the separately published user photo', async () => {
+test('an edited starter with a personal photo still cannot be published', async () => {
   const env = fakeEnvironment();
-  env.addProfile('alice');
-  const input = snapshot();
-  input.data.recipes[0].id = 'pumpkin-millet';
-  input.data.logs = [];
+  const input = snapshot(); input.data.recipes[0].id = 'pumpkin-millet'; input.data.logs = [];
   const photo = privateFile(ownerFor('alice'), 'photos/custom.jpg');
-  input.data.recipes[0].photo = photo;
-  env.files.set(photo, JPG);
-  env.commit('alice', input);
-  const response = await env.handler()({action: 'publish', sourceRecipeId: 'pumpkin-millet'});
-  assert.equal(response.error, undefined);
-  assert.equal(response.recipe.imageKey, 'dish:pumpkin-millet');
-  assert.match(response.recipe.photoURL, /^https:\/\//);
-  assert.equal(env.uploads.length, 1);
-  assert.deepEqual(env.uploads[0].fileContent, JPG);
-  assert.deepEqual(env.files.get(photo), JPG);
+  input.data.recipes[0].photo = photo; env.files.set(photo, JPG); env.commit('alice', input);
+  assert.equal((await env.handler()({action: 'publish', sourceRecipeId: 'pumpkin-millet'})).error.code, 'NOT_FOUND');
+  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  assert.equal(env.uploads.length, 0); assert.deepEqual(env.files.get(photo), JPG);
 });
 
 test('publishing never accepts an arbitrary file ID or another account snapshot', async () => {
@@ -1365,16 +1347,14 @@ test('withdrawal during photo signing is rechecked before detail is returned', a
   assert.equal((await visitor({action: 'recipe', recipeId})).error.code, 'NOT_FOUND');
 });
 
-test('unpublish tombstone prevents a delayed publish from restoring withdrawn content', async () => {
-  const env = fakeEnvironment();
-  env.addProfile('alice');
-  env.commit();
-  const handler = env.handler('alice', {async downloadFile({fileID}) {
-    await env.handler()({action: 'unpublish', sourceRecipeId: 'recipe-1'});
-    return {statusCode: 200, fileContent: env.files.get(fileID)};
-  }});
-  assert.equal((await handler({action: 'publish', sourceRecipeId: 'recipe-1'})).error.code, 'CONFLICT');
-  assert.equal(env.table('recipes').get(recipeIdFor(ownerFor('alice'), 'recipe-1')).published, false);
+test('legacy unpublish cannot turn an existing uploaded user recipe private', async () => {
+  const env = fakeEnvironment(); env.commit();
+  const handler = env.handler();
+  const published = await handler({action: 'publish', sourceRecipeId: 'recipe-1'});
+  const before = clone(env.table('recipes').get(published.recipe.id));
+  const result = await handler({action: 'unpublish', sourceRecipeId: 'recipe-1'});
+  assert.equal(result.error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.deepEqual(env.table('recipes').get(published.recipe.id), before);
 });
 
 test('publish refuses a snapshot that changed while preparing publication', async () => {
@@ -1446,7 +1426,7 @@ test('automatic updates cannot initially publish, create a profile, or restore w
     if (setup !== 'private') env.addProfile('alice');
     if (setup === 'withdrawn') {
       env.addPublished('alice');
-      await env.handler()({action: 'unpublish', sourceRecipeId: 'recipe-1'});
+      env.table('recipes').get(recipeIdFor(ownerFor('alice'), 'recipe-1')).published = false;
     }
     const before = clone([...env.tables].map(([name, records]) => [name, [...records]]));
     assert.deepEqual(await env.handler()({action: 'updatePublished', sourceRecipeId: 'recipe-1'}), {updated: false});
@@ -1533,16 +1513,17 @@ test('automatic updates recopy legacy photos and refuse to reuse invalid public 
   }
 });
 
-test('withdrawal while an automatic update is preparing cannot be reversed', async () => {
+test('a deletion committed while an automatic update prepares cannot be reversed', async () => {
   const env = fakeEnvironment(); const id = env.addPublished('alice');
   const input = snapshot(); input.data.recipes[0].updatedAt++; env.commit('alice', input);
   const handler = env.handler('alice', {async downloadFile({fileID}) {
-    await env.handler()({action: 'unpublish', sourceRecipeId: 'recipe-1'});
+    const deleted = snapshot(); deleted.data.recipes = []; deleted.data.logs = [];
+    deleted.deleted.recipes = [{id: 'recipe-1', updatedAt: NOW + 2}]; env.commit('alice', deleted);
+    assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 1, hasMore: false});
     return {statusCode: 200, fileContent: env.files.get(fileID)};
   }});
   assert.deepEqual(await handler({action: 'updatePublished', sourceRecipeId: 'recipe-1'}), {updated: false});
   assert.equal(env.table('recipes').get(id).published, false);
-  assert.equal(env.table('recipes').get(id).generation, 2);
   assert.equal((await env.handler('bob')({action: 'recipe', recipeId: id})).error.code, 'NOT_FOUND');
 });
 
@@ -2337,4 +2318,298 @@ test('nonexistent or corrupt public records never grant access to private detail
   assert.equal((await env.handler('bob')({action: 'recipe', recipeId: id})).error.code, 'NOT_FOUND');
   assert.equal((await env.handler('bob')({action: 'profile', profileId: profileIdFor(ownerFor('alice'))})).recipes.length, 0);
   assert.equal((await env.handler()({action: 'recipe', recipeId: '0'.repeat(64)})).error.code, 'NOT_FOUND');
+});
+
+test('syncPublications uploads every user recipe in bounded batches with a safe default profile and no private fields', async () => {
+  const env = fakeEnvironment(), data = snapshot();
+  const template = data.data.recipes[0];
+  data.data.recipes = Array.from({length: 10}, (_, index) => ({...clone(template), id: `user-${index}`}));
+  data.data.recipes.push({...clone(template), id: 'imported-example', isExample: true});
+  data.data.logs = []; data.data.allergies = ['PRIVATE ALLERGY']; data.data.allergiesUpdatedAt = NOW;
+  env.commit('alice', data);
+  const before = clone([...env.table('accounts')]);
+  const handler = env.handler();
+  const first = await handler({action: 'syncPublications', expectedOwner: ownerFor('alice'), owner: ownerFor('bob'), recipes: []});
+  assert.deepEqual(first, {updated: 8, removed: 0, hasMore: true});
+  assert.equal(env.downloads.length, 1, 'a batch downloads its authoritative snapshot once');
+  const author = env.table('profiles').get(profileIdFor(ownerFor('alice')));
+  assert.match(author.name, /^小(?:胡萝卜|南瓜|番茄|土豆|西兰花|玉米)[1-9]\d{3}$/);
+  assert.equal(author.bio, ''); assert.equal(author.babyBirthDate, undefined);
+  assert.equal(env.moderationRequests.length, 0, 'fixed system names need no user text moderation');
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 2, removed: 0, hasMore: false});
+  const writes = env.writes.length;
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.writes.length, writes); assert.equal(env.table('recipes').size, 10);
+  assert.deepEqual([...env.table('accounts')], before.map(([id, account]) => [id, {...account,
+    publicationPolicyVersion: 1, publicationRevision: account.revision}]));
+  for (const record of env.table('recipes').values()) {
+    for (const key of ['note', 'favorite', 'allergies', 'logs', 'nickname', 'babyBirthDate']) assert.equal(Object.hasOwn(record, key), false, key);
+  }
+});
+
+test('syncPublications restores old unpublished user recipes and preserves existing custom profile details', async () => {
+  const env = fakeEnvironment(); const id = env.addPublished('alice'); env.commit();
+  env.table('recipes').get(id).published = false;
+  const profileId = profileIdFor(ownerFor('alice'));
+  Object.assign(env.table('profiles').get(profileId), {name: '自定义昵称', babyBirthDate: '2025-01-01'});
+  const before = clone(env.table('profiles').get(profileId));
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  assert.deepEqual(env.table('profiles').get(profileId), before);
+  assert.equal(env.table('recipes').get(id).published, true);
+});
+
+test('repeated sharing is idempotent and never recopies a synchronized photo or changes its ordering', async () => {
+  const env = fakeEnvironment(), input = snapshot();
+  const photo = privateFile(ownerFor('alice'), 'photos/repeated.jpg');
+  input.data.recipes[0].photo = photo; env.files.set(photo, JPG); env.commit('alice', input);
+  const handler = env.handler();
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  const id = recipeIdFor(ownerFor('alice'), 'recipe-1');
+  const before = clone(env.table('recipes').get(id)), uploads = env.uploads.length, writes = env.writes.length;
+  for (let index = 0; index < 3; index++) {
+    const result = await env.handler('alice', {}, () => NOW + index + 1)({action: 'publish', sourceRecipeId: 'recipe-1'});
+    assert.equal(result.recipe.id, id); assert.ok(result.recipe.photoURL);
+  }
+  assert.equal(env.uploads.length, uploads); assert.equal(env.writes.length, writes);
+  assert.deepEqual(env.table('recipes').get(id), before);
+});
+
+test('batch reconciliation removes absent and tombstoned recipes while retaining active user recipes', async () => {
+  const env = fakeEnvironment();
+  const kept = env.addPublished('alice', 'recipe-1');
+  const missing = env.addPublished('alice', 'missing');
+  const deleted = env.addPublished('alice', 'deleted');
+  const builtin = env.addPublished('alice', 'pumpkin-millet');
+  const input = snapshot();
+  input.data.recipes.push({...clone(input.data.recipes[0]), id: 'deleted'},
+    {...clone(input.data.recipes[0]), id: 'pumpkin-millet', isExample: false});
+  input.deleted.recipes = [{id: 'deleted', updatedAt: NOW + 1}]; env.commit('alice', input);
+  const before = clone(env.table('recipes').get(kept));
+  const handler = env.handler();
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 3, hasMore: false});
+  assert.deepEqual(env.table('recipes').get(kept), before);
+  for (const id of [missing, deleted, builtin]) assert.equal(env.table('recipes').get(id).published, false);
+  assert.equal(env.table('recipes').get(builtin).builtin, true);
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+});
+
+test('historical saved copies of builtins remain hidden through multiple source links and retired roots', async () => {
+  const env = fakeEnvironment();
+  const original = env.addPublished('original', 'pumpkin-millet');
+  const originalData = snapshot('original'); originalData.data.recipes[0].id = 'pumpkin-millet'; originalData.data.logs = [];
+  env.commit('original', originalData);
+  const copyId = 'shared-' + original;
+  const saved = env.addPublished('alice', copyId);
+  env.table('recipes').get(saved).source = {profileId: profileIdFor(ownerFor('original')), recipeId: original, authorName: '原作者'};
+  const secondId = 'shared-' + saved, second = env.addPublished('bob', secondId);
+  env.table('recipes').get(second).source = {profileId: profileIdFor(ownerFor('alice')), recipeId: saved, authorName: '复制作者'};
+  const input = snapshot();
+  input.data.recipes[0].id = copyId; input.data.recipes[0].source = clone(env.table('recipes').get(saved).source); input.data.logs = [];
+  env.commit('alice', input);
+  env.table('follows').set(ownerFor('visitor'), {_id: ownerFor('visitor'), profileIds: [profileIdFor(ownerFor('alice')), profileIdFor(ownerFor('bob'))]});
+  const visitor = env.handler('visitor');
+  for (const id of [original, saved, second]) assert.equal((await visitor({action: 'recipe', recipeId: id})).error.code, 'NOT_FOUND');
+  assert.deepEqual((await visitor({action: 'discover'})).recipes, []);
+  assert.deepEqual((await visitor({action: 'feed'})).recipes, []);
+  for (const name of ['alice', 'bob']) assert.equal((await visitor({action: 'profile', profileId: profileIdFor(ownerFor(name))})).publishedCount, 0);
+  assert.equal((await env.handler()({action: 'publish', sourceRecipeId: copyId})).error.code, 'NOT_FOUND');
+  assert.deepEqual(await env.handler('original')({action: 'syncPublications'}), {updated: 0, removed: 1, hasMore: false});
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 1, hasMore: false});
+  assert.equal(env.table('recipes').get(saved).builtin, true);
+  assert.deepEqual(env.table('recipes').get(saved).source, input.data.recipes[0].source);
+  assert.equal((await visitor({action: 'recipe', recipeId: second})).error.code, 'NOT_FOUND');
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+});
+
+test('missing attribution records and ordinary saved copies remain eligible instead of being mistaken for builtins', async () => {
+  const env = fakeEnvironment(), original = env.addPublished('bob');
+  const input = snapshot(); input.data.logs = [];
+  input.data.recipes = [original, '1'.repeat(64)].map((id, index) => ({...clone(input.data.recipes[0]),
+    id: 'shared-' + id, source: {profileId: profileIdFor(ownerFor('bob')), recipeId: id, authorName: '用户作者'}, updatedAt: NOW + index}));
+  env.commit('alice', input);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 2, removed: 0, hasMore: false});
+  assert.equal((await env.handler()({action: 'mine'})).publishedCount, 2);
+});
+
+test('empty pages of hidden starter recipes advance discovery, following and profile pagination', async () => {
+  const env = fakeEnvironment();
+  for (const [index, recipe] of seedRecipes.entries()) env.addPublished('alice', recipe.id, NOW + 100 - index);
+  const expected = env.addPublished('alice', 'user-recipe', NOW);
+  const profileId = profileIdFor(ownerFor('alice'));
+  env.table('follows').set(ownerFor('visitor'), {_id: ownerFor('visitor'), profileIds: [profileId]});
+  const handler = env.handler('visitor');
+  for (const action of ['discover', 'feed', 'profile']) {
+    const first = await handler({action, profileId}); assert.deepEqual(first.recipes, []);
+    const next = action === 'profile' ? {offset: first.nextOffset} : {cursor: first.nextCursor};
+    assert.ok(Object.values(next)[0]);
+    const second = await handler({action, profileId, ...next});
+    assert.deepEqual(second.recipes.map(item => item.id), [expected]);
+    if (action === 'profile') assert.equal(second.publishedCount, 1);
+  }
+});
+
+test('partial batch failures report completed changes and retry without duplicating previous publications', async () => {
+  const env = fakeEnvironment(), input = snapshot(); input.data.logs = [];
+  input.data.recipes.push({...clone(input.data.recipes[0]), id: 'with-photo'});
+  const photo = privateFile(ownerFor('alice'), 'photos/retry.jpg');
+  input.data.recipes[1].photo = photo; env.files.set(photo, JPG); env.commit('alice', input);
+  const failed = await env.handler('alice', {async uploadFile() { throw Error('SECRET upstream'); }})({action: 'syncPublications'});
+  assert.deepEqual(failed, {updated: 1, removed: 0, hasMore: true,
+    error: {code: 'SOCIAL_FAILED', message: '暂时无法完成，请稍后重试。'}});
+  const first = clone(env.table('recipes').get(recipeIdFor(ownerFor('alice'), 'recipe-1')));
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  assert.deepEqual(env.table('recipes').get(first._id), first);
+});
+
+test('a failed first publication rolls back the default profile and retry creates it atomically', async () => {
+  let rejectWrite = true;
+  const env = fakeEnvironment({beforeWrite({name}) { if (rejectWrite && name === COLLECTIONS.recipes) throw Error('failed record'); }});
+  env.commit();
+  const result = await env.handler()({action: 'syncPublications'});
+  assert.equal(result.error.code, 'SOCIAL_FAILED'); assert.equal(result.updated, 0);
+  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  rejectWrite = false;
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  assert.equal(env.table('profiles').size, 1);
+});
+
+test('batch publication rejects account mismatches and newer snapshots without creating public records', async () => {
+  const env = fakeEnvironment(); env.commit();
+  const mismatch = await env.handler()({action: 'syncPublications', expectedOwner: ownerFor('bob')});
+  assert.equal(mismatch.error.code, 'ACCOUNT_CHANGED'); assert.equal(env.downloads.length, 0);
+  const result = await env.handler('alice', {async downloadFile({fileID}) {
+    const next = snapshot(); next.data.recipes[0].name = '最新内容'; next.data.recipes[0].updatedAt++;
+    env.commit('alice', next); return {fileContent: env.files.get(fileID), statusCode: 200};
+  }})({action: 'syncPublications'});
+  assert.equal(result.error.code, 'SYNC_REQUIRED');
+  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+});
+
+test('concurrent reconciliation never overwrites a newer generation and converges on retry', async () => {
+  const env = fakeEnvironment(), input = snapshot(), photo = privateFile(ownerFor('alice'), 'photos/race.jpg');
+  input.data.recipes[0].photo = photo; env.files.set(photo, JPG); env.commit('alice', input);
+  let raced = false;
+  const result = await env.handler('alice', {async uploadFile({cloudPath, fileContent}) {
+    if (!raced) { raced = true; assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false}); }
+    const fileID = cloudFile(cloudPath); env.files.set(fileID, fileContent); return {fileID};
+  }})({action: 'syncPublications'});
+  assert.equal(result.error.code, 'CONFLICT'); assert.equal(result.updated, 0);
+  const before = clone([...env.table('recipes')]);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.deepEqual([...env.table('recipes')], before);
+});
+
+test('completed reconciliation skips all downloads and inventory reads until the revision or policy changes', async () => {
+  const env = fakeEnvironment(); const input = env.commit();
+  const account = env.table('accounts').get(ownerFor('alice'));
+  account.allergiesUpdatedAt = NOW;
+  const handler = env.handler();
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  let stored = env.table('accounts').get(ownerFor('alice'));
+  assert.equal(stored.publicationPolicyVersion, 1); assert.equal(stored.publicationRevision, stored.revision);
+  assert.equal(stored.allergiesUpdatedAt, NOW);
+  env.downloads.length = 0; env.queries.length = 0; env.gets.length = 0;
+  const writes = env.writes.length;
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.downloads.length, 0); assert.equal(env.queries.length, 0); assert.equal(env.gets.length, 1);
+  assert.equal(env.writes.length, writes);
+  stored.publicationPolicyVersion = 0;
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.downloads.length, 1); assert.ok(env.queries.length > 0);
+  input.data.recipes[0].updatedAt++; input.data.recipes[0].name = '更新后'; env.commit('alice', input);
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  stored = env.table('accounts').get(ownerFor('alice'));
+  assert.equal(stored.publicationRevision, stored.revision);
+});
+
+test('pending batches and failed reconciliation never mark an account complete', async () => {
+  const env = fakeEnvironment(), input = snapshot(); input.data.logs = [];
+  input.data.recipes = Array.from({length: 9}, (_, index) => ({...clone(input.data.recipes[0]), id: `user-${index}`}));
+  env.commit('alice', input);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 8, removed: 0, hasMore: true});
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, undefined);
+  const next = clone(input); next.data.recipes[8].photo = privateFile(ownerFor('alice'), 'photos/missing.jpg'); env.commit('alice', next);
+  assert.equal((await env.handler()({action: 'syncPublications'})).error.code, 'SOCIAL_FAILED');
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, undefined);
+});
+
+test('missing snapshots create no accounts or profiles, while all-builtin snapshots can be marked complete', async () => {
+  const env = fakeEnvironment();
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.writes.length, 0); assert.equal(env.downloads.length, 0); assert.equal(env.queries.length, 0);
+  const input = snapshot(); input.data.recipes[0].id = 'pumpkin-millet'; input.data.logs = []; env.commit('alice', input);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 1);
+});
+
+test('retiring a historical nonstandard example preserves its builtin identity for same-batch and later copies', async () => {
+  const env = fakeEnvironment(), original = env.addPublished('alice', 'imported-example');
+  const source = {profileId: profileIdFor(ownerFor('alice')), recipeId: original, authorName: '原作者'};
+  const copy = env.addPublished('alice', 'shared-' + original); env.table('recipes').get(copy).source = clone(source);
+  const input = snapshot(); input.data.logs = [];
+  input.data.recipes = [{...clone(input.data.recipes[0]), id: 'imported-example', isExample: true},
+    {...clone(input.data.recipes[0]), id: 'shared-' + original, source}];
+  env.commit('alice', input);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 2, hasMore: false});
+  assert.equal(env.table('recipes').get(original).builtin, true);
+  assert.equal(env.table('recipes').get(copy).builtin, true);
+  const other = snapshot('bob'); other.data.logs = []; other.data.recipes[0].id = 'shared-' + original; other.data.recipes[0].source = clone(source);
+  env.commit('bob', other);
+  assert.deepEqual(await env.handler('bob')({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.table('profiles').has(profileIdFor(ownerFor('bob'))), false);
+});
+
+test('parallel saved-copy visibility checks deduplicate shared ancestor reads', async () => {
+  const env = fakeEnvironment({beforeRead: async () => { await new Promise(resolve => setImmediate(resolve)); }});
+  const original = env.addPublished('original', 'pumpkin-millet');
+  for (let index = 0; index < 100; index++) {
+    const id = env.addPublished('alice', `copy-${index}`);
+    env.table('recipes').get(id).source = {profileId: profileIdFor(ownerFor('original')), recipeId: original, authorName: '原作者'};
+  }
+  assert.equal((await env.handler()({action: 'mine'})).publishedCount, 0);
+  assert.equal(env.gets.filter(item => item.name === COLLECTIONS.recipes && item.id === original).length, 1);
+});
+
+test('a definite snapshot conflict cleans only the new public photo, retaining private and previous photos', async () => {
+  const env = fakeEnvironment(), input = snapshot();
+  const photo = privateFile(ownerFor('alice'), 'photos/new.jpg'); input.data.recipes[0].photo = photo;
+  env.files.set(photo, JPG); env.commit('alice', input);
+  const removed = [], copied = [];
+  const result = await env.handler('alice', {
+    async uploadFile({cloudPath, fileContent}) {
+      const fileID = cloudFile(cloudPath); env.files.set(fileID, fileContent); copied.push(fileID);
+      const newer = clone(input); newer.data.recipes[0].updatedAt++; env.commit('alice', newer);
+      return {fileID};
+    },
+    async deleteFile({fileList}) { removed.push(...fileList); for (const id of fileList) env.files.delete(id); }
+  })({action: 'syncPublications'});
+  assert.equal(result.error.code, 'SYNC_REQUIRED'); assert.deepEqual(removed, copied); assert.equal(removed.length, 1);
+  assert.equal(env.files.has(photo), true); assert.equal(env.table('recipes').size, 0);
+  assert.equal(env.table('profiles').size, 0);
+});
+
+test('forged source metadata cannot override a saved builtin identity encoded in its stable ID', async () => {
+  const env = fakeEnvironment(), original = env.addPublished('original', 'pumpkin-millet'), ordinary = env.addPublished('ordinary');
+  const input = snapshot(); input.data.logs = [];
+  input.data.recipes[0].id = 'shared-' + original;
+  input.data.recipes[0].source = {profileId: profileIdFor(ownerFor('ordinary')), recipeId: ordinary, authorName: '伪装来源'};
+  env.commit('alice', input);
+  assert.equal((await env.handler()({action: 'publish', sourceRecipeId: input.data.recipes[0].id})).error.code, 'NOT_FOUND');
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.table('profiles').has(profileIdFor(ownerFor('alice'))), false);
+});
+
+test('oversized historical inventories are bounded and reconciliation makes cleanup progress without a completion marker', async () => {
+  const env = fakeEnvironment(), input = snapshot(); input.data.recipes = []; input.data.logs = [];
+  env.commit('alice', input);
+  for (let index = 0; index < 2001; index++) env.addPublished('alice', 'old-' + index);
+  const result = await env.handler()({action: 'syncPublications'});
+  assert.deepEqual(result, {updated: 0, removed: 8, hasMore: true});
+  assert.equal(env.queries.length, 2);
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, undefined);
+  env.queries.length = 0;
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 8, hasMore: true});
+  assert.equal(env.queries.length, 2);
 });

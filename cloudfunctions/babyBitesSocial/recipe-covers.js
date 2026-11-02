@@ -31,4 +31,6 @@ function getImageKey(sourceRecipeId, imageKey) {
     ? covers[sourceRecipeId] : imageKey || '';
 }
 
-module.exports = {getImageKey};
+const isBuiltinRecipeId = id => typeof id === 'string' && Object.prototype.hasOwnProperty.call(covers, id);
+
+module.exports = {getImageKey, isBuiltinRecipeId};

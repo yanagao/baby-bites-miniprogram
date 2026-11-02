@@ -100,6 +100,7 @@ function setup(options = {}) {
       if (name === './cover-loader') return coverLoader;
       if (name === './baby-age') return {isValidBirthDate: value => require('../utils/baby-age').isValidBirthDate(value, options.today || '2026-10-29')};
       if (name === './recipe-ages') return require('../utils/recipe-ages');
+      if (name === './recipe-origin') return require('../utils/recipe-origin');
       if (name === '../config/cloud') return {env: 'social-test', socialEnabled: options.enabled !== false};
       throw Error(name);
     }});
@@ -153,7 +154,7 @@ test('public recipe details always recheck publication while concurrent detail r
   await Promise.all([app.social.getRecipe(PUBLIC_ID), app.social.getRecipe(PUBLIC_ID)]);
   assert.equal(app.calls.filter(item => item.action === 'recipe').length, 1);
   app.hooks.request = () => ({error: {code: 'NOT_PUBLIC'}});
-  await assert.rejects(app.social.getRecipe(PUBLIC_ID), /取消公开/);
+  await assert.rejects(app.social.getRecipe(PUBLIC_ID), /已移除/);
   assert.equal(app.calls.filter(item => item.action === 'recipe').length, 2);
 });
 
@@ -296,7 +297,7 @@ test('legacy follow profile errors offer retry instead of asking for profile com
     assert.equal(error.message, '关注暂时未完成，请稍后重试。');
     return true;
   });
-  await assert.rejects(app.social.getShareCode(PROFILE_ID, 'trial'), /请先设置公开主页/);
+  await assert.rejects(app.social.getShareCode(PROFILE_ID, 'trial'), /请先保存主页资料/);
 });
 
 test('saving public recipes retains explicit age groups but never infers them from a starter cover', async () => {
@@ -323,7 +324,7 @@ test('invalid public recipe age groups fail before photo download or private wri
   }
 });
 
-test('explicit example publication retains only stored age metadata and missing metadata stays missing', async () => {
+test('built-in sharing is rejected without changing stored age metadata', async () => {
   for (const ageGroups of [undefined, [], ['9-11', '12-17']]) {
     const app = setup();
     const snapshot = {version: 1, data: app.store.getState(), deleted: {recipes: [], logs: []}};
@@ -335,13 +336,12 @@ test('explicit example publication retains only stored age metadata and missing 
       const state = app.store.getSyncInfo();
       if (state.dirty) app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: state.sequence, revision: state.revision + 1});
     };
-    await app.social.publishRecipe(original.id);
+    await assert.rejects(app.social.publishRecipe(original.id), error => error.code === 'BUILTIN_RECIPE');
     const stored = app.store.getRecipe(original.id);
     if (ageGroups === undefined) assert.equal(Object.hasOwn(stored, 'ageGroups'), false);
     else assert.deepEqual(copy(stored.ageGroups), ageGroups);
-    assert.equal(stored.isExample, false);
-    assert.deepEqual(app.calls.map(item => item.action), ['sync', 'sync', 'publish']);
-    assert.equal(Object.hasOwn(app.calls[2], 'ageGroups'), false, 'the server reads only its authoritative snapshot');
+    assert.equal(stored.isExample, true);
+    assert.deepEqual(app.calls.map(item => item.action), ['sync']);
   }
 });
 
@@ -633,7 +633,7 @@ test('an account switch during a cloud response discards its data', async () => 
 test('backend errors become safe, actionable Chinese without exposing server details', async () => {
   const app = setup();
   app.hooks.request = () => ({error: {code: 'NOT_FOUND', message: 'secret owner and path'}});
-  await assert.rejects(app.social.getRecipe(PUBLIC_ID), error => /取消公开/.test(error.message) && !error.message.includes('secret'));
+  await assert.rejects(app.social.getRecipe(PUBLIC_ID), error => /已移除/.test(error.message) && !error.message.includes('secret'));
   app.hooks.request = () => ({error: {code: 'ACCOUNT_CHANGED'}});
   await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
 });
@@ -659,27 +659,37 @@ test('publishing never runs while a local edit still awaits synchronization', as
   assert.equal(app.calls.filter(item => item.action === 'publish').length, 0);
 });
 
-test('explicit publication saves only the selected example as personal and syncs before publish', async () => {
+test('edited built-in recipes remain personal and cannot be published', async () => {
   const app = setup();
   const original = app.store.getState().recipes[0];
+  app.store.saveRecipe({...original, name: '我修改过的内置菜谱'});
   app.hooks.sync = () => {
     const info = app.store.getSyncInfo();
     if (info.dirty) app.store.applySyncedSnapshot(app.store.getSyncSnapshot(),
       {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
   };
-  await app.social.publishRecipe(original.id);
-  const saved = app.store.getRecipe(original.id);
-  assert.equal(saved.isExample, false);
-  assert.equal(saved.imageKey, original.imageKey);
-  assert.deepEqual(copy(saved.ingredients), copy(original.ingredients));
-  assert.deepEqual(copy(saved.steps), copy(original.steps));
-  assert.equal(app.store.getState().recipes.filter(item => !item.isExample).length, 1);
-  assert.equal(app.store.getState().logs.length, 0);
-  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'sync', 'publish']);
-  assert.equal(app.calls[2].sourceRecipeId, original.id);
+  await assert.rejects(app.social.publishRecipe(original.id), error => error.code === 'BUILTIN_RECIPE');
+  assert.equal(app.store.getRecipe(original.id).isExample, true);
+  assert.equal(app.store.getRecipe(original.id).name, '我修改过的内置菜谱');
+  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
 });
 
-test('duplicate add taps share one request and create an independent private recipe', async () => {
+test('user recipes can be shared after synchronization without a profile setup request', async () => {
+  const app = setup();
+  const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '私人心得'});
+  app.hooks.sync = () => {
+    const info = app.store.getSyncInfo();
+    app.store.applySyncedSnapshot(app.store.getSyncSnapshot(),
+      {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
+  };
+  await app.social.publishRecipe(id);
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
+  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, expectedOwner: OWNER});
+  assert.equal(app.store.getRecipe(id).isExample, false);
+  assert.equal(app.store.getRecipe(id).note, '私人心得');
+});
+
+test('duplicate add taps share one request and create an independent attributed recipe', async () => {
   const app = setup();
   const before = app.store.getState();
   const first = app.social.addToCookbook(PUBLIC_ID);
@@ -767,10 +777,10 @@ test('a storage write failure removes the newly saved photo and leaves existing 
   assert.equal(app.files.size, 0);
 });
 
-test('an unpublished recipe cannot be newly copied', async () => {
+test('a removed recipe cannot be newly copied', async () => {
   const app = setup();
   app.hooks.request = () => ({error: {code: 'NOT_FOUND'}});
-  await assert.rejects(app.social.addToCookbook(PUBLIC_ID), /取消公开/);
+  await assert.rejects(app.social.addToCookbook(PUBLIC_ID), /已移除/);
   assert.equal(app.social.findImportedRecipe(PUBLIC_ID), null);
 });
 

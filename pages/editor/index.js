@@ -2,6 +2,7 @@ const store = require('../../utils/store');
 const { categories, textures } = require('../../utils/selectors');
 const recipeAges = require('../../utils/recipe-ages');
 const ui = require('../../utils/ui');
+const {isBuiltInRecipe} = require('../../utils/recipe-origin');
 const ageGroupFields = values => ({
   ageGroups: values,
   ageGroupOptions: recipeAges.ageGroups.map(group => ({...group, selected: values.includes(group.value)}))
@@ -18,7 +19,7 @@ Page({
     recordMeal: false, rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
     form: { name: '', minutes: '20', ingredients: '', steps: '', note: '' },
-    photo: '', saving: false, error: '', editing: false, missingRecipe: false,
+    photo: '', saving: false, error: '', editing: false, builtIn: false, missingRecipe: false,
     nameError: '', minutesError: '', ingredientsError: '', stepsError: '', ratingError: '',
     discardVisible: false
   },
@@ -33,7 +34,7 @@ Page({
       this.original = recipe;
       wx.setNavigationBarTitle({ title: '编辑菜谱' });
       this.setData({
-        editing: true,
+        editing: true, builtIn: isBuiltInRecipe(recipe),
         form: {
           name: recipe.name, minutes: String(recipe.minutes),
           ingredients: recipe.ingredients.map(item => item.name + (item.amount ? ' ' + item.amount : '')).join('\n'),

@@ -2,6 +2,7 @@
 
 const config = require('../config/cloud');
 const store = require('./store');
+const {isBuiltInRecipe} = require('./recipe-origin');
 const cloudSync = require('./cloud-sync');
 const {withCover} = require('./recipe-covers');
 const coverLoader = require('./cover-loader');
@@ -94,10 +95,12 @@ const errors = {
   ACCOUNT_CHANGED: '微信账号已切换，请重新打开当前页面。',
   UNAUTHENTICATED: '未能识别当前微信账号，请在微信中重试。',
   INVALID_ENV: '好友功能暂未配置完成，请稍后重试。',
-  NOT_FOUND: '这份内容已取消公开，或暂时无法查看。',
+  NOT_FOUND: '这份内容已移除，或暂时无法查看。',
   PROFILE_NOT_FOUND: '这个主页暂时无法查看。',
-  RECIPE_NOT_FOUND: '这道菜谱已取消公开，或暂时无法查看。',
-  NOT_PUBLIC: '这道菜谱已取消公开，或暂时无法查看。',
+  RECIPE_NOT_FOUND: '这道菜谱已移除，或暂时无法查看。',
+  NOT_PUBLIC: '这道菜谱已移除，或暂时无法查看。',
+  BUILTIN_RECIPE: '内置菜谱仅供自己使用，可以将小程序分享给朋友。',
+  CLIENT_UPDATE_REQUIRED: '请更新小程序后重试，菜谱现在会自动同步给大家。',
   INVALID_PROFILE: '公开昵称请填写 1–20 个字，简介不超过 120 个字。',
   PROFILE_NAME_REJECTED: '昵称未通过内容审核，请修改后重试。',
   PROFILE_BIO_REJECTED: '简介未通过内容审核，请修改后重试。',
@@ -110,11 +113,11 @@ const errors = {
   CONFLICT: '资料已发生变化，请刷新页面后重试。',
   SELF_FOLLOW: '这是你自己的主页，无需关注。',
   FOLLOW_LIMIT: '关注人数已达到上限，请整理后重试。',
-  PROFILE_REQUIRED: '请先设置公开主页，再公开菜谱或分享主页。',
-  SYNC_REQUIRED: '请先完成菜谱同步，再公开这道菜谱。',
+  PROFILE_REQUIRED: '请先保存主页资料，再生成主页分享码。',
+  SYNC_REQUIRED: '请先完成菜谱同步，再分享这道菜谱。',
   SOURCE_NOT_FOUND: '这道菜谱还未同步，或已被删除，请返回食谱后重试。',
   INVALID_SNAPSHOT: '菜谱尚未完整同步，请完成同步后重试。',
-  INVALID_PHOTO: '这张照片暂时无法公开，请重新选择照片并同步后重试。',
+  INVALID_PHOTO: '这张照片暂时无法同步，请重新选择照片后重试。',
   STORAGE_ERROR: '照片暂时无法读取，请稍后重试。',
   STORAGE_FAILED: '照片暂时无法读取，请稍后重试。',
   SHARE_CODE_UNAVAILABLE: '分享码暂不可用，可以先发送主页给朋友。',
@@ -292,19 +295,11 @@ function getProfile(id, start, options) { checkProfileId(id); return read('profi
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
 async function publishRecipe(sourceRecipeId) {
-  let owner = await ready();
+  const owner = await ready();
   const recipe = store.getRecipe(sourceRecipeId);
-  if (recipe && recipe.isExample) {
-    // Publishing is an explicit action: make this selected example a personal
-    // recipe so its authoritative snapshot exists before publishing it.
-    store.saveRecipe(recipe);
-    assertOwner(owner);
-    const synced = await ready();
-    assertOwner(owner);
-    owner = synced;
-  }
+  if (isBuiltInRecipe(recipe)) fail('内置菜谱仅供自己使用，可以将小程序分享给朋友。', 'BUILTIN_RECIPE');
   const info = store.getSyncInfo();
-  if (info.dirty || !store.getRecipe(sourceRecipeId)) fail('请先保存并同步这道菜谱，再公开。', 'SYNC_REQUIRED');
+  if (info.dirty || !recipe) fail('请先保存并同步这道菜谱，再分享。', 'SYNC_REQUIRED');
   return mutate('publish', {sourceRecipeId}, owner);
 }
 function unpublishRecipe(sourceRecipeId) { return mutate('unpublish', {sourceRecipeId}); }
@@ -386,7 +381,7 @@ async function importRecipe(id) {
   if (existing) return {recipeId: existing.id, added: false};
   const response = await request('recipe', {recipeId: id}, owner);
   const recipe = response.recipe;
-  if (!object(recipe) || recipe.id !== id || !profileId(recipe.profileId)) fail('这道公开菜谱的信息不完整，请重新打开。');
+  if (!object(recipe) || recipe.id !== id || !profileId(recipe.profileId)) fail('这道菜谱的信息不完整，请重新打开。');
   const ageGroups = normalizeAgeGroups(recipe.ageGroups);
   let photo = '';
   let keepPhoto = false;
