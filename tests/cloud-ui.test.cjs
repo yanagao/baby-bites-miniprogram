@@ -52,6 +52,7 @@ function setup(options = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'app.js'), 'utf8'), {
     App(value) { app = value; }, wx, console, getCurrentPages() { return currentPages; },
     require(name) {
+      if (name === './utils/family-photos') return {photoURL: value => value || '', subscribe: () => () => {}};
       if (name === './utils/store') return store;
       if (name === './utils/cloud-sync') return cloudSync;
       if (name === './assets/fonts/pocket-brush') return {};
@@ -67,6 +68,7 @@ function setup(options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
+        if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../components/share-prompt/controller') return require('../components/share-prompt/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;
@@ -397,7 +399,7 @@ test('a backup confirmation opened by A cannot import after switching to B', asy
   assert.deepEqual(copy(fixture.store.getState()), before);
   assert.match(page.data.error, /账号已切换/);
   assert.equal(page.data.busy, false);
-  assert.ok(page.data.backupText);
+  assert.equal(page.data.backupText, '');
 });
 
 test('settings passes a guard that rejects account switches during asynchronous backup decoding', async () => {

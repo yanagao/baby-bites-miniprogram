@@ -1,3 +1,4 @@
+const familyPhotos = require('../../utils/family-photos');
 const store = require('../../utils/store');
 const { categories, textures } = require('../../utils/selectors');
 const recipeAges = require('../../utils/recipe-ages');
@@ -24,16 +25,18 @@ Page({
     recordMeal: false, rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
     form: { name: '', minutes: '20', ingredients: '', steps: '', note: '' },
-    photo: '', saving: false, error: '', editing: false, builtIn: false, missingRecipe: false,
+    photo: '', photoDisplay: '', saving: false, error: '', editing: false, builtIn: false, missingRecipe: false,
     nameError: '', minutesError: '', ingredientsError: '', stepsError: '', ratingError: '',
     discardVisible: false
   },
   onLoad(options = {}) {
     this.initSharePrompt();
     this._draftOwner = store.getSyncInfo().owner;
+    this._draftScope = store.getSyncInfo().scopeKey || this._draftOwner;
+    this.setData({familyActive: Boolean(store.getSyncInfo().scope && store.getSyncInfo().scope.kind === 'family')});
     this._unsubscribeAccount = store.subscribe(info => {
       this.sharePromptAccountChanged(info);
-      if (!this._draftOwner && info.owner) this._draftOwner = info.owner;
+      if (!this._draftOwner && info.owner) { this._draftOwner = info.owner; this._draftScope = info.scopeKey || info.owner; }
     });
     if (options.id) {
       const recipe = store.getRecipe(options.id);
@@ -48,7 +51,7 @@ Page({
           steps: recipe.steps.join('\n'), note: recipe.note || ''
         },
         categoryIndex: this.data.categories.indexOf(recipe.category),
-        textureIndex: textures.indexOf(recipe.texture), photo: recipe.photo || '',
+        textureIndex: textures.indexOf(recipe.texture), photo: recipe.photo || '', photoDisplay: familyPhotos.photoURL(recipe.photo || ''),
         ...ageGroupFields(recipeAges.recipeAgeGroups(recipe))
       });
     }
@@ -60,12 +63,13 @@ Page({
     if (this._unsubscribeAccount) this._unsubscribeAccount();
     this.discardStagedPhoto();
   },
+  clearDraftForScopeChange() { this.original = null; this.setData({form: {name: '', minutes: '20', ingredients: '', steps: '', note: ''}, photo: '', photoDisplay: '', error: '家庭或账号已变化，请重新打开菜谱。', discardVisible: false}); },
   assertDraftAccount() {
     if (this._pageUnloaded) throw Error('页面已关闭，请重新打开后操作。');
-    if (this._sharePromptLocked) throw Error('微信账号已切换，请重新打开后操作。');
+    if (this._sharePromptLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
     const owner = store.getSyncInfo().owner;
-    if (this._draftOwner && this._draftOwner !== owner) throw Error('微信账号已切换，请重新打开菜谱编辑页后再保存。');
-    if (!this._draftOwner && owner) this._draftOwner = owner;
+    if (this._draftOwner && (this._draftOwner !== owner || this._draftScope !== (store.getSyncInfo().scopeKey || owner))) throw Error('微信账号已切换，或家庭已变化，请重新打开菜谱编辑页后再保存。');
+    if (!this._draftOwner && owner) { this._draftOwner = owner; this._draftScope = store.getSyncInfo().scopeKey || owner; }
   },
   draftSnapshot() {
     return JSON.stringify({
@@ -158,20 +162,22 @@ Page({
         if (file.size > 2 * 1024 * 1024) { ui.error(Error('请选择小于 2 MB 的照片')); return; }
         this.discardStagedPhoto();
         this.pendingPhoto = file.tempFilePath;
-        this.setData({ photo: file.tempFilePath, error: '' });
+        this.setData({ photo: file.tempFilePath, photoDisplay: file.tempFilePath, error: '' });
         this.updateUnsavedAlert();
       },
       fail: error => { if (!String(error.errMsg).includes('cancel')) ui.error(Error('未能选择照片，请检查相册权限后重试')); }
     });
   },
   previewPhoto() {
-    if (this.data.photo) wx.previewImage({ current: this.data.photo, urls: [this.data.photo] });
+    if (!this.sharePromptCurrent()) return;
+    const photo = familyPhotos.photoURL(this.data.photo || '');
+    if (photo) wx.previewImage({ current: photo, urls: [photo] });
   },
   clearPhoto() {
     if (this.data.saving || this.data.savedComplete) return;
     this.discardStagedPhoto();
     this.pendingPhoto = null;
-    this.setData({ photo: '', error: '' });
+    this.setData({ photo: '', photoDisplay: '', error: '' });
     this.updateUnsavedAlert();
   },
   async save() {
@@ -208,7 +214,7 @@ Page({
         this.stagedPhotoPath = savedPath;
         this.pendingPhoto = null;
         photo = savedPath;
-        this.setData({ photo: savedPath });
+        this.setData({ photo: savedPath, photoDisplay: savedPath });
       }
       const recipe = Object.assign({}, this.original || {}, {
         name: form.name.trim(), minutes, category: this.data.categories[this.data.categoryIndex],

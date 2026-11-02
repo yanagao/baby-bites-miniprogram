@@ -13,11 +13,13 @@ const PUBLIC = {id: 'a'.repeat(32), name: '公开厨房', bio: '公开介绍', e
 
 function setup(options = {}) {
   let owner = 'owner-a', failPrivate = false, savedProfile = {...PUBLIC, ...options.profile};
-  const state = {nickname: '小豆豆', recipes: [], logs: []}, listeners = new Set();
-  const calls = {public: [], private: [], order: [], errors: [], toasts: [], reads: 0, mine: 0, updates: 0, codes: 0, backs: 0, events: []};
+  let scope = options.family ? {kind: 'family', id: 'c'.repeat(64), membershipId: 'd'.repeat(32)} : undefined;
+  const state = {nickname: '小豆豆', recipes: [], logs: [], ...(options.family ? {babyBirthDate: '2025-02-01'} : {})}, listeners = new Set();
+  const calls = {public: [], private: [], family: [], order: [], errors: [], toasts: [], reads: 0, mine: 0, updates: 0, codes: 0, backs: 0, events: []};
   const store = options.store || {
-    getSyncInfo: () => ({owner}), getState() { calls.reads++; return clone(state); },
+    getSyncInfo: () => ({owner, ...(scope ? {scope, scopeKey: scope.kind + ':' + scope.id + ':' + scope.membershipId} : {})}), getState() { calls.reads++; return clone(state); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    setBabyProfile(patch) {calls.family.push(clone(patch)); if (failPrivate) throw Error('本机存储失败'); Object.assign(state, patch); listeners.forEach(fn => fn());},
     setNickname(value) {
       calls.private.push(value); calls.order.push('private');
       if (failPrivate) throw Error('本机存储失败');
@@ -59,6 +61,7 @@ function setup(options = {}) {
   pages = [{route: 'pages/detail/index'}, page];
   const fixture = {page, calls, state, store, listeners,
     changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); },
+    changeScope(value) { scope = value; listeners.forEach(fn => fn()); },
     failPrivate(value = true) { failPrivate = value; }};
   page.onLoad(options.visitor ? {id: PUBLIC.id} : options.returnAfterSave ? {edit: '1', returnToRecipe: '1'} : {});
   return fixture;
@@ -80,6 +83,43 @@ test('baby nickname editor loads the existing private name, keeps public name se
   page.edit(); assert.equal(page.data.babyNickname, '小豆豆');
   page.changeBabyNickname(input(' 小豆豆 ')); assert.equal(page.data.babyNicknameDirty, false);
   assert.deepEqual(calls.public, []); assert.deepEqual(calls.private, []);
+});
+
+test('family baby birthday is read from shared state and saving it never updates public profile age', async () => {
+  const f = await editing({family: true, profile: {babyBirthDate: '2024-01-01'}});
+  assert.equal(f.page.data.familyActive, true); assert.equal(f.page.data.babyBirthDate, '2025-02-01');
+  f.page.changeBabyBirthDate(input('2025-03-01')); await f.page.save();
+  assert.deepEqual(f.calls.family, [{babyBirthDate: '2025-03-01'}]); assert.deepEqual(f.calls.public, []);
+  assert.equal(f.page.data.profile.babyBirthDate, '2024-01-01'); assert.equal(f.state.babyBirthDate, '2025-03-01');
+});
+
+test('family nickname and birthday are saved atomically after separately changed public fields', async () => {
+  const f = await editing({family: true});
+  f.page.changeName(input('新厨房')); f.page.changeBabyNickname(input('小团子')); f.page.changeBabyBirthDate(input('2025-03-01'));
+  await f.page.save();
+  assert.deepEqual(f.calls.public, [{name: '新厨房', bio: PUBLIC.bio}]);
+  assert.deepEqual(f.calls.family, [{nickname: '小团子', babyBirthDate: '2025-03-01'}]);
+  assert.equal(f.page.data.babyBirthDate, '2025-03-01');
+});
+
+test('family shared profile failure preserves drafts and retries only the failed local patch', async () => {
+  const f = await editing({family: true}); f.failPrivate();
+  f.page.changeName(input('新厨房')); f.page.changeBabyNickname(input('小团子')); f.page.changeBabyBirthDate(input('2025-03-01'));
+  await f.page.save(); assert.equal(f.page.data.birthdayDirty, true); assert.equal(f.page.data.editing, true);
+  assert.match(f.page.data.babyNicknameError, /家庭宝宝资料未保存/); assert.equal(f.calls.toasts.length, 0);
+  f.failPrivate(false); await f.page.save();
+  assert.equal(f.calls.public.length, 1); assert.equal(f.calls.family.length, 2); assert.equal(f.page.data.editing, false);
+});
+
+test('family baby-only editing works while the public profile is offline', async () => {
+  const f = await editing({family: true, offline: true});
+  f.page.changeBabyBirthDate(input('2025-03-01')); await f.page.save();
+  assert.deepEqual(f.calls.family, [{babyBirthDate: '2025-03-01'}]); assert.equal(f.calls.public.length, 0);
+});
+
+test('a visitor profile never reads the current family birthday into public presentation', async () => {
+  const f = await editing({family: true, visitor: true, profile: {babyAgeMonths: 10, babyBirthDate: '2024-01-01'}});
+  assert.equal(f.page.data.familyActive, false); assert.equal(f.page.data.babyBirthDate, null); assert.equal(f.page.data.babyAgeMonths, 10);
 });
 
 test('private-only save trims the name, does not create a public profile or reload it, and empty input defaults to 宝宝', async () => {

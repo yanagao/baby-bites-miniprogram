@@ -36,6 +36,7 @@ function setup(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/editor/index.js'), 'utf8'), {
     wx, Page(value) { definition = value; }, require(dep) {
+      if (dep.endsWith('/family-photos')) return {photoURL: value => value || ''};
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/social')) return {getMine: async () => ({published: []})};
       if (dep.endsWith('/share-prompt/controller')) return require('../components/share-prompt/controller');

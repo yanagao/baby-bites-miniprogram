@@ -19,10 +19,12 @@ function fail(code) {
 // a private save/import/meal record into a new publication.
 async function syncPublished({owner, isCurrent, onUpdated}) {
   if (config.socialEnabled !== true) return {updated: 0, removed: 0};
+  const scope = store.getSyncInfo().scope;
+  const scopeKey = store.getSyncInfo().scopeKey;
   let updated = 0, removed = 0;
   const invalidate = () => { if (typeof onUpdated === 'function') onUpdated(); };
   const check = () => {
-    if (!owner || store.getSyncInfo().owner !== owner || !isCurrent()) fail('ACCOUNT_CHANGED');
+    if (!owner || store.getSyncInfo().owner !== owner || store.getSyncInfo().scopeKey !== scopeKey || !isCurrent()) fail('ACCOUNT_CHANGED');
   };
   for (let batch = 0; batch < MAX_BATCHES; batch++) {
     check();
@@ -33,7 +35,7 @@ async function syncPublished({owner, isCurrent, onUpdated}) {
     try {
       response = await new Promise((resolve, reject) => wx.cloud.callFunction({
         name: 'babyBitesSocial', config: {env: config.env},
-        data: {action: 'syncPublications', expectedOwner: owner}, success: resolve, fail: reject
+        data: {action: 'syncPublications', expectedOwner: owner, ...(scope ? {expectedScope: scope, protocolVersion: 2} : {})}, success: resolve, fail: reject
       }));
     } catch (_) {
       check();

@@ -1,5 +1,7 @@
 'use strict';
 
+const familyPhotos = require('./family-photos');
+
 const catalog = require('../data/recipe-cover-catalog');
 const coverLoader = require('./cover-loader');
 // Exact catalog IDs or explicit public dish keys only: names and generic
@@ -20,10 +22,10 @@ function getCover(recipe) {
 
 function withCover(recipe) {
   if (!recipe || typeof recipe !== 'object') return recipe;
-  const photo = recipe.photoURL || recipe.photo;
+  const photo = recipe.photoURL || familyPhotos.photoURL(recipe.photo || '');
   if (photo) {
     // A previously decorated card must not hide a newly supplied user photo.
-    return recipe.displayPhoto && recipe.displayPhoto !== photo ? Object.assign({}, recipe, {displayPhoto: photo}) : recipe;
+    return (recipe.photo && recipe.photo.indexOf('/families/') !== -1 || recipe.displayPhoto && recipe.displayPhoto !== photo) ? Object.assign({}, recipe, {displayPhoto: photo}) : recipe;
   }
   const cover = getCover(recipe);
   if (cover) return Object.assign({}, recipe, {displayPhoto: cover});

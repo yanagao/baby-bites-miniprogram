@@ -65,13 +65,14 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
       const recipe = await requireRecipe(event.recipeId, isBuiltin);
       if (recipe.owner === owner) reject('这是你自己的菜谱。', 'SELF_FEEDBACK');
       if (typeof event.localRecipeId !== 'string' || event.localRecipeId.length > 100) reject('保存记录不正确。', 'INVALID_REQUEST');
-      const {account, snapshot} = await committedSnapshot(owner, env);
+      const {account, snapshot} = await committedSnapshot(owner, env, false, undefined, session.expectedScope);
       const local = activeRecipe(snapshot, event.localRecipeId);
       if (!local || !local.source || local.source.recipeId !== recipe._id || local.source.profileId !== recipe.profileId || await isBuiltin(local)) {
         reject('请先将这道菜谱保存并完成同步。', 'FEEDBACK_NOT_SAVED');
       }
       const id = hash(`recipe-save:${owner}:${recipe._id}`);
       const recorded = await db.runTransaction(async transaction => {
+        if (session.assertScope) await session.assertScope(transaction);
         await assertCommitted(transaction, owner, account);
         const current = await requireRecipe(recipe._id, isBuiltin, transaction);
         if (current.owner !== recipe.owner) reject('菜谱刚有变化，请重试。', 'CONFLICT');
@@ -117,6 +118,7 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
       let written;
       try {
         written = await db.runTransaction(async transaction => {
+          if (session.assertScope) await session.assertScope(transaction);
           const currentRecipe = await requireRecipe(recipe._id, isBuiltin, transaction);
           if (currentRecipe.owner !== recipe.owner || currentRecipe.generation !== recipe.generation) reject('菜谱刚有变化，请重新打开后分享跟做。', 'CONFLICT');
           const existing = await get('feedback', id, transaction);
@@ -140,6 +142,7 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
     if (event.action === 'deleteCooksnap') {
       if (!isId(event.id)) reject('跟做信息不正确。', 'INVALID_REQUEST');
       const retiredPhoto = await db.runTransaction(async transaction => {
+        if (session.assertScope) await session.assertScope(transaction);
         const previous = await get('feedback', event.id, transaction);
         if (!previous || previous.type !== 'cooksnap' || previous.owner !== owner) reject('这条跟做暂时无法删除。', 'NOT_FOUND');
         if (previous.active === true) {

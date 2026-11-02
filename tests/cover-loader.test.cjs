@@ -53,6 +53,7 @@ function appFixture(options = {}) {
   const coverModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(root, 'utils/recipe-covers.js'), 'utf8'), {
     module: coverModule, require(name) {
+      if (name === './family-photos') return {photoURL: value => value || ''};
       if (name === './cover-loader') return loader;
       if (name === '../data/recipe-cover-catalog') return require('../data/recipe-cover-catalog');
       throw Error('Unexpected cover dependency: ' + name);
@@ -61,6 +62,7 @@ function appFixture(options = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'app.js'), 'utf8'), {
     App(value) { app = value; }, wx: {}, console, getCurrentPages: () => pages,
     require(name) {
+      if (name === './utils/family-photos') return {photoURL: value => value || '', subscribe: () => () => {}};
       if (name === './utils/store') return store;
       if (name === './utils/cloud-sync') return {start() { calls.starts++; }, getStatus: () => ({state: 'ready'}), syncNow() { calls.syncs++; }};
       if (name === './utils/tdesign-font') return {loadTDesignIcons: () => Promise.resolve('offline')};

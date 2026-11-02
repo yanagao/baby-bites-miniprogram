@@ -725,3 +725,59 @@ test('photo repair rechecks the current recipe after asynchronous file writes an
   assert.deepEqual(app.store.getRecipe(original.id), edited);
   assert.deepEqual(new Set(app.removed), new Set(app.writes));
 });
+
+test('export cancels after a same-account family ABA switch while reading a private photo', async () => {
+  const app = setup(), owner = 'a'.repeat(64);
+  app.store.bindAccount(owner);
+  const recipe = app.store.getState().recipes[0];
+  app.store.saveRecipe({...recipe, photo: 'wxfile://usr/scope.png'});
+  const manager = app.wx.getFileSystemManager(); let resume;
+  app.wx.getFileSystemManager = () => ({...manager, readFile(args) { resume = () => args.success({data: png.toString('base64')}); }});
+  const exporting = app.backup.exportText();
+  app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  app.store.bindScope(owner, {kind: 'personal', id: owner});
+  resume(); await assert.rejects(exporting, /家庭|账号/);
+  assert.equal(app.store.getRecipe(recipe.id).photo, 'wxfile://usr/scope.png');
+});
+
+test('import discards staged photos after a same-account family switch even if it returns to the old scope', async () => {
+  const app = setup(), owner = 'a'.repeat(64);
+  app.store.bindAccount(owner); const before = app.store.getState(), data = imageBackup(app);
+  const manager = app.wx.getFileSystemManager(); let resume;
+  app.wx.getFileSystemManager = () => ({...manager, writeFile(args) { manager.writeFile({...args, success(value) { resume = () => args.success(value); }}); }});
+  const importing = app.backup.importText(JSON.stringify(data));
+  app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  app.store.bindScope(owner, {kind: 'personal', id: owner});
+  resume(); await assert.rejects(importing, /家庭|账号/);
+  assert.deepEqual(app.store.getState(), before);
+  assert.equal(app.files.size, 0);
+});
+
+test('family backup downloads an authorized photo URL and never persists that URL', async () => {
+  const app = setup(), owner = 'a'.repeat(64), scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  app.store.bindAccount(owner); app.store.bindScope(owner, scope);
+  const env = require('../config/cloud').env;
+  const photo = 'cloud://' + env + '.bucket/families/' + scope.id + '/photos/dish.png';
+  const seed = require('../data/recipes')[0];
+  const id = app.store.saveRecipe({...seed, id: undefined, photo, isExample: false});
+  const signed = 'https://storage.example/family-photo?signature=private';
+  const requests = [], downloads = [];
+  app.wx.cloud = {
+    callFunction(args) { requests.push(args.data); args.success({result: {owner, scope, photoURLs: {[photo]: signed}}}); },
+    downloadFile() { throw Error('Family photo must not use creator-only direct cloud read'); }
+  };
+  app.wx.downloadFile = args => {
+    downloads.push(args.url); const tempFilePath = 'wxfile://tmp/family-backup.png'; app.files.set(tempFilePath, png);
+    args.success({statusCode: 200, tempFilePath});
+  };
+  // Bind both modules to this isolated device rather than another fixture's store.
+  delete require.cache[require.resolve('../utils/family-photos')];
+  delete require.cache[require.resolve('../utils/backup')];
+  const text = await require('../utils/backup').exportText();
+  assert.deepEqual(downloads, [signed]);
+  assert.equal(requests[0].action, 'familyPhotos'); assert.deepEqual(requests[0].expectedScope, scope);
+  assert.equal(JSON.parse(text).recipes.find(r => r.id === id).photo, photoUri);
+  assert.doesNotMatch(text, /signature|membershipId/);
+  assert.equal(app.store.getRecipe(id).photo, photo);
+  assert.equal(app.files.size, 0);
+});

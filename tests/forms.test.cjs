@@ -56,6 +56,7 @@ function setup() {
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './baby-age') return require('../utils/baby-age');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -70,6 +71,7 @@ function setup() {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
       wx, Page(value) { definition = value; },
       require(dependency) {
+        if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../utils/social') return {getMine: async options => { calls.mine.push(options); return hooks.mine ? hooks.mine(options) : {published: []}; }};
         if (dependency === '../../components/share-prompt/controller') return {createSharePrompt: options =>
@@ -718,4 +720,36 @@ test('back while optional sharing status is pending cancels it before the native
     assert.equal(page.data.sharePromptVisible, false);
     assert.equal(app.calls.back, 1);
   }
+});
+
+test('same-account family changes clear editor drafts and an ABA return cannot save them', async () => {
+  for (const name of ['editor', 'record-editor']) {
+    const app = setup(), owner = 'a'.repeat(64);
+    app.store.bindAccount(owner);
+    const {page} = existingOwnSave(app, name);
+    app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+    if (name === 'editor') assert.equal(page.data.form.name, '');
+    app.store.bindScope(owner, {kind: 'personal', id: owner});
+    const before = copy(app.store.getState());
+    await page.save();
+    assert.deepEqual(copy(app.store.getState()), before);
+    assert.match(page.data.error, /家庭|账号/);
+    assert.equal(page.data.sharePromptVisible, false);
+    assert.equal(app.calls.back, 0);
+  }
+});
+
+test('editing another family member recipe preserves creator and never prompts first publication', async () => {
+  const app = setup(), owner = 'a'.repeat(64), creator = 'b'.repeat(64);
+  app.store.bindAccount(owner);
+  app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  const id = app.store.saveRecipe({...seed[0], id: undefined, isExample: false, createdBy: creator});
+  const recipe = app.store.getRecipe(id);
+  const page = app.open('editor', {id: recipe.id});
+  input(page, 'name', '爸爸调整后的南瓜饭');
+  await page.save();
+  assert.equal(app.store.getRecipe(recipe.id).createdBy, creator);
+  assert.equal(app.store.getRecipe(recipe.id).name, '爸爸调整后的南瓜饭');
+  assert.equal(page.data.sharePromptVisible, false);
+  assert.equal(app.calls.mine.length, 0);
 });

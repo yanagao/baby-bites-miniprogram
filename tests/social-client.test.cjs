@@ -10,6 +10,7 @@ const validator = require('../cloudfunctions/babyBitesSync/validate');
 const requireStore = createRequire(path.resolve(__dirname, '../utils/store.js'));
 const OWNER = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
+const PERSONAL = {expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2};
 const PUBLIC_ID = 'c'.repeat(64);
 const PROFILE_ID = 'd'.repeat(32);
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
@@ -79,7 +80,7 @@ function setup(options = {}) {
       calls.push(copy(args.data));
       if (args.data.action === 'identity') {
         if (hooks.identity) return {result: await hooks.identity()};
-        return {result: {owner: syncOwner, revision: 0, fileID: ''}};
+        return {result: {owner: syncOwner, revision: 0, fileID: '', ...(options.scope ? {scope: options.scope} : {})}};
       }
       if (hooks.request) {
         const result = await hooks.request(args);
@@ -92,10 +93,12 @@ function setup(options = {}) {
   vm.runInNewContext(source('store.js'), {module: storeModule, require: requireStore, wx, console});
   const store = storeModule.exports;
   store.bindAccount(OWNER);
+  if (options.scope) store.bindScope(OWNER, options.scope);
   const sync = {getStatus() { return copy(syncStatus); }, subscribe(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }, async syncNow() {
     calls.push({action: 'sync'});
     if (hooks.sync) await hooks.sync();
     store.bindAccount(syncOwner);
+    if (options.scope) store.bindScope(syncOwner, options.scope);
     return {state: syncState, owner: syncOwner, message: syncState === 'synced' ? '已同步' : '等待联网同步'};
   }};
   const coverSources = new Map(Object.entries(options.coverSources || {}));
@@ -103,6 +106,7 @@ function setup(options = {}) {
     isReady: () => false, prepare() { return hooks.coverPrepare ? hooks.coverPrepare() : Promise.resolve(false); }};
   const coverModule = {exports: {}};
   vm.runInNewContext(source('recipe-covers.js'), {module: coverModule, require(name) {
+    if (name === './family-photos') return {photoURL: value => value || ''};
     if (name === './cover-loader') return coverLoader;
     if (name === '../data/recipe-cover-catalog') return require('../data/recipe-cover-catalog');
     throw Error(name);
@@ -228,7 +232,7 @@ test('a recent private identity check removes redundant social preflight without
   const app = setup();
   app.emitSync({owner: OWNER, identityCheckedAt: app.now()});
   await app.social.getMine();
-  assert.deepEqual(app.calls, [{action: 'mine', expectedOwner: OWNER}]);
+  assert.deepEqual(app.calls, [{action: 'mine', ...PERSONAL}]);
   app.advance(30000);
   await app.social.getMine();
   assert.equal(app.calls.filter(item => item.action === 'identity').length, 1);
@@ -364,7 +368,7 @@ test('built-in sharing is rejected without changing stored age metadata', async 
 test('social writes confirm identity and use it as a backend precondition', async () => {
   const app = setup();
   await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 '});
-  assert.deepEqual(app.calls, [{action: 'identity'}, {action: 'updateProfile', name: '小厨房', bio: '家常辅食', expectedOwner: OWNER}]);
+  assert.deepEqual(app.calls, [{action: 'identity', protocolVersion: 2}, {action: 'updateProfile', name: '小厨房', bio: '家常辅食', ...PERSONAL}]);
 });
 
 test('public catalog covers render from available cache sources and copying never downloads or deletes that source', async () => {
@@ -455,7 +459,7 @@ test('public baby age forwards zero, whole months, the upper bound and explicit 
     await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 ', babyAgeMonths});
   }
   assert.deepEqual(app.calls.filter(call => call.action === 'updateProfile'), [0, 8, 120, null].map(babyAgeMonths => ({
-    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyAgeMonths, expectedOwner: OWNER
+    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyAgeMonths, ...PERSONAL
   })));
   assert.equal(app.calls.filter(call => call.action === 'identity').length, 4);
   assert.deepEqual(copy(app.store.getState()), before);
@@ -466,7 +470,7 @@ test('legacy profile saves omit baby age instead of clearing it or carrying a pr
   await app.social.saveProfile({name: '小厨房', bio: '', babyAgeMonths: 8});
   await app.social.saveProfile({name: '修改昵称', bio: '修改简介'});
   const request = app.calls.filter(call => call.action === 'updateProfile')[1];
-  assert.deepEqual(request, {action: 'updateProfile', name: '修改昵称', bio: '修改简介', expectedOwner: OWNER});
+  assert.deepEqual(request, {action: 'updateProfile', name: '修改昵称', bio: '修改简介', ...PERSONAL});
   assert.equal(Object.prototype.hasOwnProperty.call(request, 'babyAgeMonths'), false);
 });
 
@@ -496,7 +500,7 @@ test('baby birthday forwards valid dates, today and explicit clearing without ch
     await app.social.saveProfile({name: ' 小厨房 ', bio: ' 家常辅食 ', babyBirthDate});
   }
   assert.deepEqual(app.calls.filter(call => call.action === 'updateProfile'), birthdays.map(babyBirthDate => ({
-    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyBirthDate, expectedOwner: OWNER
+    action: 'updateProfile', name: '小厨房', bio: '家常辅食', babyBirthDate, ...PERSONAL
   })));
   assert.equal(app.calls.filter(call => call.action === 'identity').length, birthdays.length);
   assert.deepEqual(copy(app.store.getState()), before);
@@ -510,8 +514,8 @@ test('omitted birthdays remain omitted on later saves and legacy manual age stay
   await app.social.saveProfile({name: '修改昵称', bio: '修改简介'});
   await app.social.saveProfile({name: '旧版资料', bio: '', babyAgeMonths: 8});
   const updates = app.calls.filter(call => call.action === 'updateProfile');
-  assert.deepEqual(updates[1], {action: 'updateProfile', name: '修改昵称', bio: '修改简介', expectedOwner: OWNER});
-  assert.deepEqual(updates[2], {action: 'updateProfile', name: '旧版资料', bio: '', babyAgeMonths: 8, expectedOwner: OWNER});
+  assert.deepEqual(updates[1], {action: 'updateProfile', name: '修改昵称', bio: '修改简介', ...PERSONAL});
+  assert.deepEqual(updates[2], {action: 'updateProfile', name: '旧版资料', bio: '', babyAgeMonths: 8, ...PERSONAL});
   assert.equal(Object.prototype.hasOwnProperty.call(updates[1], 'babyBirthDate'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[2], 'babyBirthDate'), false);
 });
@@ -574,7 +578,7 @@ test('account changes during a birthday response reject stale profile data and r
   await assert.rejects(app.social.saveProfile({name: '小厨房', bio: '', babyBirthDate: '2026-04-29'}), error =>
     error.code === 'ACCOUNT_CHANGED');
   assert.deepEqual(app.calls.find(call => call.action === 'updateProfile'), {
-    action: 'updateProfile', name: '小厨房', bio: '', babyBirthDate: '2026-04-29', expectedOwner: OWNER
+    action: 'updateProfile', name: '小厨房', bio: '', babyBirthDate: '2026-04-29', ...PERSONAL
   });
   app.store.bindAccount(OWNER);
   assert.deepEqual(copy(app.store.getState()), before);
@@ -584,8 +588,8 @@ test('discovery and share-code requests confirm identity and validate user-contr
   const app = setup();
   await app.social.getDiscover({search: ' 南瓜 ', cursor: 'a-cursor'});
   await app.social.getShareCode(PROFILE_ID, 'trial');
-  assert.deepEqual(app.calls, [{action: 'identity'}, {action: 'discover', search: '南瓜', cursor: 'a-cursor', expectedOwner: OWNER},
-    {action: 'identity'}, {action: 'shareCode', profileId: PROFILE_ID, envVersion: 'trial', expectedOwner: OWNER}]);
+  assert.deepEqual(app.calls, [{action: 'identity', protocolVersion: 2}, {action: 'discover', search: '南瓜', cursor: 'a-cursor', ...PERSONAL},
+    {action: 'identity', protocolVersion: 2}, {action: 'shareCode', profileId: PROFILE_ID, envVersion: 'trial', ...PERSONAL}]);
   for (const input of [null, {search: 'x'.repeat(61)}, {cursor: {}}, {cursor: 'x'.repeat(4001)}]) {
     assert.throws(() => app.social.getDiscover(input), error => error.code === 'INVALID_INPUT');
   }
@@ -701,7 +705,7 @@ test('user recipes are shared only with a preview token after synchronization an
   const previewToken = 'e'.repeat(64);
   await app.social.publishRecipe(id, previewToken);
   assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
-  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, previewToken, expectedOwner: OWNER});
+  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, previewToken, ...PERSONAL});
   assert.equal(app.store.getRecipe(id).isExample, false);
   assert.equal(app.store.getRecipe(id).note, '私人心得');
 });
@@ -752,7 +756,7 @@ test('previewing synchronizes private data and requests a read-only preview with
   app.hooks.request = args => args.data.action === 'previewPublication' ? server : undefined;
   const preview = await app.social.previewPublication(id);
   assert.deepEqual(app.calls.map(item => item.action), ['sync', 'previewPublication']);
-  assert.deepEqual(app.calls[1], {action: 'previewPublication', sourceRecipeId: id, expectedOwner: OWNER});
+  assert.deepEqual(app.calls[1], {action: 'previewPublication', sourceRecipeId: id, ...PERSONAL});
   assert.equal(preview.previewToken, server.previewToken);
   assert.equal(preview.recipe.name, server.recipe.name);
   assert.equal(preview.author.name, server.author.name);
@@ -1169,4 +1173,32 @@ test('a save receipt is never queued when the local cookbook write fails', async
   assert.equal(app.social.findImportedRecipe(PUBLIC_ID), null);
   assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
   assert.equal(app.storage.has('baby-bites-save-receipts:' + OWNER), false);
+});
+
+test('family social reads include membership preconditions and preserve the original author link', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope});
+  app.hooks.request = args => ({publication: {id: PUBLIC_ID, sourceRecipeId: args.data.sourceRecipeId,
+    createdBy: OTHER, sourceUpdatedAt: 5, privateNote: 'must not reach UI'}});
+  const result = await app.social.getFamilyRecipeLink('family-dish');
+  assert.deepEqual(copy(result), {publication: {id: PUBLIC_ID, sourceRecipeId: 'family-dish', createdBy: OTHER, sourceUpdatedAt: 5}});
+  assert.deepEqual(app.calls.find(c => c.action === 'familyRecipeLink'), {action: 'familyRecipeLink', sourceRecipeId: 'family-dish', expectedOwner: OWNER, expectedScope: scope, protocolVersion: 2});
+});
+
+test('family social identity rejects a stale membership and never sends the content request', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope});
+  app.hooks.identity = () => ({owner: OWNER, scope: {...scope, membershipId: 'd'.repeat(32)}});
+  await assert.rejects(app.social.getMine(), error => error.code === 'FAMILY_CHANGED');
+  assert.equal(app.calls.some(c => c.action === 'mine'), false);
+});
+
+test('same actor leaving and returning to a family invalidates a pending public response', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope});
+  app.hooks.request = () => {
+    app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, scope);
+    return {profile: {name: 'old family response'}, published: []};
+  };
+  await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
 });

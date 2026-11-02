@@ -9,6 +9,7 @@ Page({
   data: {...fields([]), input: '', error: '', saving: false, accountError: '', discardVisible: false},
   onLoad() {
     this._owner = store.getSyncInfo().owner || '';
+    this._scope = store.getSyncInfo().scopeKey || this._owner;
     this._bound = Boolean(this._owner);
     this._unloaded = false;
     this._locked = false;
@@ -26,12 +27,12 @@ Page({
   accountOK() {
     if (this._unloaded || this._locked) return false;
     const owner = store.getSyncInfo().owner || '';
-    if (!this._bound && owner) { this._owner = owner; this._bound = true; }
-    else if (this._bound && owner !== this._owner) {
+    if (!this._bound && owner) { this._owner = owner; this._scope = store.getSyncInfo().scopeKey || owner; this._bound = true; }
+    else if (this._bound && (owner !== this._owner || (store.getSyncInfo().scopeKey || owner) !== this._scope)) {
       this._locked = true;
       this.initialAllergies = [];
       this.setData({...fields([]), input: '', error: '', saving: false, discardVisible: false,
-        accountError: '微信账号已切换，请返回后重新打开过敏食物记录。'});
+        accountError: '微信账号已切换，或家庭已变化，请返回后重新打开过敏食物记录。'});
       this.updateUnsavedAlert();
       return false;
     }
@@ -42,7 +43,7 @@ Page({
     try {
       const values = normalizeAllergies(store.getState().allergies) || [];
       this.initialAllergies = values.slice();
-      this.setData({...fields(values), input: '', error: ''});
+      this.setData({...fields(values), input: '', error: '', familyActive: Boolean(store.getSyncInfo().scope && store.getSyncInfo().scope.kind === 'family')});
       this.updateUnsavedAlert();
     } catch (error) { this.setData({error: error.message || '暂时无法读取过敏食物，请重新打开。'}); }
   },

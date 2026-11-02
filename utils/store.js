@@ -7,14 +7,18 @@ const {normalizeAgeGroups} = require('./recipe-ages');
 const {normalizeAllergies} = require('./allergies');
 const {isBuiltInRecipe} = require('./recipe-origin');
 const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
+const {isValidBirthDate} = require('./baby-age');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
 const ACCOUNT_PREFIX = 'baby-bites-account-';
+const ACTIVE_SCOPE_KEY = 'baby-bites-active-scope';
+const FAMILY_PREFIX = 'baby-bites-family-cache-';
 // Bump when snapshot parsing gains fields older clients discarded. Keep this
 // beside the data in __sync: older writers drop unknown metadata on persistence.
-const SNAPSHOT_SCHEMA_VERSION = 1;
+const SNAPSHOT_SCHEMA_VERSION = 2;
 const validOwner = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 let owner = null;
+let scope = null;
 let sync = freshSync();
 let legacyClaim = null;
 let pendingMigrationOwner = null;
@@ -23,11 +27,25 @@ let state = null;
 let warning = '';
 let readBlocked = false;
 let sequence = 0;
+let scopeChanges = 0;
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const validString = (value, max) => typeof value === 'string' && value.length <= max;
 const validTimestamp = value => value == null || (Number.isFinite(value) && value >= 0);
+
+function normalizeScope(value, actor) {
+  if (!validOwner(actor)) fail('请先确认微信账号。');
+  if (value == null || value.kind === 'personal' && value.id === actor) return {kind: 'personal', id: actor};
+  if (isObject(value) && value.kind === 'family' && validOwner(value.id) &&
+    typeof value.membershipId === 'string' && /^[a-f0-9]{32}$/.test(value.membershipId)) {
+    return {kind: 'family', id: value.id, membershipId: value.membershipId};
+  }
+  fail('家庭数据归属不正确，请重新同步。');
+}
+function scopeKey(actor, value) { return actor ? actor + ':' + value.kind + ':' + value.id + (value.membershipId ? ':' + value.membershipId : '') : ''; }
+function getScopeKey() { init(); return owner ? scopeKey(owner, scope || {kind: 'personal', id: owner}) : ''; }
+function cacheKey(actor, value) { return value && value.kind === 'family' ? FAMILY_PREFIX + scopeKey(actor, value) : ACCOUNT_PREFIX + actor; }
 
 function fail(message) { throw new Error(message); }
 function timestamp(previous) { return Math.max(Date.now(), (Number(previous) || 0) + 1); }
@@ -79,6 +97,9 @@ function validateData(data) {
   }
   const nickname = data.nickname == null ? '宝宝' : data.nickname;
   if (!validString(nickname, 20) || !nickname.trim() || !validTimestamp(data.profileUpdatedAt)) fail('宝宝称呼或更新时间不正确。');
+  const hasBirthDate = Object.prototype.hasOwnProperty.call(data, 'babyBirthDate');
+  if (hasBirthDate && data.babyBirthDate !== null && !isValidBirthDate(data.babyBirthDate) ||
+    data.babyBirthDateUpdatedAt !== undefined && (!hasBirthDate || !Number.isSafeInteger(data.babyBirthDateUpdatedAt) || data.babyBirthDateUpdatedAt < 0)) fail('宝宝生日或更新时间不正确。');
   const allergies = normalizeAllergies(data.allergies);
   if (data.allergiesUpdatedAt !== undefined && (allergies === undefined ||
     !Number.isSafeInteger(data.allergiesUpdatedAt) || data.allergiesUpdatedAt < 0)) fail('过敏食物更新时间不正确。');
@@ -96,7 +117,7 @@ function validateData(data) {
       (recipe.imageKey != null && !validString(recipe.imageKey, 40)) ||
       (recipe.favorite != null && typeof recipe.favorite !== 'boolean') ||
       (recipe.isExample != null && typeof recipe.isExample !== 'boolean') ||
-      !validSource(recipe.source) ||
+      !validSource(recipe.source) || (recipe.createdBy !== undefined && !validOwner(recipe.createdBy)) ||
       !validTimestamp(recipe.createdAt) || !validTimestamp(recipe.updatedAt)) {
       fail('菜谱信息不完整：请检查名称、分类、用时、食材和制作步骤。');
     }
@@ -110,6 +131,7 @@ function validateData(data) {
       steps: recipe.steps.map(step => step.trim()), note: recipe.note || '', photo: recipe.photo || '',
       imageKey: recipe.imageKey || '', favorite: Boolean(recipe.favorite), isExample: Boolean(recipe.isExample),
       createdAt: recipe.createdAt || 0, updatedAt: recipe.updatedAt || 0,
+      ...(recipe.createdBy === undefined ? {} : {createdBy: recipe.createdBy}),
       ...(recipe.source ? {source: {profileId: recipe.source.profileId, recipeId: recipe.source.recipeId,
         authorName: recipe.source.authorName.trim()}} : {})
     };
@@ -119,12 +141,16 @@ function validateData(data) {
     if (!isObject(log) || !validString(log.id, 100) || !log.id.trim() || logIds.has(log.id) ||
       !recipeIds.has(log.recipeId) || ![1, 2, 3].includes(log.rating) || !validDate(log.date) ||
       (log.note != null && !validString(log.note, 500)) || (log.portion != null && !validString(log.portion, 40)) ||
-      !validTimestamp(log.createdAt) || !validTimestamp(log.updatedAt)) fail('用餐记录不完整：请检查对应菜谱、本次喜好和用餐日期。');
+      !validTimestamp(log.createdAt) || !validTimestamp(log.updatedAt) ||
+      log.recordedBy !== undefined && (!isObject(log.recordedBy) || !/^[a-f0-9]{32}$/.test(log.recordedBy.memberId || '') ||
+        !validString(log.recordedBy.label, 20) || !log.recordedBy.label.trim() || /[\u0000-\u001f\u007f]/.test(log.recordedBy.label))) fail('用餐记录不完整：请检查对应菜谱、本次喜好和用餐日期。');
     logIds.add(log.id);
     return {id: log.id, recipeId: log.recipeId, rating: log.rating, date: log.date,
-      portion: log.portion || '', note: log.note || '', createdAt: log.createdAt || 0, updatedAt: log.updatedAt || 0};
+      portion: log.portion || '', note: log.note || '', createdAt: log.createdAt || 0, updatedAt: log.updatedAt || 0,
+      ...(log.recordedBy === undefined ? {} : {recordedBy: {memberId: log.recordedBy.memberId, label: log.recordedBy.label.trim()}})};
   });
   return {version: 1, nickname: nickname.trim(), profileUpdatedAt: data.profileUpdatedAt || 0,
+    ...(hasBirthDate ? {babyBirthDate: data.babyBirthDate, babyBirthDateUpdatedAt: data.babyBirthDateUpdatedAt || 0} : {}),
     ...(allergies === undefined ? {} : {allergies, allergiesUpdatedAt: data.allergiesUpdatedAt || 0}), recipes, logs};
 }
 
@@ -182,7 +208,7 @@ function storageValue(data, metadata, targetOwner) {
   return Object.assign({}, data, {__sync: metadata}, legacyClaim ? {__syncMigratedTo: legacyClaim} : {});
 }
 function writeState(data, metadata, targetOwner) {
-  try { wx.setStorageSync(targetOwner ? ACCOUNT_PREFIX + targetOwner : STORAGE_KEY, storageValue(data, metadata, targetOwner)); }
+  try { wx.setStorageSync(targetOwner ? cacheKey(targetOwner, targetOwner === owner ? scope : null) : STORAGE_KEY, storageValue(data, metadata, targetOwner)); }
   catch (error) { fail('保存失败：本机存储空间不足或暂时不可用。已有记录未改变，请备份后重试。'); }
 }
 function init() {
@@ -192,7 +218,9 @@ function init() {
     if (active !== '' && active != null) {
       if (!validOwner(active)) fail('账号指针不正确。');
       owner = active;
-      const cached = readAccount(readValue(ACCOUNT_PREFIX + owner));
+      const savedScope = readValue(ACTIVE_SCOPE_KEY);
+      scope = savedScope && savedScope.owner === owner ? normalizeScope(savedScope.scope, owner) : {kind: 'personal', id: owner};
+      const cached = readAccount(readValue(cacheKey(owner, scope)));
       state = cached.data;
       sync = cached.sync;
     } else {
@@ -206,7 +234,7 @@ function init() {
       // examples as a new account's upload. bindAccount can recover its cache.
       if (typeof wx.getStorageInfoSync === 'function') {
         const info = wx.getStorageInfoSync();
-        if (info && Array.isArray(info.keys) && info.keys.some(key => key.indexOf(ACCOUNT_PREFIX) === 0)) {
+        if (info && Array.isArray(info.keys) && info.keys.some(key => key.indexOf(ACCOUNT_PREFIX) === 0 || key.indexOf(FAMILY_PREFIX) === 0)) {
           fail('账号指针丢失，请连接网络重新确认微信账号。');
         }
       }
@@ -228,6 +256,7 @@ function getLog(logId) { init(); const log = state.logs.find(item => item.id ===
 function getSyncInfo() {
   init();
   return {owner, sequence: sync.sequence, revision: sync.revision, dirty: sync.dirty,
+    scope: owner ? clone(scope || {kind: 'personal', id: owner}) : null, scopeKey: getScopeKey(),
     hasLocalData: sync.hasLocalData, snapshotCurrent: sync.snapshotSchemaVersion === SNAPSHOT_SCHEMA_VERSION, blocked: readBlocked};
 }
 function getSyncSnapshot() {
@@ -272,6 +301,7 @@ function bindAccount(nextOwner) {
     wx.setStorageSync(ACCOUNT_PREFIX + nextOwner, storageValue(target.data, target.sync, nextOwner));
     if (shouldClaim) pendingMigrationOwner = nextOwner;
     if (shouldClaim) wx.setStorageSync(STORAGE_KEY, Object.assign({}, legacy, {__syncMigratedTo: nextOwner}));
+    wx.setStorageSync(ACTIVE_SCOPE_KEY, {owner: nextOwner, scope: {kind: 'personal', id: nextOwner}});
     wx.setStorageSync(ACTIVE_OWNER_KEY, nextOwner);
   } catch (error) {
     fail('账号数据未切换，原数据已保留。' + (error.message || '请检查本机存储后重试。'));
@@ -280,14 +310,33 @@ function bindAccount(nextOwner) {
   state = target.data;
   sync = target.sync;
   owner = nextOwner;
+  scope = {kind: 'personal', id: nextOwner};
   warning = '';
   readBlocked = false;
   notify();
   return getSyncInfo();
 }
 
+function bindScope(actor, value) {
+  const nextScope = normalizeScope(value, actor);
+  if (owner !== actor) bindAccount(actor);
+  init();
+  if (scopeKey(actor, nextScope) === getScopeKey() && !readBlocked) return getSyncInfo();
+  let target;
+  try {
+    const saved = readValue(cacheKey(actor, nextScope));
+    target = saved == null ? {data: nextScope.kind === 'family' ? emptyState() : freshState(), sync: freshSync()} : readAccount(saved);
+    wx.setStorageSync(cacheKey(actor, nextScope), storageValue(target.data, target.sync, actor));
+    wx.setStorageSync(ACTIVE_SCOPE_KEY, {owner: actor, scope: nextScope});
+  } catch (error) { fail('家庭数据未切换，原数据已保留。' + (error.message || '请检查本机存储。')); }
+  scope = nextScope; state = target.data; sync = target.sync; readBlocked = false; warning = '';
+  notify();
+  return getSyncInfo();
+}
+
 function commit(mutator, recover) {
   init();
+  if (scopeChanges) fail('正在切换家庭，请稍后再保存。');
   if (readBlocked && !recover) fail(warning);
   if (!owner) {
     let persisted;
@@ -319,6 +368,11 @@ function commit(mutator, recover) {
   readBlocked = false;
   notify();
 }
+function beginScopeChange() {
+  scopeChanges++;
+  let released = false;
+  return () => { if (!released) { released = true; scopeChanges--; } };
+}
 
 function applySyncedSnapshot(snapshot, options) {
   init();
@@ -326,6 +380,7 @@ function applySyncedSnapshot(snapshot, options) {
   if (!isObject(options) || !Number.isSafeInteger(options.sequence) || options.sequence < 0 ||
     !Number.isSafeInteger(options.revision) || options.revision < 0) fail('同步版本不正确。');
   if (options.owner && options.owner !== owner) fail('微信账号已切换，请重新同步。');
+  if (options.scopeKey && options.scopeKey !== getScopeKey()) fail('家庭已切换，请重新同步。');
   if (options.revision < sync.revision) return false;
   const incoming = validateSnapshot(snapshot);
   const editedDuringSync = options.sequence !== sync.sequence;
@@ -453,6 +508,21 @@ function setNickname(value) {
   return nickname;
 }
 
+function setBabyProfile(input) {
+  if (!isObject(input)) fail('请填写宝宝资料。');
+  const hasNickname = Object.prototype.hasOwnProperty.call(input, 'nickname');
+  const hasBirthDate = Object.prototype.hasOwnProperty.call(input, 'babyBirthDate');
+  const nickname = hasNickname && typeof input.nickname === 'string' ? input.nickname.trim() : '';
+  if (hasNickname && (!nickname || nickname.length > 20)) fail('宝宝称呼请填写 1–20 个字。');
+  if (hasBirthDate && input.babyBirthDate !== null && !isValidBirthDate(input.babyBirthDate)) fail('请选择有效的宝宝生日，不能晚于今天。');
+  if (!hasNickname && !hasBirthDate) return;
+  commit(next => {
+    if (hasNickname) { next.nickname = nickname; next.profileUpdatedAt = timestamp(next.profileUpdatedAt); }
+    if (hasBirthDate) { next.babyBirthDate = input.babyBirthDate; next.babyBirthDateUpdatedAt = timestamp(next.babyBirthDateUpdatedAt); }
+  });
+}
+function setBabyBirthDate(value) { return setBabyProfile({babyBirthDate: value}); }
+
 function setAllergies(value) {
   const allergies = normalizeAllergies(value);
   if (allergies === undefined) fail('请填写有效的过敏食物记录。');
@@ -514,6 +584,10 @@ function importBackup(text, options) {
       next.profileUpdatedAt = incoming.profileUpdatedAt;
     }
     Object.assign(next, mergeAllergies(next, incoming));
+    if (incoming.babyBirthDate !== undefined && (next.babyBirthDate === undefined ||
+      (incoming.babyBirthDateUpdatedAt || 0) > (next.babyBirthDateUpdatedAt || 0))) {
+      next.babyBirthDate = incoming.babyBirthDate; next.babyBirthDateUpdatedAt = incoming.babyBirthDateUpdatedAt || 0;
+    }
   }, true);
   return summary;
 }
@@ -526,7 +600,7 @@ function exportBackup() {
 
 module.exports = {
   STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
-  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setAllergies, importBackup, exportBackup,
+  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setBabyProfile, setBabyBirthDate, setAllergies, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, applySyncedSnapshot,
-  subscribe, validateData, validateSnapshot
+  subscribe, validateData, validateSnapshot, bindScope, getScopeKey, normalizeScope, beginScopeChange, ACTIVE_SCOPE_KEY, FAMILY_PREFIX
 };

@@ -1,0 +1,28 @@
+{
+  "collections": [
+    {"name": "baby_bites_families", "permissions": {"read": false, "write": false}},
+    {"name": "baby_bites_family_memberships", "permissions": {"read": false, "write": false}},
+    {"name": "baby_bites_family_invites", "permissions": {"read": false, "write": false}}
+  ],
+  "indexes": [
+    {
+      "collection": "baby_bites_public_recipes",
+      "name": "family_publication_inventory",
+      "unique": false,
+      "keys": {"publicationScope": 1, "published": 1, "_id": 1}
+    }
+  ],
+  "snapshotTransport": {
+    "maxSnapshotBytes": 5242880,
+    "inlineSnapshotBytes": 524288,
+    "signedURLSeconds": 300,
+    "initialPhotoCount": 20,
+    "notes": "familyRead/commit 超过 512 KiB 的快照返回单独签名的 snapshotURL，客户端下载后校验最多 5 MiB；签名后重新验证成员及快照 revision/fileID。"
+  },
+  "storage": {
+    "familyCanonicalPrefix": "families/<familyId>/",
+    "clientDirectRead": false,
+    "clientDirectWrite": false,
+    "notes": "保留现有仅创建者读写规则。families 文件只由服务端上传，成员经云函数验证后取得短期签名 URL；不得设置家庭目录公开或放宽 users 私人目录权限。"
+  }
+}

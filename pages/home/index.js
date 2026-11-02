@@ -44,7 +44,7 @@ Page({
       const hour = new Date().getHours();
       const greeting = hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
       this.setData({hasAllergies: Boolean(state.allergies && state.allergies.length), hasRecipes: Boolean(state.recipes.length), greeting, nickname: state.nickname || '宝宝', warning: store.getWarning(),
-        recommendationOwner: store.getSyncInfo().owner || '',
+        recommendationOwner: store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '',
         pantryCount: pantry.length, pantryPreview: pantry.length ? pantry.slice(0, 4) : defaultPantryPreview,
         ...homeRecipes(state)});
     } catch (error) { ui.error(error); }
@@ -66,7 +66,7 @@ Page({
     const id = event.currentTarget && event.currentTarget.dataset.id;
     if (!id) return;
     try {
-      if (event.currentTarget.dataset.owner !== (store.getSyncInfo().owner || '')) return this.refresh();
+      if (event.currentTarget.dataset.owner !== (store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '')) return this.refresh();
       if (!store.getState().recipes.some(recipe => recipe.id === id)) return this.refresh();
       store.toggleFavorite(id);
       this.refresh();

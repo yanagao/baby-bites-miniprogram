@@ -17,11 +17,16 @@ let internalStoreChange = false;
 let disconnected = false;
 let fileSequence = 0;
 let observedOwner = store.getSyncInfo().owner;
+let observedScopeKey = store.getSyncInfo().scopeKey || observedOwner || '';
+let synchronizingScopeKey = null;
+let synchronizingEpoch = null;
 let ownerEpoch = 0;
 let lastSyncedEpoch = -1;
 store.subscribe(info => {
-  if (info.owner !== observedOwner) {
+  const nextScopeKey = info.scopeKey || info.owner || '';
+  if (info.owner !== observedOwner || nextScopeKey !== observedScopeKey) {
     observedOwner = info.owner;
+    observedScopeKey = nextScopeKey;
     ownerEpoch++;
     publish({identityCheckedAt: 0, identityInvalid: true});
   }
@@ -89,7 +94,20 @@ function ownedFile(fileID, owner, kind) {
   return kind === 'snapshots' ? /^[A-Za-z0-9_-]{1,160}\.json$/.test(filename) :
     kind === 'photos' && /^[A-Za-z0-9_-]{1,160}\.(?:jpg|jpeg|png|webp|gif|avif)$/i.test(filename);
 }
-function checkResult(result, expectedOwner) {
+function sameScope(a, b) { return !!a && !!b && a.kind === b.kind && a.id === b.id && a.membershipId === b.membershipId; }
+function normalizedScope(value, actor) {
+  if (value == null || value.kind === 'personal' && value.id === actor) return {kind: 'personal', id: actor};
+  if (value.kind === 'family' && /^[a-f0-9]{64}$/.test(value.id || '') && /^[a-f0-9]{32}$/.test(value.membershipId || '')) {
+    return {kind: 'family', id: value.id, membershipId: value.membershipId};
+  }
+  fail('家庭数据归属无法确认，请重新同步。', true);
+}
+function familyFile(fileID, scope, kind) {
+  const match = typeof fileID === 'string' && /^cloud:\/\/([A-Za-z0-9_-]+)\.([A-Za-z0-9._-]+)\/families\/([a-f0-9]{64})\/(snapshots|photos)\/([A-Za-z0-9_-]{1,160}\.(?:json|jpg|png|webp))$/.exec(fileID);
+  return !!match && match[1] === config.env && scope && scope.kind === 'family' && match[3] === scope.id && match[4] === kind &&
+    (kind === 'snapshots' ? /\.json$/.test(match[5]) : /\.(?:jpg|png|webp)$/.test(match[5]));
+}
+function checkResult(result, expectedOwner, expectedScope) {
   if (result && result.error) {
     const messages = {
       UNAUTHENTICATED: '未能识别当前微信账号，请在微信中重试。',
@@ -97,27 +115,36 @@ function checkResult(result, expectedOwner) {
       INVALID_ACCOUNT: '云端账号数据暂时无法读取，本机数据已保留。',
       INVALID_FILE: '同步文件的账号归属不正确，本机数据已保留。',
       INVALID_SNAPSHOT: '云端未接受这份同步数据，本机数据已保留。请检查菜谱和照片后重试。',
-      CLIENT_UPDATE_REQUIRED: '请更新小程序后同步，宝宝过敏食物记录已保留。'
+      CLIENT_UPDATE_REQUIRED: '请更新小程序后同步，已有家庭和宝宝资料已保留。',
+      FAMILY_CHANGED: '家庭成员资格已变化，请重新同步后再操作。',
+      FAMILY_FORBIDDEN: '当前已无法访问这个家庭，请重新同步。',
+      FAMILY_REQUIRED: '请先加入家庭。',
+      INVALID_FAMILY: '家庭信息暂时无法读取，请稍后重试。'
     };
     fail(messages[result.error.code] || '云端同步暂时失败，本机数据已保留，请稍后重试。',
-      result.error.code === 'UNAUTHENTICATED' || result.error.code === 'ACCOUNT_CHANGED');
+      ['UNAUTHENTICATED', 'ACCOUNT_CHANGED', 'FAMILY_CHANGED', 'FAMILY_FORBIDDEN'].includes(result.error.code));
   }
+  const scope = result && typeof result.owner === 'string' ? normalizedScope(result.scope, result.owner) : null;
   if (!result || typeof result.owner !== 'string' || !/^[a-f0-9]{64}$/.test(result.owner) ||
     !Number.isSafeInteger(result.revision) || result.revision < 0 ||
-    (result.revision === 0 ? result.fileID !== '' : !ownedFile(result.fileID, result.owner, 'snapshots'))) {
+    (result.revision === 0 ? result.fileID !== '' : !(scope.kind === 'family' ? familyFile(result.fileID, scope, 'snapshots') : ownedFile(result.fileID, result.owner, 'snapshots')))) {
     fail('未能确认云端账号与数据版本，本机数据已保留。', true);
   }
   if (expectedOwner && result.owner !== expectedOwner) fail('微信账号已切换，请重新同步当前账号。', true);
-  return result;
+  if (expectedScope && !sameScope(expectedScope, scope)) fail('家庭已切换，请重新同步。', true);
+  return {...result, scope};
 }
 async function invoke(data, owner) {
-  const response = await call(wx.cloud, 'callFunction', {name: config.functionName || 'babyBitesSync', data});
-  return checkResult(response && response.result, owner);
+  const response = await call(wx.cloud, 'callFunction', {name: config.functionName || 'babyBitesSync', data: {...data, protocolVersion: 2}});
+  return checkResult(response && response.result, owner, data.expectedScope);
 }
 function assertOwner(owner) {
   if (store.getSyncInfo().owner !== owner) fail('微信账号已切换，请重新同步当前账号。');
+  const key = store.getSyncInfo().scopeKey || owner || '';
+  if (synchronizingScopeKey !== null && key !== synchronizingScopeKey) fail('家庭已切换，本次同步已停止，请重新同步。', true);
+  if (synchronizingEpoch !== null && synchronizingEpoch !== ownerEpoch) fail('账号或家庭已变化，本次同步已停止，请重新同步。', true);
 }
-function normalizeSnapshot(snapshot, owner, allowLocalPhotos) {
+function normalizeSnapshot(snapshot, owner, allowLocalPhotos, scope) {
   let clean;
   try { clean = store.validateSnapshot(snapshot); }
   catch (_) { fail('同步数据格式不正确，本机数据已保留。'); }
@@ -127,7 +154,7 @@ function normalizeSnapshot(snapshot, owner, allowLocalPhotos) {
   clean.data.recipes.forEach(recipe => {
     if (!recipe.photo) return;
     if (recipe.photo.indexOf('cloud://') === 0) {
-      if (!ownedFile(recipe.photo, owner, 'photos')) fail('照片不属于当前微信账号或云环境，请重新选择这张照片后同步。');
+      if (!(scope && scope.kind === 'family' && familyFile(recipe.photo, scope, 'photos')) && !ownedFile(recipe.photo, owner, 'photos')) fail('照片不属于当前微信账号或家庭，请重新选择这张照片后同步。');
     } else if (!allowLocalPhotos) fail('云端照片信息不完整，本机数据已保留。');
   });
   return clean;
@@ -143,19 +170,34 @@ async function checkSize(filePath, maximum, unreadableMessage) {
     fail(maximum === MAX_PHOTO_BYTES ? '单张照片为空或超过 2 MB，请重新选择照片后同步。' : '同步文件为空或超过 5 MB，本机数据已保留。');
   }
 }
-async function downloadSnapshot(fileID, owner) {
-  if (!ownedFile(fileID, owner, 'snapshots')) fail('云端文件不属于当前微信账号，本机数据已保留。');
-  const download = await call(wx.cloud, 'downloadFile', {fileID});
+async function readDownloadedSnapshot(download, owner, scope, requireStatus = false) {
   const filePath = download && download.tempFilePath;
   try {
-    if (!filePath || (download.statusCode != null && download.statusCode !== 200)) fail('同步文件下载未完成，请重试。');
+    assertOwner(owner);
+    if (!filePath || (requireStatus ? download.statusCode !== 200 : download.statusCode != null && download.statusCode !== 200)) fail('同步文件下载未完成，请重试。');
     await checkSize(filePath, MAX_SNAPSHOT_BYTES);
     const result = await call(fs(), 'readFile', {filePath, encoding: 'utf8'});
     if (typeof result.data !== 'string' || byteLength(result.data) > MAX_SNAPSHOT_BYTES) fail('同步文件超过 5 MB，本机数据已保留。');
     let parsed;
     try { parsed = JSON.parse(result.data); } catch (_) { fail('同步文件无法读取，本机数据已保留。'); }
-    return normalizeSnapshot(parsed, owner, false);
+    assertOwner(owner);
+    return normalizeSnapshot(parsed, owner, false, scope);
   } finally { await removeLocal(filePath); }
+}
+async function downloadSnapshot(fileID, owner) {
+  if (!ownedFile(fileID, owner, 'snapshots')) fail('云端文件不属于当前微信账号，本机数据已保留。');
+  return readDownloadedSnapshot(await call(wx.cloud, 'downloadFile', {fileID}), owner);
+}
+async function readFamilySnapshot(result, owner, scope) {
+  assertOwner(owner);
+  if (result.snapshot !== undefined) return normalizeSnapshot(result.snapshot, owner, false, scope);
+  if (typeof result.snapshotURL !== 'string' || result.snapshotURL.length > 8192 || !/^https:\/\/[^\s]+$/.test(result.snapshotURL)) {
+    fail('家庭数据下载地址无效，请重新同步。');
+  }
+  // Large snapshots travel through an expiring authorized storage URL because
+  // the mini-program cloud-function response is limited to 1 MiB.
+  const download = await call(wx, 'downloadFile', {url: result.snapshotURL});
+  return readDownloadedSnapshot(download, owner, scope, true);
 }
 function uniqueName() {
   fileSequence += 1;
@@ -221,7 +263,7 @@ function apply(snapshot, owner, sequence, revision) {
   assertOwner(owner);
   internalStoreChange = true;
   try {
-    if (store.applySyncedSnapshot(snapshot, {owner, sequence, revision}) === false) {
+    if (store.applySyncedSnapshot(snapshot, {owner, sequence, revision, scopeKey: synchronizingScopeKey}) === false) {
       fail('云端版本早于本机缓存，本机数据已保留，请稍后重试。');
     }
   }
@@ -229,12 +271,19 @@ function apply(snapshot, owner, sequence, revision) {
 }
 async function synchronize() {
   publish({state: 'syncing', message: '正在同步当前微信账号的数据'});
+  const identityEpoch = ownerEpoch;
   let remoteInfo = await invoke({action: 'identity'});
+  if (identityEpoch !== ownerEpoch) fail('账号或家庭已切换，请重新同步。', true);
   const identityCheckedAt = Date.now();
   const owner = remoteInfo.owner;
   internalStoreChange = true;
-  try { store.bindAccount(owner); } finally { internalStoreChange = false; }
-  publish({owner, identityCheckedAt, identityInvalid: false, revision: store.getSyncInfo().revision,
+  synchronizingScopeKey = null;
+  synchronizingEpoch = null;
+  try { store.bindAccount(owner); if (typeof store.bindScope === 'function') store.bindScope(owner, remoteInfo.scope); } finally { internalStoreChange = false; }
+  synchronizingScopeKey = store.getSyncInfo().scopeKey || owner;
+  synchronizingEpoch = ownerEpoch;
+  const scope = remoteInfo.scope;
+  publish({owner, scope, scopeKey: synchronizingScopeKey, identityCheckedAt, identityInvalid: false, revision: store.getSyncInfo().revision,
     lastSyncedAt: status.owner === owner ? status.lastSyncedAt : 0});
   const uploadedPhotos = new Map();
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -249,8 +298,15 @@ async function synchronize() {
       remoteInfo.revision === localInfo.revision) return;
     // Capture this sequence before any download or upload. applySyncedSnapshot
     // merges edits made during these awaits and leaves them pending for another pass.
-    const local = normalizeSnapshot(store.getSyncSnapshot(), owner, true);
-    const remote = remoteInfo.fileID ? await downloadSnapshot(remoteInfo.fileID, owner) : emptySnapshot();
+    const local = normalizeSnapshot(store.getSyncSnapshot(), owner, true, scope);
+    let remote;
+    if (scope.kind === 'family' && remoteInfo.fileID) {
+      remoteInfo = await invoke({action: 'familyRead', expectedOwner: owner, expectedScope: scope}, owner);
+      assertOwner(owner);
+      remote = await readFamilySnapshot(remoteInfo, owner, scope);
+      assertOwner(owner);
+      require('./family-photos').install(remoteInfo.photoURLs, synchronizingScopeKey);
+    } else remote = remoteInfo.fileID ? await downloadSnapshot(remoteInfo.fileID, owner) : emptySnapshot();
     const snapshot = mergeSnapshots(local, remote);
     await uploadPhotos(snapshot, owner, uploadedPhotos);
     assertOwner(owner);
@@ -265,8 +321,8 @@ async function synchronize() {
     try {
       await call(fs(), 'writeFile', {filePath, data: text, encoding: 'utf8'});
       const fileID = await uploadOwned(filePath, owner, 'snapshots', 'json');
-      result = await invoke({action: 'commit', baseRevision: remoteInfo.revision, fileID}, owner);
-      if (!result.conflict && (result.revision !== remoteInfo.revision + 1 || result.fileID !== fileID)) {
+      result = await invoke({action: 'commit', expectedOwner: owner, expectedScope: scope, baseRevision: remoteInfo.revision, fileID}, owner);
+      if (!result.conflict && (result.revision !== remoteInfo.revision + 1 || scope.kind !== 'family' && result.fileID !== fileID)) {
         fail('云端尚未确认本次保存，本机数据已保留，请重试同步。');
       }
     } finally {
@@ -275,7 +331,14 @@ async function synchronize() {
       await removeLocal(filePath);
     }
     if (result.conflict) { remoteInfo = result; continue; }
-    apply(snapshot, owner, localInfo.sequence, result.revision);
+    if (scope.kind === 'family') {
+      if (result.snapshot === undefined && result.snapshotURL === undefined) result = await invoke({action: 'familyRead', expectedOwner: owner, expectedScope: scope}, owner);
+      assertOwner(owner);
+      const canonical = await readFamilySnapshot(result, owner, scope);
+      assertOwner(owner);
+      require('./family-photos').install(result.photoURLs, synchronizingScopeKey);
+      apply(canonical, owner, localInfo.sequence, result.revision);
+    } else apply(snapshot, owner, localInfo.sequence, result.revision);
     return;
   }
   fail('其他设备正在更新数据，本机修改已保留，请稍后再同步。');
@@ -355,7 +418,7 @@ function syncNow(options = {}) {
     // foreground event or explicit retry can start a new attempt.
     queued = false;
     onFailure(error);
-  }).then(() => { inFlight = null; return getStatus(); });
+  }).then(() => { synchronizingScopeKey = null; synchronizingEpoch = null; inFlight = null; return getStatus(); });
   return inFlight;
 }
 function start() {

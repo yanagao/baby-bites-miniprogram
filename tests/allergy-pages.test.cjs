@@ -161,11 +161,12 @@ test('private store updates refresh the active public filter without reloading t
   vm.runInNewContext(fs.readFileSync(path.join(root, 'app.js'), 'utf8'), {
     App(value) {app = value;}, getCurrentPages: () => [page],
     require(dep) {
-      if (dep.endsWith('/store')) return {init() {}, subscribe(fn) {listener = fn;}};
+      if (dep.endsWith('/store')) return {init() {}, getSyncInfo: () => ({owner: ''}), subscribe(fn) {listener = fn;}};
       if (dep.endsWith('/cloud-sync')) return {start() {}};
       if (dep.endsWith('/cover-loader')) return {subscribe() {return () => {};}};
       if (dep.endsWith('/tdesign-font')) return {};
       if (dep.endsWith('/recipe-covers')) return {};
+      if (dep.endsWith('/family-photos')) return {subscribe: () => () => {}};
       throw Error(dep);
     }
   });

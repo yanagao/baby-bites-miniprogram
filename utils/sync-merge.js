@@ -72,6 +72,15 @@ function mergeSnapshots(local, remote) {
   const deletedLogs = mergeTombstones(local.deleted.logs, remote.deleted.logs);
   const recipes = mergeItems(local.data.recipes, remote.data.recipes, deletedRecipes);
   const logs = mergeItems(local.data.logs, remote.data.logs, deletedLogs);
+  // Upload acknowledgements may add authoritative provenance while another
+  // local edit is still pending. Keep that provenance even when content wins
+  // a same-timestamp merge on the client.
+  for (const recipe of remote.data.recipes) if (recipes.has(recipe.id) && recipe.createdBy !== undefined) {
+    recipes.set(recipe.id, {...recipes.get(recipe.id), createdBy: recipe.createdBy});
+  }
+  for (const log of remote.data.logs) if (logs.has(log.id) && log.recordedBy !== undefined) {
+    logs.set(log.id, {...logs.get(log.id), recordedBy: copy(log.recordedBy)});
+  }
   // A record cannot survive removal of the recipe it belongs to, even when the
   // record was added offline after the recipe was deleted on another device.
   logs.forEach((log, id) => {
@@ -88,8 +97,12 @@ function mergeSnapshots(local, remote) {
     if (localProfile.nickname === '宝宝' && remoteProfile.nickname !== '宝宝') profile = remoteProfile;
     else if (remoteProfile.nickname === '宝宝' && localProfile.nickname !== '宝宝') profile = localProfile;
   }
+  const birthday = data => data.babyBirthDate === undefined ? null :
+    {babyBirthDate: data.babyBirthDate, updatedAt: data.babyBirthDateUpdatedAt || 0};
+  const chosenBirthday = prefer(birthday(local.data), birthday(remote.data));
   return copy({version: 1, data: {version: 1, nickname: profile.nickname,
     profileUpdatedAt: profile.updatedAt, ...mergeAllergies(local.data, remote.data),
+    ...(chosenBirthday ? {babyBirthDate: chosenBirthday.babyBirthDate, babyBirthDateUpdatedAt: chosenBirthday.updatedAt} : {}),
     recipes: sorted(recipes.values()), logs: sorted(logs.values())},
   deleted: {recipes: sorted(deletedRecipes.values()), logs: sorted(deletedLogs.values())}});
 }

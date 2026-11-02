@@ -15,7 +15,7 @@ const babyNicknameFields = state => {
   const nickname = state ? normalizeBabyNickname(state.nickname) : '';
   return {babyNickname: nickname, babyNicknameBase: nickname, babyNicknameDirty: false, babyNicknameError: ''};
 };
-const babyAgeFields = (profile, isSelf = false) => {
+const profileAgeFields = (profile, isSelf = false) => {
   const today = babyAge.todayString();
   const birthDate = isSelf && profile && babyAge.isValidBirthDate(profile.babyBirthDate, today) ? profile.babyBirthDate : null;
   const months = birthDate ? babyAge.ageInMonths(birthDate, today) :
@@ -23,6 +23,11 @@ const babyAgeFields = (profile, isSelf = false) => {
   return {babyAgeMonths: months, babyAgeLabel: babyAge.ageLabel(months),
     babyBirthDate: birthDate, birthdayDirty: false, birthDateToday: today,
     birthdayAgeLabel: birthDate ? babyAge.ageLabel(months) : ''};
+};
+const inFamily = () => { const scope = store.getSyncInfo().scope; return !!(scope && scope.kind === 'family'); };
+const babyAgeFields = (profile, isSelf = false) => {
+  const familyActive = isSelf && inFamily();
+  return {...profileAgeFields(familyActive ? {babyBirthDate: store.getState().babyBirthDate || null} : profile, isSelf), familyActive};
 };
 
 module.exports = function createProfilePage(isTab = false) { return {
@@ -33,7 +38,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     publishedCount: 0, followingCount: 0, followerCount: 0,
     recipes: [], nextOffset: null, loadingMore: false, editing: false, name: '', bio: '', saving: false, followBusy: false,
     profileSaveError: '', profileModerating: false, avatarPath: getProfileAvatar(),
-    babyAgeMonths: null, babyAgeLabel: '', babyBirthDate: null, birthdayDirty: false,
+    babyAgeMonths: null, babyAgeLabel: '', babyBirthDate: null, birthdayDirty: false, familyActive: false,
     birthdayAgeLabel: '', birthDateToday: '',
     ...babyNicknameFields(null),
     shareVisible: false, shareLoading: false, shareError: '', posterPath: '', albumDenied: false, savingPoster: false, shareVersion: ''
@@ -122,10 +127,12 @@ module.exports = function createProfilePage(isTab = false) { return {
     try {
       const state = store.getState();
       this.setData({...content.build(state, {tab: this.data.contentTab}),
+        familyActive: inFamily(),
+        ...(!this.data.editing || !this.data.birthdayDirty ? babyAgeFields(this.data.profile, true) : {}),
         ...(this.data.editing && !this.data.babyNicknameDirty ? babyNicknameFields(state) : {})});
     } catch (error) { ui.error(error); }
   },
-  disposeLocalContent() { this.published = []; this._loadedAt = 0; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; },
+  disposeLocalContent() { this.published = []; this._loadedAt = 0; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
   changeContentTab(event) {
     if (!account.check(this)) return;
     const value = event.currentTarget && event.currentTarget.dataset.value || event.detail && event.detail.value;
@@ -163,7 +170,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     this.setData({babyNickname: value, babyNicknameDirty: normalizeBabyNickname(value) !== this.data.babyNicknameBase, babyNicknameError: ''});
   },
   changeBabyBirthDate(event) {
-    if (!account.check(this) || !this.data.isSelf || !this.data.socialEnabled || !this.data.profile || !this.data.editing || this.data.saving) return;
+    if (!account.check(this) || !this.data.isSelf || (!this.data.familyActive && (!this.data.socialEnabled || !this.data.profile)) || !this.data.editing || this.data.saving) return;
     const value = event.detail && event.detail.value;
     const today = babyAge.todayString();
     if (!babyAge.isValidBirthDate(value, today)) return;
@@ -171,7 +178,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       birthdayAgeLabel: babyAge.ageLabel(babyAge.ageInMonths(value, today))});
   },
   clearBabyBirthDate() {
-    if (!account.check(this) || !this.data.isSelf || !this.data.socialEnabled || !this.data.profile || !this.data.editing || this.data.saving) return;
+    if (!account.check(this) || !this.data.isSelf || (!this.data.familyActive && (!this.data.socialEnabled || !this.data.profile)) || !this.data.editing || this.data.saving) return;
     this.setData({babyBirthDate: null, birthdayDirty: true, birthdayAgeLabel: ''});
   },
   async save() {
@@ -181,8 +188,10 @@ module.exports = function createProfilePage(isTab = false) { return {
     const nickname = normalizeBabyNickname(this.data.babyNickname);
     if (this.data.babyNicknameDirty && nickname.length > 20) { ui.error(new Error('宝宝称呼请填写 1–20 个字。')); return; }
     const profile = this.data.profile;
-    const publicChanged = this.data.socialEnabled && !!profile && (name !== profile.name.trim() || bio !== (profile.bio || '').trim() || this.data.birthdayDirty);
-    const privateOnly = this.data.babyNicknameDirty && !publicChanged &&
+    const familyActive = inFamily();
+    const familyBabyPatch = {...(this.data.babyNicknameDirty ? {nickname} : {}), ...(familyActive && this.data.birthdayDirty ? {babyBirthDate: this.data.babyBirthDate} : {})};
+    const publicChanged = this.data.socialEnabled && !!profile && (name !== profile.name.trim() || bio !== (profile.bio || '').trim() || (!familyActive && this.data.birthdayDirty));
+    const privateOnly = (this.data.babyNicknameDirty || (familyActive && this.data.birthdayDirty)) && !publicChanged &&
       ((!this.pendingShare && !this.returnAfterSave) || this.publicSavedForEdit);
     if (!privateOnly && (!this.data.socialEnabled || !profile)) { ui.error(new Error('生日与主页资料暂不可编辑，请稍后重试')); return; }
     if (!privateOnly && !name) { ui.error(new Error('请填写昵称')); return; }
@@ -191,7 +200,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       if (this.data.babyBirthDate !== null && !babyAge.isValidBirthDate(this.data.babyBirthDate)) {
         ui.error(new Error('请选择有效的宝宝生日，不能晚于今天。')); return;
       }
-      input.babyBirthDate = this.data.babyBirthDate;
+      if (!familyActive) input.babyBirthDate = this.data.babyBirthDate;
     }
     const request = ++this.request;
     this.setData({saving: true, profileModerating: !privateOnly, profileSaveError: '', babyNicknameError: ''});
@@ -202,22 +211,22 @@ module.exports = function createProfilePage(isTab = false) { return {
         const savedProfile = result && result.profile ? result.profile : {...profile, ...input, exists: true,
           ...(Object.prototype.hasOwnProperty.call(input, 'babyBirthDate') ? {babyAgeMonths: babyAge.ageInMonths(input.babyBirthDate)} : {})};
         this.publicSavedForEdit = true;
-        this.setData({profile: savedProfile, avatarPath: getProfileAvatar(savedProfile.id), profileModerating: false, name: savedProfile.name, bio: savedProfile.bio || '', ...babyAgeFields(savedProfile, true)});
+        this.setData({profile: savedProfile, avatarPath: getProfileAvatar(savedProfile.id), profileModerating: false, name: savedProfile.name, bio: savedProfile.bio || '', ...(familyActive ? {} : babyAgeFields(savedProfile, true))});
       }
       if (!account.check(this) || request !== this.request) return;
-      if (this.data.babyNicknameDirty) {
-        try { store.setNickname(nickname); }
+      if (Object.keys(familyBabyPatch).length) {
+        try { if (familyActive) store.setBabyProfile(familyBabyPatch); else store.setNickname(nickname); }
         catch (error) {
           if (!account.check(this) || request !== this.request) return;
-          const message = this.publicSavedForEdit ? '主页已保存，宝宝称呼未保存，请重试' : error.message || '宝宝称呼未保存，请重试';
+          const message = this.publicSavedForEdit ? (familyActive ? '主页已保存，家庭宝宝资料未保存，请重试' : '主页已保存，宝宝称呼未保存，请重试') : error.message || '宝宝资料未保存，请重试';
           this.setData({babyNicknameError: message}); ui.error(new Error(message)); return;
         }
       }
       if (!account.check(this) || request !== this.request) return;
       const savedPublic = this.publicSavedForEdit;
-      this.setData({editing: false, saving: false, profileModerating: false, profileSaveError: '', ...babyNicknameFields(null)});
+      this.setData({editing: false, saving: false, profileModerating: false, profileSaveError: '', ...babyAgeFields(this.data.profile, true), ...babyNicknameFields(null)});
       this.publicSavedForEdit = false;
-      if (privateOnly && !savedPublic) { wx.showToast({title: '宝宝称呼已保存', icon: 'success'}); this.refresh(); return; }
+      if (privateOnly && !savedPublic) { wx.showToast({title: familyActive ? '宝宝资料已保存' : '宝宝称呼已保存', icon: 'success'}); this.refresh(); return; }
       if (this.pendingShare) { this.shareRequested = true; this.pendingShare = false; }
       wx.showToast({title: '资料已保存', icon: 'success'});
       if (this.returnToRecipe(true)) return;
@@ -275,6 +284,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     wx.navigateTo({url: '/pages/' + (this.data.isSelf ? 'detail' : 'public-recipe') + '/index?id=' + encodeURIComponent(id)});
   },
   openCookbook() { if (account.check(this)) wx.navigateTo({url: '/pages/recipes/index'}); },
+  openFamily() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/family/index'}); },
   openFeedback() { if (account.check(this) && this.data.isSelf && this.data.socialEnabled) wx.navigateTo({url: '/pages/feedback/index'}); },
   openAllergies() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/allergies/index'}); },
   openFollowing() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/following/index?tab=people'}); },

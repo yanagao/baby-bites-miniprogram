@@ -30,9 +30,10 @@ Page({
   onLoad(options) {
     this.initSharePrompt();
     this._draftOwner = store.getSyncInfo().owner;
+    this._draftScope = store.getSyncInfo().scopeKey || this._draftOwner;
     this._unsubscribeAccount = store.subscribe(info => {
       this.sharePromptAccountChanged(info);
-      if (!this._draftOwner && info.owner) this._draftOwner = info.owner;
+      if (!this._draftOwner && info.owner) { this._draftOwner = info.owner; this._draftScope = info.scopeKey || info.owner; }
     });
     const now = today();
     const minDate = String(Number(now.slice(0, 4)) - 10) + '-01-01';
@@ -68,12 +69,13 @@ Page({
     this.initialDraft = this.draftSnapshot();
   },
   onUnload() { this.disposeSharePrompt(); if (this._unsubscribeAccount) this._unsubscribeAccount(); },
+  clearDraftForScopeChange() { this.originalLog = null; this.recipeId = ''; this.setData({recipe: null, note: '', error: '家庭或账号已变化，请重新打开记录。', discardVisible: false, deleteVisible: false}); },
   assertDraftAccount() {
     if (this._pageUnloaded) throw Error('页面已关闭，请重新打开后操作。');
-    if (this._sharePromptLocked) throw Error('微信账号已切换，请重新打开后操作。');
+    if (this._sharePromptLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
     const owner = store.getSyncInfo().owner;
-    if (this._draftOwner && this._draftOwner !== owner) throw Error('微信账号已切换，请重新打开用餐记录页后再操作。');
-    if (!this._draftOwner && owner) this._draftOwner = owner;
+    if (this._draftOwner && (this._draftOwner !== owner || this._draftScope !== (store.getSyncInfo().scopeKey || owner))) throw Error('微信账号已切换，或家庭已变化，请重新打开用餐记录页后再操作。');
+    if (!this._draftOwner && owner) { this._draftOwner = owner; this._draftScope = store.getSyncInfo().scopeKey || owner; }
   },
   draftSnapshot() {
     return JSON.stringify({ rating: this.data.rating, date: this.data.date, portionIndex: this.data.portionIndex, note: this.data.note });

@@ -1,6 +1,14 @@
 'use strict';
 
 const store = require('./store');
+const familyPhotos = require('./family-photos');
+const currentScopeKey = () => { const info = store.getSyncInfo(); return info.scopeKey || info.owner || ''; };
+function scopeGuard() {
+  const initial = currentScopeKey();
+  let changed = false;
+  const unsubscribe = store.subscribe(() => { if (currentScopeKey() !== initial) changed = true; });
+  return {check() { if (changed || currentScopeKey() !== initial) throw Error('微信账号已切换，或家庭已变化，请重新操作备份。'); }, dispose: unsubscribe};
+}
 const {today} = require('./selectors');
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
@@ -26,6 +34,18 @@ function isTemporaryPath(filePath) {
 }
 async function readPhoto(filePath) {
   if (filePath.indexOf('cloud://') !== 0) return read(filePath, 'base64');
+  if (filePath.indexOf('/families/') !== -1) {
+    await familyPhotos.ensure([filePath]);
+    const url = familyPhotos.photoURL(filePath);
+    if (!url || !/^https:\/\//.test(url)) throw Error('家庭照片暂时无法读取。');
+    const result = await new Promise((resolve, reject) => wx.downloadFile({url, success: resolve, fail: reject}));
+    const temporary = result && result.tempFilePath;
+    const canRemove = isTemporaryPath(temporary);
+    try {
+      if (!canRemove || result.statusCode !== 200) throw Error('家庭照片下载未完成。');
+      return await read(temporary, 'base64');
+    } finally { if (canRemove) await removeFile(temporary); }
+  }
   const result = await new Promise((resolve, reject) => {
     if (!wx.cloud || typeof wx.cloud.downloadFile !== 'function') { reject(Error('云照片下载暂不可用。')); return; }
     try { wx.cloud.downloadFile({fileID: filePath, success: resolve, fail: reject}); }
@@ -82,93 +102,110 @@ function imageType(base64) {
 }
 
 async function exportText() {
-  const data = JSON.parse(store.exportBackup());
-  for (const recipe of data.recipes) {
-    if (!recipe.photo) continue;
-    let base64;
-    try { base64 = await readPhoto(recipe.photo); }
-    catch (error) { throw Error('照片无法读取，请先检查「' + recipe.name + '」的成品照后再导出。'); }
-    checkBase64(base64);
-    recipe.photo = 'data:image/' + imageType(base64) + ';base64,' + base64;
-  }
-  const text = JSON.stringify(data, null, 2);
-  if (byteLength(text) > MAX_BACKUP_BYTES) throw Error('含照片的备份超过 20 MB，请减少照片后再导出。');
-  return text;
+  const guard = scopeGuard();
+  try {
+    const data = JSON.parse(store.exportBackup());
+    for (const recipe of data.recipes) {
+      if (!recipe.photo) continue;
+      let base64;
+      try { base64 = await readPhoto(recipe.photo); }
+      catch (error) { throw Error('照片无法读取，请先检查「' + recipe.name + '」的成品照后再导出。'); }
+      checkBase64(base64);
+      recipe.photo = 'data:image/' + imageType(base64) + ';base64,' + base64;
+    }
+    const text = JSON.stringify(data, null, 2);
+    if (byteLength(text) > MAX_BACKUP_BYTES) throw Error('含照片的备份超过 20 MB，请减少照片后再导出。');
+    guard.check();
+    return text;
+  } finally { guard.dispose(); }
 }
 
 async function exportFile() {
-  const text = await exportText();
-  const filename = 'xiaokoudai-' + today() + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json';
-  const filePath = wx.env.USER_DATA_PATH + '/' + filename;
-  try { await write(filePath, text, 'utf8'); }
-  catch (error) { await removeFile(filePath); throw Error('备份文件写入失败，请检查剩余存储空间后重试。'); }
-  return filePath;
+  const guard = scopeGuard();
+  let writtenPath = '';
+  try {
+    const text = await exportText();
+    const filename = 'xiaokoudai-' + today() + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.json';
+    const filePath = wx.env.USER_DATA_PATH + '/' + filename;
+    guard.check();
+    writtenPath = filePath;
+    try { await write(filePath, text, 'utf8'); }
+    catch (error) { await removeFile(filePath); throw Error('备份文件写入失败，请检查剩余存储空间后重试。'); }
+    guard.check();
+    return filePath;
+  } catch (error) { if (writtenPath) await removeFile(writtenPath); throw error; }
+  finally { guard.dispose(); }
 }
 
 async function importText(text, beforeCommit) {
-  function assertCanCommit() {
-    if (beforeCommit == null) return;
-    if (typeof beforeCommit !== 'function') throw Error('导入校验必须是同步函数。');
-    const result = beforeCommit();
-    if (result && typeof result.then === 'function') {
-      // Account ownership must be checked synchronously beside the store commit.
-      // An asynchronous guard would create another account-switch window.
-      if (typeof result.catch === 'function') result.catch(() => {});
-      throw Error('导入校验必须是同步函数。');
-    }
-  }
-  if (typeof text !== 'string' || byteLength(text) > MAX_BACKUP_BYTES) throw Error('备份文件过大，请选择 20 MB 以内的 JSON 文件。');
-  let data;
-  try { data = JSON.parse(text); } catch (error) { throw Error('备份内容不是有效的 JSON 文件。'); }
-  if (!data || data.version !== 1 || !Array.isArray(data.recipes) || !Array.isArray(data.logs)) throw Error('请选择小口袋导出的备份。');
-  if (data.recipes.length > 1000 || data.logs.length > 20000) throw Error('备份最多支持 1000 道菜谱和 20000 条记录。');
-
-  const photos = [];
-  // Validate all image encodings before creating any files.
-  data.recipes.forEach((recipe, index) => {
-    if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) throw Error('备份中的菜谱信息不完整。');
-    if (recipe.photo == null || recipe.photo === '') return;
-    if (typeof recipe.photo !== 'string') throw Error('备份中的照片信息不正确。');
-    const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(recipe.photo);
-    if (!match) throw Error('备份照片不完整，请使用「导出备份文件」生成可迁移的文件。');
-    checkBase64(match[2]);
-    photos.push({index, base64: match[2], type: imageType(match[2])});
-  });
-
-  assertCanCommit();
-  const currentRecipes = store.getState().recipes;
-  const currentById = new Map(currentRecipes.map(recipe => [recipe.id, recipe]));
-  const repairMissingPhotos = [];
-  const oldPhotos = new Set(currentRecipes.map(recipe => recipe.photo)
-    .filter(photo => photo && photo.indexOf('cloud://') !== 0));
-  const createdPaths = [];
-  let committed = false;
+  const guard = scopeGuard();
   try {
-    for (const photo of photos) {
-      const incoming = data.recipes[photo.index];
-      const local = currentById.get(incoming.id);
-      if (local && local.photo && local.photo.indexOf('cloud://') !== 0 &&
-        (incoming.updatedAt || 0) === (local.updatedAt || 0)) {
-        try { await read(local.photo, 'base64'); }
-        catch (error) { repairMissingPhotos.push({id: local.id, photo: local.photo}); }
+    function assertCanCommit() {
+      if (beforeCommit == null) { guard.check(); return; }
+      if (typeof beforeCommit !== 'function') throw Error('导入校验必须是同步函数。');
+      const result = beforeCommit();
+      if (result && typeof result.then === 'function') {
+        // Account ownership must be checked synchronously beside the store commit.
+        // An asynchronous guard would create another account-switch window.
+        if (typeof result.catch === 'function') result.catch(() => {});
+        throw Error('导入校验必须是同步函数。');
       }
-      const filePath = wx.env.USER_DATA_PATH + '/import-' + Date.now() + '-' + photo.index + '-' +
-        Math.random().toString(36).slice(2, 8) + '.' + (photo.type === 'jpeg' ? 'jpg' : photo.type);
-      createdPaths.push(filePath);
-      await write(filePath, photo.base64, 'base64');
-      data.recipes[photo.index].photo = filePath;
+      guard.check();
     }
+    if (typeof text !== 'string' || byteLength(text) > MAX_BACKUP_BYTES) throw Error('备份文件过大，请选择 20 MB 以内的 JSON 文件。');
+    let data;
+    try { data = JSON.parse(text); } catch (error) { throw Error('备份内容不是有效的 JSON 文件。'); }
+    if (!data || data.version !== 1 || !Array.isArray(data.recipes) || !Array.isArray(data.logs)) throw Error('请选择小口袋导出的备份。');
+    if (data.recipes.length > 1000 || data.logs.length > 20000) throw Error('备份最多支持 1000 道菜谱和 20000 条记录。');
+
+    const photos = [];
+    // Validate all image encodings before creating any files.
+    data.recipes.forEach((recipe, index) => {
+      if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) throw Error('备份中的菜谱信息不完整。');
+      if (recipe.photo == null || recipe.photo === '') return;
+      if (typeof recipe.photo !== 'string') throw Error('备份中的照片信息不正确。');
+      const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(recipe.photo);
+      if (!match) throw Error('备份照片不完整，请使用「导出备份文件」生成可迁移的文件。');
+      checkBase64(match[2]);
+      photos.push({index, base64: match[2], type: imageType(match[2])});
+    });
+
     assertCanCommit();
-    const result = store.importBackup(JSON.stringify(data), {repairMissingPhotos});
-    committed = true;
-    const used = new Set(store.getState().recipes.map(recipe => recipe.photo).filter(Boolean));
-    for (const filePath of createdPaths) if (!used.has(filePath)) await removeFile(filePath);
-    for (const filePath of oldPhotos) if (!used.has(filePath)) await removeFile(filePath);
-    return result;
-  } catch (error) {
-    if (!committed) for (const filePath of createdPaths) await removeFile(filePath);
-    throw error;
-  }
+    const currentRecipes = store.getState().recipes;
+    const currentById = new Map(currentRecipes.map(recipe => [recipe.id, recipe]));
+    const repairMissingPhotos = [];
+    const oldPhotos = new Set(currentRecipes.map(recipe => recipe.photo)
+      .filter(photo => photo && photo.indexOf('cloud://') !== 0));
+    const createdPaths = [];
+    let committed = false;
+    try {
+      for (const photo of photos) {
+        const incoming = data.recipes[photo.index];
+        const local = currentById.get(incoming.id);
+        if (local && local.photo && local.photo.indexOf('cloud://') !== 0 &&
+          (incoming.updatedAt || 0) === (local.updatedAt || 0)) {
+          try { await read(local.photo, 'base64'); }
+          catch (error) { repairMissingPhotos.push({id: local.id, photo: local.photo}); }
+        }
+        const filePath = wx.env.USER_DATA_PATH + '/import-' + Date.now() + '-' + photo.index + '-' +
+          Math.random().toString(36).slice(2, 8) + '.' + (photo.type === 'jpeg' ? 'jpg' : photo.type);
+        createdPaths.push(filePath);
+        await write(filePath, photo.base64, 'base64');
+        data.recipes[photo.index].photo = filePath;
+      }
+      assertCanCommit();
+      const result = store.importBackup(JSON.stringify(data), {repairMissingPhotos});
+      committed = true;
+      guard.check();
+      const used = new Set(store.getState().recipes.map(recipe => recipe.photo).filter(Boolean));
+      for (const filePath of createdPaths) if (!used.has(filePath)) await removeFile(filePath);
+      for (const filePath of oldPhotos) if (!used.has(filePath)) await removeFile(filePath);
+      return result;
+    } catch (error) {
+      if (!committed) for (const filePath of createdPaths) await removeFile(filePath);
+      throw error;
+    }
+  } finally { guard.dispose(); }
 }
 
 module.exports = {exportText, exportFile, importText, read, removeFile};

@@ -1,7 +1,7 @@
 <t-navbar z-index="100" title="{{editing ? '编辑菜谱' : '添加菜谱'}}" placeholder left-arrow delta="{{0}}" bind:go-back="cancel" />
 <block wx:if="{{!missingRecipe}}">
   <view class="editor-page">
-  <view class="editor-sharing-note">{{builtIn ? "内置菜谱的修改保留在你的菜谱中，不会展示给他人。" : "菜谱先保存到你的食谱。选择公开分享并确认预览后，其他家长才能看到做法。"}}</view>
+  <view class="editor-sharing-note">{{builtIn ? "内置菜谱的修改保留在食谱中，不会出现在公开推荐里。" : (familyActive ? "菜谱保存后与家人共享。首次公开分享需要由创建者确认预览，其他家长才能看到做法。" : "菜谱先保存到你的食谱。选择公开分享并确认预览后，其他家长才能看到做法。")}}</view>
   <t-cell-group class="editor-group" title="基本信息">
     <t-input label="菜谱名称" align="right" placeholder="例如：南瓜小米粥" value="{{form.name}}" maxlength="60" disabled="{{saving || savedComplete}}" status="{{nameError ? 'error' : 'default'}}" tips="{{nameError}}" data-field="name" bind:change="input" />
     <t-cell title="菜谱分类" note="{{categories[categoryIndex]}}" arrow hover="{{!saving && !savedComplete}}" data-field="categoryIndex" bind:click="openPicker" />
@@ -22,14 +22,14 @@
     <t-textarea value="{{form.steps}}" placeholder="每行一步，填写具体做法" maxlength="12000" autosize="{{true}}" disabled="{{saving || savedComplete}}" data-field="steps" bind:change="input" />
     <t-cell class="form-error" wx:if="{{stepsError}}" description="{{stepsError}}" />
   </t-cell-group>
-  <t-cell-group class="editor-group" title="小心得（仅自己可见）">
+  <t-cell-group class="editor-group" title="{{familyActive ? '小心得（家庭内可见）' : '小心得（仅自己可见）'}}">
     <t-textarea value="{{form.note}}" placeholder="记录下次想调整的口感或做法" maxlength="2000" autosize="{{true}}" disabled="{{saving || savedComplete}}" data-field="note" bind:change="input" />
   </t-cell-group>
   <t-cell-group class="editor-group" title="成品照（选填）">
     <t-cell title="照片" description="照片随菜谱同步，单张最多 2 MB。">
       <view slot="note" class="editor-photo-action"><t-button theme="primary" shape="round" icon="camera" disabled="{{saving || savedComplete}}" bind:tap="choosePhoto">{{photo ? '更换照片' : '添加照片'}}</t-button></view>
     </t-cell>
-    <t-cell wx:if="{{photo}}" title="查看照片" image="{{photo}}" arrow hover bind:click="previewPhoto" />
+    <t-cell wx:if="{{photo}}" title="查看照片" image="{{photoDisplay}}" arrow hover bind:click="previewPhoto" />
     <t-cell wx:if="{{photo}}">
       <t-button slot="note" variant="text" disabled="{{saving || savedComplete}}" bind:tap="clearPhoto">移除照片</t-button>
     </t-cell>

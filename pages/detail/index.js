@@ -15,7 +15,7 @@ Page({
     deleteContent: '',
     deleteConfirmButton: {content: '删除菜谱', theme: 'danger'},
     deleting: false,
-    publicInfo: null, publicReady: false, publicError: '', publicBusy: false, publicLoading: false,
+    familyRecipe: false, publicInfo: null, publicReady: false, publicError: '', publicBusy: false, publicLoading: false,
     builtIn: false, publicChanged: false,
     shareRecipe: null, shareVisible: false, shareLoading: false, shareError: ''
   },
@@ -26,6 +26,7 @@ Page({
     this._syncRefreshPending = false;
     this._lastSyncedKey = typeof cloudSync.getStatus === 'function' ? syncVersion(cloudSync.getStatus()) : '';
     this._sessionOwner = store.getSyncInfo().owner;
+    this._sessionScope = store.getSyncInfo().scopeKey || this._sessionOwner;
     this._accountBound = Boolean(this._sessionOwner);
     this._accountLocked = false;
     this._unsubscribeAccount = store.subscribe(() => { this.accountOK(false); });
@@ -60,11 +61,13 @@ Page({
   },
   accountOK(report) {
     if (this._unloaded) return false;
-    const current = store.getSyncInfo().owner;
-    if (!this._accountBound && current) { this._sessionOwner = current; this._accountBound = true; }
-    else if (this._accountBound && current !== this._sessionOwner) this._accountLocked = true;
+    const info = store.getSyncInfo();
+    const current = info.owner;
+    const scope = info.scopeKey || current;
+    if (!this._accountBound && current) { this._sessionOwner = current; this._sessionScope = scope; this._accountBound = true; }
+    else if (this._accountBound && (current !== this._sessionOwner || scope !== this._sessionScope)) this._accountLocked = true;
     if (!this._accountLocked) return true;
-    const message = '微信账号已切换，请返回后重新打开菜谱。';
+    const message = '微信账号已切换，或家庭已变化，请返回后重新打开菜谱。';
     if (!this._accountCleared) {
       this._accountCleared = true;
       this._syncRefreshPending = false;
@@ -88,7 +91,7 @@ Page({
     try {
       const state = store.getState();
       const recipe = state.recipes.find(item => item.id === this.recipeId);
-      this.setData({recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
+      this.setData({familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
         publicChanged: !!(recipe && this.data.publicInfo && this.data.publicInfo.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))});
       if (!recipe) this.setData({shareRecipe: null, shareVisible: false});
       this.updateShareMenu();
@@ -131,6 +134,13 @@ Page({
       shareRecipe: null, shareVisible: false, shareLoading: false, shareError: ''});
     this.updateShareMenu();
     try {
+      if (this.data.familyRecipe) {
+        const link = await social.getFamilyRecipeLink(this.recipeId, fromOperation ? {force: true} : undefined);
+        if (!this.accountOK(false) || request !== this._publicRequest) return;
+        this.setData({publicInfo: link.publication, publicReady: true, publicLoading: false});
+        if (link.publication) await this.refreshShareRecipe(request);
+        return this.data.publicReady;
+      }
       const mine = await social.getMine(fromOperation ? {force: true} : undefined);
       if (!this.accountOK(false) || request !== this._publicRequest) return;
       if (!mine || !mine.profile || typeof mine.profile.exists !== 'boolean' || !Array.isArray(mine.published) ||
@@ -213,6 +223,9 @@ Page({
     if (!this.data.socialEnabled || !this.actionAllowed() || this.data.publicLoading || this.data.shareLoading || this.data.builtIn || this._openingPreview) return;
     if (!this.data.publicReady && !(await this.refreshPublication())) return;
     if (!this.accountOK(false) || !this.data.recipe || this.data.builtIn || this.data.deleting || this.data.deleteVisible) return;
+    if (!this.data.publicInfo && this.data.familyRecipe) {
+      ui.error(Error('请由添加这道菜的家人选择公开分享。')); return;
+    }
     if (!this.data.publicInfo) {
       this._openingPreview = true;
       wx.navigateTo({url: '/pages/share-preview/index?id=' + encodeURIComponent(this.recipeId),

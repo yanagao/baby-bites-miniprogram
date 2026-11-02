@@ -1,5 +1,7 @@
 'use strict';
 
+const familyPhotos = require('./family-photos');
+
 const {categories} = require('./categories');
 const {getCover} = require('./recipe-covers');
 const recipeAges = require('./recipe-ages');
@@ -58,7 +60,7 @@ function ratingOf(state, recipeId) {
   return latest ? latest.rating : 0;
 }
 
-function displayPhoto(recipe) { return recipe.photo || recipe.photoURL || getCover(recipe); }
+function displayPhoto(recipe) { return familyPhotos.photoURL(recipe.photo || '') || recipe.photoURL || getCover(recipe); }
 
 function enrichWithRating(recipe, feedback, allergies) {
   const rating = feedback ? feedback.rating : 0;
@@ -71,7 +73,7 @@ function enrichWithRating(recipe, feedback, allergies) {
     ratingName: rating ? ratings[rating].name : '未记录喜好',
     ratingIcon: rating ? ratings[rating].icon : 'heart',
     ingredientText: recipe.ingredients.map(item => item.name).join(' · '),
-    photoSrc: recipe.photo || '',
+    photoSrc: familyPhotos.photoURL(recipe.photo || ''),
     displayPhoto: displayPhoto(recipe),
     ageLabel: recipeAges.ageLabel(recipe),
     placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey)
@@ -162,7 +164,7 @@ function listLogs(state, filter) {
       const recipe = recipes.get(log.recipeId);
       return Object.assign({}, log, {
         recipeName: recipe.name, ratingName: ratings[log.rating].name,
-        ratingIcon: ratings[log.rating].icon, photoSrc: recipe.photo || '',
+        ratingIcon: ratings[log.rating].icon, photoSrc: familyPhotos.photoURL(recipe.photo || ''),
     displayPhoto: displayPhoto(recipe),
         placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey) ? dishIcons[recipe.imageKey] : 'bowl'
       });

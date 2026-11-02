@@ -1,5 +1,17 @@
 # 小口袋公开主页与关注
 
+## 家庭作用域与作者（2026-11-02，尚未部署）
+
+家庭协议由 `babyBitesSync` 管理，部署配置见 [family-database.json](../babyBitesSync/family-database.json)。两个独立部署的函数各包含相同的 `family.js`，测试校验其字节一致。当前改动尚未部署；需先建立家庭、成员映射、邀请三个 deny-all 集合和 `family_publication_inventory` 索引，再更新两函数与客户端，不放宽现有私人存储权限。
+
+社交 owner 始终为个人微信身份。涉及私人快照的操作按可信成员映射解析当前 scope，从家庭 canonical 快照读取；请求入口接受的 scope 通过每次调用独立的参数传至后续读取（含保存回执），不能在请求中途改用刚加入的家庭或退出后的个人数据。公开前 token 同时绑定 scope/membershipId、revision/fileID、内容和原作者。事务内再次验证实际调用者仍为同一次加入的成员，旧 scope、移出后重加和迟到操作不能跨家庭提交。
+
+家庭菜谱只有 `createdBy` 本人可以首次公开，其他人收到 `RECIPE_AUTHOR_REQUIRED`。`familyRecipeLink({sourceRecipeId,protocolVersion:2,expectedScope})` 可供同一家人查询已分享的原作者链接，返回 `{publication:null|{id,sourceRecipeId,sourceUpdatedAt,createdBy}}`，只读取当前家庭快照里的菜谱及对应准确公开文档，不扫描别人主页；未分享时由添加菜谱的家人决定。本人公开主页、关注及跟做反馈的作者身份不会因切换家庭而变化。
+
+公开记录新增 `publicationScope:'personal'|'family:<familyId>'`，旧无字段记录按 personal 处理。后台对账只操作当前范围中的已分享记录，切换家庭不会自动撤下原个人菜谱，也不会把其他家人的菜谱首次发布到自己名下。当前家庭任何成员保存共享菜谱后，可触发其已分享版本的更新和删除；publicationOwner 取原有公开记录作者，而实际成员权限始终用 actingOwner 检验，公开链接、署名和排序保留，不创建作者资料，不恢复撤回。移入家庭的已分享个人菜谱需作者重新预览并明确确认，才能将该公开版本关联到家庭；同步不会悄悄改换关联范围。
+
+`expectedScope` 与 `protocolVersion:2` 用于社交写入的范围保护。公开前预览、个人/家庭保存回执、自动对账、跟做发布/删除、资料和关注变更均复核成员或提交事务；保存回执验证当前家庭已同步副本，仍按真实保存者与原公开菜谱去重。公开返回不增加宝宝生日、过敏、用餐记录、家庭成员列表或内部作用域字段。
+
 **2026-11-02 请求性能优化**：`mine` 只投影公开清单必要字段并并行读取统计，`profile` 并行读取独立信息并复用作者；新增 `profileSummary`，访客仅 3 次文档读取，不查询菜谱或计数。发现列表以最多 5 路并发处理详情，保持排序、字节上限、游标和最终公开状态检查。全量 1038 项测试及原生编译通过；部署成功（9 文件、41.8 KB），Active、30 秒、Node.js 16.13，部署后 8 个 JS/JSON 运行文件与本地一致，见[核验记录](../../../output/request-performance/verification.json)。未调整数据库权限或索引；客户端未提审发布。
 
 **2026-11-02 自动更新部署（历史验收）**：新增 `updatePublished`，已公开菜谱保存后自动更新公开白名单字段；首次公开仍显式确认，撤回不会被并发更新复活。全量 948 项测试与原生编译通过，本函数已部署成功（9 文件、40.7 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。真实模拟器核验公开详情入口，未修改真实菜谱或执行跨账号保存测试；客户端未提审发布，见[核验记录](../../../output/auto-public-update/verification.json)。

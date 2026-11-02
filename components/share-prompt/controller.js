@@ -2,20 +2,22 @@
 
 function createSharePrompt({store, wx, isBuiltInRecipe, getMine, setTimer = setTimeout, clearTimer = clearTimeout}) {
   const data = {savedComplete: false, sharePromptVisible: false, sharePromptMessage: '', sharePromptBusy: false, sharePromptError: ''};
-  const ownRecipe = recipe => Boolean(recipe && !isBuiltInRecipe(recipe) && !recipe.source);
+  const ownRecipe = recipe => Boolean(recipe && !isBuiltInRecipe(recipe) && !recipe.source && (!recipe.createdBy || recipe.createdBy === store.getSyncInfo().owner));
   return {data, methods: {
     initSharePrompt() {
       this._sharePromptOwner = store.getSyncInfo().owner;
+      this._sharePromptScope = store.getSyncInfo().scopeKey || this._sharePromptOwner;
       this._sharePromptLocked = false;
       this._pageUnloaded = false;
       this._sharePromptRequest = 0;
     },
     sharePromptAccountChanged(info) {
-      if (!this._sharePromptOwner && info.owner) this._sharePromptOwner = info.owner;
-      else if (this._sharePromptOwner && this._sharePromptOwner !== info.owner) this._sharePromptLocked = true;
+      if (!this._sharePromptOwner && info.owner) { this._sharePromptOwner = info.owner; this._sharePromptScope = info.scopeKey || info.owner; }
+      else if (this._sharePromptOwner && (this._sharePromptOwner !== info.owner || this._sharePromptScope !== (info.scopeKey || info.owner))) this._sharePromptLocked = true;
       if (this._sharePromptLocked && !this._pageUnloaded) {
         if (this._cancelShareStatus) this._cancelShareStatus();
         this.setData({sharePromptVisible: false, sharePromptBusy: false});
+        if (this._sharePromptOwner === info.owner && typeof this.clearDraftForScopeChange === 'function') this.clearDraftForScopeChange();
       }
     },
     disposeSharePrompt() {
@@ -32,7 +34,7 @@ function createSharePrompt({store, wx, isBuiltInRecipe, getMine, setTimer = setT
     },
     sharePromptCurrent() {
       return !this._pageUnloaded && !this._sharePromptLocked &&
-        this._sharePromptOwner === store.getSyncInfo().owner;
+        this._sharePromptOwner === store.getSyncInfo().owner && this._sharePromptScope === (store.getSyncInfo().scopeKey || store.getSyncInfo().owner);
     },
     async afterSavedRecipe(recipeId, message, {newRecipe = false} = {}) {
       if (!this.sharePromptCurrent()) return;

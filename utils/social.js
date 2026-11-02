@@ -27,6 +27,9 @@ let identity = null;
 let identityFlight = null;
 let identityRejected = false;
 let fileSequence = 0;
+const scopeKey = () => store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '';
+const currentScope = () => store.getSyncInfo().scope;
+let observedScope = scopeKey();
 let observedOwner = store.getSyncInfo().owner;
 let observedRevision = store.getSyncInfo().revision;
 let observedPublication = 0;
@@ -39,7 +42,8 @@ function invalidateReads() {
 }
 function forgetIdentity(rejected = false) { identity = null; identityFlight = null; identityRejected = rejected; invalidateReads(); }
 store.subscribe(info => {
-  if (info.owner !== observedOwner) {
+  if (info.owner !== observedOwner || (info.scopeKey || info.owner || '') !== observedScope) {
+    observedScope = info.scopeKey || info.owner || '';
     observedOwner = info.owner; ownerEpoch += 1;
     observedRevision = info.revision; observedPublication = 0; observedIdentityInvalid = false;
     cooksnapUploads.clear();
@@ -47,7 +51,7 @@ store.subscribe(info => {
   }
 });
 if (typeof cloudSync.subscribe === 'function') cloudSync.subscribe(status => {
-  if (status.owner !== observedOwner) return;
+  if (status.owner !== observedOwner || status.scopeKey && status.scopeKey !== observedScope) return;
   if (status.identityInvalid === true && !observedIdentityInvalid) forgetIdentity(true);
   observedIdentityInvalid = status.identityInvalid === true;
   let changed = false;
@@ -97,10 +101,13 @@ async function ready() {
   if (!status || status.state !== 'synced' || !current.owner || status.owner !== current.owner || current.blocked) {
     fail(status && status.message || '请先联网同步当前微信账号，再使用好友功能。', 'SYNC_REQUIRED');
   }
-  return {id: current.owner, epoch: ownerEpoch};
+  return {id: current.owner, epoch: ownerEpoch, scope: current.scope, scopeKey: scopeKey()};
 }
 const errors = {
   ACCOUNT_CHANGED: '微信账号已切换，请重新打开当前页面。',
+  FAMILY_CHANGED: '家庭已变化，请等待同步后重新打开当前页面。',
+  FAMILY_NOT_FOUND: '家庭暂时不可用，请重新同步。',
+  RECIPE_AUTHOR_REQUIRED: '请由添加这道菜的家人选择公开分享。',
   UNAUTHENTICATED: '未能识别当前微信账号，请在微信中重试。',
   INVALID_ENV: '好友功能暂未配置完成，请稍后重试。',
   NOT_FOUND: '这份内容已移除，或暂时无法查看。',
@@ -146,7 +153,7 @@ async function request(action, data, owner) {
   let response;
   try {
     response = await call(wx.cloud, 'callFunction', {name: 'babyBitesSocial',
-      config: {env: config.env}, data: Object.assign({}, data, {action, expectedOwner: owner.id})});
+      config: {env: config.env}, data: Object.assign({}, data, {action, expectedOwner: owner.id}, owner.scope ? {expectedScope: owner.scope, protocolVersion: 2} : {})});
   } catch (_) {
     assertOwner(owner);
     fail('好友功能暂时连接不上，请检查网络后重试。', 'NETWORK');
@@ -156,7 +163,10 @@ async function request(action, data, owner) {
   if (!object(result)) fail('好友功能返回的信息不完整，请稍后重试。');
   if (result.error) {
     const code = result.error.code;
-    if (code === 'ACCOUNT_CHANGED' || code === 'UNAUTHENTICATED') forgetIdentity(true);
+    if (code === 'ACCOUNT_CHANGED' || code === 'UNAUTHENTICATED' || code === 'FAMILY_CHANGED') {
+      forgetIdentity(true);
+      if (code === 'FAMILY_CHANGED') Promise.resolve().then(() => cloudSync.syncNow()).catch(() => {});
+    }
     else if (['NOT_FOUND', 'RECIPE_NOT_FOUND', 'NOT_PUBLIC', 'PROFILE_NOT_FOUND'].includes(code)) invalidateReads();
     const message = action === 'follow' && code === 'PROFILE_REQUIRED'
       ? '关注暂时未完成，请稍后重试。' : errors[code] || '操作暂未完成，请稍后重试。';
@@ -181,7 +191,7 @@ async function readyIdentity(reuse = false) {
     if (ownerEpoch > startEpoch + 1) fail('微信账号已切换，请重新打开当前页面。', 'ACCOUNT_CHANGED');
   }
   const info = store.getSyncInfo();
-  const session = {id: info.owner, epoch: ownerEpoch};
+  const session = {id: info.owner, epoch: ownerEpoch, scope: info.scope, scopeKey: scopeKey()};
   if (!session.id || info.blocked) fail('请先联网确认当前微信账号，再使用好友功能。', 'SYNC_REQUIRED');
   if (!config.env || !wx.cloud || typeof wx.cloud.init !== 'function') fail('好友功能暂未配置完成，请稍后重试。');
   wx.cloud.init({env: config.env, traceUser: false});
@@ -208,7 +218,7 @@ async function verifyIdentity(session) {
   try {
     assertOwner(session);
     response = await call(wx.cloud, 'callFunction', {name: config.functionName || 'babyBitesSync',
-      config: {env: config.env}, data: {action: 'identity'}});
+      config: {env: config.env}, data: {action: 'identity', protocolVersion: 2}});
   } catch (error) {
     assertOwner(session);
     fail('未能确认当前微信账号，请检查网络后重试。', 'NETWORK');
@@ -220,6 +230,13 @@ async function verifyIdentity(session) {
     fail('未能确认当前微信账号，请联网重试。', 'SYNC_REQUIRED');
   }
   if (result.owner !== session.id) { forgetIdentity(true); fail('微信账号已切换，请重新打开当前页面。', 'ACCOUNT_CHANGED'); }
+  const expectedScope = session.scope || {kind: 'personal', id: session.id};
+  if ((!result.scope && expectedScope.kind === 'family') || (result.scope &&
+    (result.scope.kind !== expectedScope.kind || result.scope.id !== expectedScope.id || result.scope.membershipId !== expectedScope.membershipId))) {
+    forgetIdentity(true);
+    Promise.resolve().then(() => cloudSync.syncNow()).catch(() => {});
+    fail('家庭已变化，请等待同步后重新打开页面。', 'FAMILY_CHANGED');
+  }
   identity = {id: session.id, epoch: session.epoch, checkedAt: Date.now()};
   identityRejected = false;
 }
@@ -286,6 +303,13 @@ function offset(value) {
   return result;
 }
 function getMine(options) { return read('mine', undefined, options); }
+async function getFamilyRecipeLink(sourceRecipeId, options) {
+  const value = await read('familyRecipeLink', {sourceRecipeId}, options);
+  const p = value && value.publication;
+  if (!value || p !== null && (!object(p) || !publicId(p.id) || p.sourceRecipeId !== sourceRecipeId || !publicId(p.createdBy) || !Number.isFinite(p.sourceUpdatedAt))) fail('家庭菜谱分享信息暂时无法读取。');
+  return {publication: p ? {id: p.id, sourceRecipeId: p.sourceRecipeId, sourceUpdatedAt: p.sourceUpdatedAt, createdBy: p.createdBy} : null};
+}
+
 function saveProfile(input) {
   if (!object(input) || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 20 ||
     typeof input.bio !== 'string' || input.bio.trim().length > 120 || /[\u0000-\u001f]/.test(input.name + input.bio)) {
@@ -316,6 +340,7 @@ async function shareReady(sourceRecipeId) {
   const recipe = store.getRecipe(sourceRecipeId);
   if (isBuiltInRecipe(recipe)) fail('内置菜谱仅供自己使用，可以将小程序分享给朋友。', 'BUILTIN_RECIPE');
   const info = store.getSyncInfo();
+  if (recipe && recipe.createdBy && recipe.createdBy !== owner.id) fail(errors.RECIPE_AUTHOR_REQUIRED, 'RECIPE_AUTHOR_REQUIRED');
   if (info.dirty || !recipe) fail('请先保存并同步这道菜谱，再分享。', 'SYNC_REQUIRED');
   return owner;
 }
@@ -455,7 +480,7 @@ async function importRecipe(id) {
 }
 function addToCookbook(id) {
   checkRecipeId(id);
-  const key = (store.getSyncInfo().owner || '') + ':' + id;
+  const key = scopeKey() + ':' + id;
   if (imports.has(key)) return imports.get(key);
   const work = importRecipe(id).then(result => { imports.delete(key); return result; }, error => { imports.delete(key); throw error; });
   imports.set(key, work);
@@ -483,15 +508,16 @@ function writeSaveReceipts(owner, receipts) {
 }
 function queueSaveReceipt(owner, recipeId, localRecipeId) {
   assertOwner(owner);
-  const receipts = saveReceipts(owner.id);
+  const receipts = saveReceipts(owner.scope && owner.scope.kind === 'family' ? owner.scopeKey : owner.id);
   if (!receipts.some(item => item.recipeId === recipeId)) {
-    writeSaveReceipts(owner.id, receipts.concat({recipeId, localRecipeId}).slice(-2000));
+    writeSaveReceipts(owner.scope && owner.scope.kind === 'family' ? owner.scopeKey : owner.id, receipts.concat({recipeId, localRecipeId}).slice(-2000));
   }
   flushSaveReceipts(true).catch(() => {});
 }
 function flushSaveReceipts(syncFirst) {
-  const owner = {id: store.getSyncInfo().owner, epoch: ownerEpoch};
-  if (!owner.id || !saveReceipts(owner.id).length) return Promise.resolve();
+  const owner = {id: store.getSyncInfo().owner, epoch: ownerEpoch, scope: currentScope(), scopeKey: scopeKey()};
+  const receiptKey = owner.scope && owner.scope.kind === 'family' ? owner.scopeKey : owner.id;
+  if (!owner.id || !saveReceipts(receiptKey).length) return Promise.resolve();
   const key = owner.epoch + ':' + owner.id;
   if (saveReceiptFlights.has(key)) return saveReceiptFlights.get(key);
   const work = Promise.resolve().then(async () => {
@@ -499,7 +525,7 @@ function flushSaveReceipts(syncFirst) {
     const session = syncFirst ? await ready() : await readyIdentity(true);
     assertOwner(owner);
     // Bounded work prevents an old imported library delaying foreground work.
-    for (const item of saveReceipts(owner.id).slice(0, 20)) {
+    for (const item of saveReceipts(receiptKey).slice(0, 20)) {
       assertOwner(owner);
       const local = store.getRecipe(item.localRecipeId);
       if (local && local.source && local.source.recipeId === item.recipeId) {
@@ -514,7 +540,7 @@ function flushSaveReceipts(syncFirst) {
         }
       }
       assertOwner(owner);
-      writeSaveReceipts(owner.id, saveReceipts(owner.id).filter(receipt => receipt.recipeId !== item.recipeId));
+      writeSaveReceipts(receiptKey, saveReceipts(receiptKey).filter(receipt => receipt.recipeId !== item.recipeId));
     }
   }).finally(() => { if (saveReceiptFlights.get(key) === work) saveReceiptFlights.delete(key); });
   saveReceiptFlights.set(key, work);
@@ -648,6 +674,6 @@ async function deleteCooksnap(id) {
   return {deleted: true};
 }
 
-module.exports = {getMine, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
+module.exports = {getMine, getFamilyRecipeLink, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe,
   getRecipeFeedback, getFeedbackInbox, addCooksnap, deleteCooksnap};

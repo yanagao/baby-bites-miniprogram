@@ -127,6 +127,7 @@ function fakeEnvironment() {
   });
   const database = {
     collection(name) {
+      if (name === 'baby_bites_family_memberships') return {doc: () => ({get: async () => ({data: null})})};
       assert.equal(name, 'baby_bites_accounts');
       return {doc: id => reference(records, id)};
     },
@@ -139,6 +140,7 @@ function fakeEnvironment() {
       const pending = new Map(records);
       try {
         const result = await callback({collection: name => {
+          if (name === 'baby_bites_family_memberships') return {doc: () => ({get: async () => ({data: null})})};
           assert.equal(name, 'baby_bites_accounts');
           return {doc: id => reference(pending, id)};
         }});

@@ -180,3 +180,12 @@ test('background synchronization never publishes a recipe the user kept for them
   assert.deepEqual(app.calls.navigation, []); assert.deepEqual(clone(app.store.getState()), before);
   assertUnshareable(page);
 });
+
+test('same-account family switch clears a detail page and an ABA return cannot expose its old share', async () => {
+  const app = setup({published: true}); await app.open();
+  app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+  assertUnshareable(app.page);
+  assert.equal(app.page.data.recipe, null);
+  assert.match(app.page.data.publicError, /家庭|账号/);
+});

@@ -16,6 +16,7 @@ function views(sources = new Map()) {
     isReady() { throw Error('A global readiness gate must not hide ready covers'); }};
   const coverModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(root, 'utils/recipe-covers.js'), 'utf8'), {module: coverModule, require(dep) {
+    if (dep === './family-photos') return {photoURL: value => value || ''};
     if (dep === './cover-loader') return loader;
     if (dep === '../data/recipe-cover-catalog') return catalog;
     throw Error(dep);

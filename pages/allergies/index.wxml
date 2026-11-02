@@ -2,7 +2,7 @@
 <view wx:if="{{accountError}}" class="allergies-unavailable"><t-empty icon="info-circle" description="{{accountError}}"><t-button slot="action" theme="primary" bind:tap="cancel">返回</t-button></t-empty></view>
 <view wx:else class="allergies-page">
   <view class="allergies-intro">保存后会自动跳过含这些食材的推荐菜谱。</view>
-  <view class="allergies-privacy">仅自己可见，随当前微信账号同步。</view>
+  <view class="allergies-privacy">{{familyActive ? '家庭内共享，家人选餐时都会跳过这些食材。' : '仅自己可见，随当前微信账号同步。'}}</view>
   <view class="allergies-section">
     <view class="allergies-heading">已记录 <text>{{allergies.length}} / 50</text></view>
     <view wx:if="{{allergies.length}}" class="allergies-chips"><button wx:for="{{allergies}}" wx:key="*this" class="allergies-chip allergies-selected" data-name="{{item}}" disabled="{{saving}}" bindtap="removeFood" aria-label="{{'移除' + item}}"><text>{{item}}</text><t-icon name="close" size="24rpx" /></button></view>

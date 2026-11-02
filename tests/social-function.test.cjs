@@ -200,12 +200,12 @@ test('mine overlaps independent reads and projects only publication inventory fi
   const result = await env.handler()({action: 'mine'});
   assert.deepEqual(result.published, [{id, sourceRecipeId: 'recipe-1', sourceUpdatedAt: NOW}]);
   assert.equal(result.publishedCount, 1);
-  assert.deepEqual(reads.starts.slice(0, 2).map(item => item.name), [COLLECTIONS.profiles, COLLECTIONS.follows]);
+  assert.deepEqual(reads.starts.filter(item => item.name !== COLLECTIONS.memberships).slice(0, 2).map(item => item.name), [COLLECTIONS.profiles, COLLECTIONS.follows]);
   assert.equal(reads.peak, 2, 'inventory and follower count share one read round');
-  assert.equal(env.gets.length + env.queries.length, 4);
+  assert.equal(env.gets.length + env.queries.length, 5, 'one membership read binds the personal/family publication inventory');
   const inventory = env.queries.find(item => !item.count);
   assert.deepEqual(Object.keys(inventory.fields).sort(),
-    ['_id', 'owner', 'profileId', 'sourceRecipeId', 'sourceUpdatedAt', 'published', 'generation', 'isExample', 'builtin', 'source'].sort());
+    ['_id', 'owner', 'profileId', 'sourceRecipeId', 'sourceUpdatedAt', 'published', 'generation', 'isExample', 'builtin', 'source', 'publicationScope'].sort());
   assert.equal(inventory.limit, 1000);
 });
 
@@ -2533,7 +2533,7 @@ test('completed reconciliation skips all downloads and inventory reads until the
   env.downloads.length = 0; env.queries.length = 0; env.gets.length = 0;
   const writes = env.writes.length;
   assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
-  assert.equal(env.downloads.length, 0); assert.equal(env.queries.length, 0); assert.equal(env.gets.length, 1);
+  assert.equal(env.downloads.length, 0); assert.equal(env.queries.length, 0); assert.equal(env.gets.length, 2, 'membership and completed personal index only');
   assert.equal(env.writes.length, writes);
   stored.publicationPolicyVersion = 0;
   assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});

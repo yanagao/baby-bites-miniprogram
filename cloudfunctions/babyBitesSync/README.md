@@ -1,5 +1,25 @@
 # 小口袋账号同步云函数
 
+## 家庭共享协议（2026-11-02，尚未部署）
+
+微信身份与家庭数据分开：`owner` 始终是可信微信上下文计算的个人账号标识，不会替换成家庭 ID。每个账号最多加入一个家庭，每个家庭当前管理一个宝宝，最多 20 位成员。加入后共享宝宝称呼、生日、过敏记录、菜谱、收藏和用餐记录；个人主页、关注和作者身份继续属于个人。
+
+部署前须先按 [family-database.json](./family-database.json) 创建三个 deny-all 集合及公开菜谱的家庭清单索引，再同时部署 `babyBitesSync` 与 `babyBitesSocial`，最后上传客户端。新身份读取会查询成员映射，不能漏建集合后直接部署。配置清单不会自动应用；当前未创建线上集合/索引、未修改存储规则、未部署，也没有进行双账号真机验收。
+
+- `identity({protocolVersion:2})` 返回 `{owner,scope,revision,fileID}`，scope 为 `{kind:'personal',id:owner}` 或 `{kind:'family',id,membershipId}`。家庭成员使用旧客户端读取或提交均返回 `CLIENT_UPDATE_REQUIRED`。
+- `familyState` 返回 `{owner,scope,family}`；family 包含 `id/name/isManager/memberId/membershipId/memberCount/members`，成员仅含 `{id,label,isManager,isSelf}`，不暴露成员微信 owner。
+- `familyCreate({name,roleLabel,requestId,baseRevision})` 以本人当前已提交个人快照初始化家庭。无个人云端索引且 `baseRevision:0` 时建立空家庭，不接受客户端夹带快照；个人索引保持原样。请求 ID 幂等。私有快照已有生日（含显式 null）优先，无字段时仅复制本人合法公开主页生日到新私有快照，不修改公开主页，也不迁移其他公开资料。
+- `familyInvite` 仅管理员可用，返回 128 位随机 base64url token 和 24 小时过期时间；生成新邀请使旧邀请失效，每份邀请只可加入一人。`familyPreview({token})` 只展示家庭名、宝宝称呼、人数和有效期，不含健康记录。`familyJoin({token,roleLabel,requestId})` 明确确认后加入，事务消费邀请并建立成员身份，不合并原个人数据。
+- `familyRole({roleLabel})` 只改自己称谓。管理员可 `familyRemove({memberId})` 移除其他人、`familyTransfer({memberId})` 转让管理员。`familyLeave` 退出；管理员有其他成员时必须先转让，最后一人退出时关闭家庭。原个人数据保留，家庭数据不会自动拷回个人空间；关闭的家庭和历史文件仍按保留策略保存，不宣称永久删除。
+- 管理操作使用 `protocolVersion:2,expectedOwner,expectedScope`；事务再次验证当前成员。重新加入产生新 membershipId，旧页面、旧邀请和旧缓存不能借相同家庭 ID 恢复权限。创建或加入丢响应后可用相同 requestId 恢复已成功结果。
+- `familyRead({expectedScope})` 返回 `{owner,scope,revision,fileID,snapshot,photoURLs}`。为满足[微信小程序云函数响应 1 MiB 上限](https://docs.cloudbase.net/error-code/EXCEED_MAX_RESPONSE_SIZE)，JSON 快照超过 512 KiB 时省略 `snapshot`，改为返回当前 canonical 文件的 HTTPS `snapshotURL`，客户端下载后校验不超过 5 MiB 并解析。快照下载链接单独签名，不占首批最多 20 张当前引用照片的名额；`familyPhotos({fileIDs:[...]})` 每次最多 20 张，返回 `{owner,scope,photoURLs}`，只允许当前快照精确引用的照片。签发后重新验证成员及 revision/fileID，移出、换家或数据变化不返回旧内容。快照与照片签名均有效 300 秒，已签发 URL 与已经看到的内容无法倒追撤回。
+- 家庭 `commit({protocolVersion:2,expectedScope,baseRevision,fileID})` 接受当前调用者上传的 `users/<owner>/snapshots/` 暂存文件。新照片仅允许本人 `users/<owner>/photos/` 或上一家庭快照精确引用的 canonical 照片，不泛允许家人其他私人照片路径。服务端复制新图片和快照到 `families/<familyId>/photos|snapshots/`，不放宽现有仅创建者读写规则；成员删除自己的私人照片不会破坏家庭照片。
+- 提交继续使用 revision 乐观锁。成功返回 canonical `snapshot`（超过 512 KiB 改为 `snapshotURL`）与首批 `photoURLs`，客户端必须应用该快照以获得规范文件 ID 和服务端记录人标记；冲突返回当前 revision/fileID/scope，再读取、合并并重试。事务比较 scope、membershipId 和 revision；签名回包再次核验提交的 revision/fileID，避免返回已被更新的版本。无法确定提交是否成功时不删除文件，仅清理确定未提交的新拷贝。
+
+私有快照新增可选 `babyBirthDate`（有效日期或 null）及 `babyBirthDateUpdatedAt`。保存后拒绝旧客户端丢弃或回退生日字段，过敏保护保持。家庭菜谱新增 `createdBy`：创建家庭时原数据归创建者，新菜谱由服务器标记当前成员；已存在作者不可改。新用餐记录追加 `recordedBy:{memberId,label}`，旧记录不伪造记录人，已有归属不随称谓变化或编辑改写。这些归属与宝宝资料不出现在公开菜谱 DTO。
+
+家庭同步会更新当前家庭范围里已经主动分享的菜谱，保留原公开作者与链接；任何现成员都可触发已分享做法的自动更新和删除，但不能替作者首次公开、创建公开资料或恢复撤回。离开或更换家庭不会把另一个范围中的公开菜谱判为已删除。详见社交函数文档。
+
 正式 AppID：`wxc6c61fbebebe3340`；现有环境：`cloud1-5gxmasdl05652531`；函数名：`babyBitesSync`。本目录不自行开通云开发或创建付费环境。测试号不支持账号同步。
 
 2026-10-23 已部署并验证：账号集合为所有客户端不可读写，存储原规则为仅创建者读写且未改动。正式微信账号完成真实上传及再次下载，独立空缓存通过真实云接口恢复了 9 道菜谱、4 条记录和 1 张照片。客户端直接读取账号集合返回权限拒绝。尚未使用两部手机/两个真实微信账号交叉验收。该环境另有其他用途的云函数，后续仍须保留其既有存储访问方式。

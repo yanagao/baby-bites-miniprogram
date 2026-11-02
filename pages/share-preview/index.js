@@ -14,6 +14,7 @@ Page({
   onLoad(options = {}) {
     this.recipeId = typeof options.id === 'string' ? options.id : '';
     this._owner = store.getSyncInfo().owner;
+    this._scope = store.getSyncInfo().scopeKey || this._owner;
     this._bound = Boolean(this._owner);
     this._request = 0;
     this._disposed = false;
@@ -37,15 +38,15 @@ Page({
   accountOK() {
     if (this._disposed) return false;
     const owner = store.getSyncInfo().owner;
-    if (!this._bound && owner) { this._owner = owner; this._bound = true; }
-    else if (this._bound && owner !== this._owner) this._locked = true;
+    if (!this._bound && owner) { this._owner = owner; this._scope = store.getSyncInfo().scopeKey || owner; this._bound = true; }
+    else if (this._bound && (owner !== this._owner || (store.getSyncInfo().scopeKey || owner) !== this._scope)) this._locked = true;
     if (!this._locked) return true;
     if (!this._cleared) {
       this._cleared = true;
       this._request++;
       this.setData({recipe: null, author: null, previewToken: '', loading: false, confirming: false,
         published: false, shareRecipe: null, photoSrc: '', photoReady: false,
-        error: '微信账号已切换，请返回后重新打开分享预览。'});
+        error: '微信账号已切换，或家庭已变化，请返回后重新打开分享预览。'});
       if (wx.hideShareMenu) wx.hideShareMenu({menus: ['shareAppMessage']});
     }
     return false;

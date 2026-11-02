@@ -30,6 +30,7 @@ Page({
   data: {...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, hasAllergies: false, candidateCount: 0, hasRecipes: false, accountError: '', filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: ''},
   onLoad() {
     this._sessionOwner = store.getSyncInfo().owner;
+    this._sessionScope = store.getSyncInfo().scopeKey || this._sessionOwner;
     this._accountBound = Boolean(this._sessionOwner);
     this._accountLocked = false;
     this._unloaded = false;
@@ -46,11 +47,13 @@ Page({
   },
   accountOK(report) {
     if (this._unloaded) return false;
-    const current = store.getSyncInfo().owner;
-    if (!this._accountBound && current) { this._sessionOwner = current; this._accountBound = true; }
-    else if (this._accountBound && current !== this._sessionOwner) this._accountLocked = true;
+    const info = store.getSyncInfo();
+    const current = info.owner;
+    const scope = info.scopeKey || current;
+    if (!this._accountBound && current) { this._sessionOwner = current; this._sessionScope = scope; this._accountBound = true; }
+    else if (this._accountBound && (current !== this._sessionOwner || scope !== this._sessionScope)) this._accountLocked = true;
     if (!this._accountLocked) return true;
-    const message = '微信账号已切换，请返回后重新打开随机选餐。';
+    const message = '微信账号已切换，或家庭已变化，请返回后重新打开随机选餐。';
     if (!this.data.accountError) {
       this.lastId = null;
       this._ageDefaultRequest++;
@@ -68,7 +71,8 @@ Page({
     this._ageDefaultPending = true;
     this.setData({ageDefaultLoading: true});
     try {
-      const mine = await social.getMine();
+      const info = store.getSyncInfo();
+      const mine = info.scope && info.scope.kind === 'family' ? {profile: {exists: true, babyBirthDate: store.getState().babyBirthDate || null}} : await social.getMine();
       if (!this.accountOK(false) || request !== this._ageDefaultRequest || this._ageManuallySelected) return;
       if (!mine || !mine.profile || typeof mine.profile !== 'object' || Array.isArray(mine.profile) ||
         typeof mine.profile.exists !== 'boolean') {
