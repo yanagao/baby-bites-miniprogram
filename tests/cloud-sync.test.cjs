@@ -970,7 +970,7 @@ test('publication change versions report partial successes, retry pending work i
   assert.equal(app.sync.getStatus().publicationVersion, 2);
 });
 
-test('a large recipe import drains bounded reconciliation batches after a single account commit', async () => {
+test('a large set of already-shared recipe updates drains bounded batches after a single account commit', async () => {
   const recipes = Array.from({length: 9}, (_, index) => recipe('imported-' + index));
   const app = setup({socialEnabled: true, initial: state(recipes)});
   const completed = new Set();

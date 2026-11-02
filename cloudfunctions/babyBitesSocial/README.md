@@ -2,7 +2,7 @@
 
 **2026-11-02 请求性能优化**：`mine` 只投影公开清单必要字段并并行读取统计，`profile` 并行读取独立信息并复用作者；新增 `profileSummary`，访客仅 3 次文档读取，不查询菜谱或计数。发现列表以最多 5 路并发处理详情，保持排序、字节上限、游标和最终公开状态检查。全量 1038 项测试及原生编译通过；部署成功（9 文件、41.8 KB），Active、30 秒、Node.js 16.13，部署后 8 个 JS/JSON 运行文件与本地一致，见[核验记录](../../../output/request-performance/verification.json)。未调整数据库权限或索引；客户端未提审发布。
 
-**2026-11-02 自动更新部署（历史手动公开规则，已由下文新策略替代）**：新增 `updatePublished`，已公开菜谱保存后自动更新公开白名单字段；首次公开仍显式确认，撤回不会被并发更新复活。全量 948 项测试与原生编译通过，本函数已部署成功（9 文件、40.7 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。真实模拟器核验公开详情入口，未修改真实菜谱或执行跨账号保存测试；客户端未提审发布，见[核验记录](../../../output/auto-public-update/verification.json)。
+**2026-11-02 自动更新部署（历史验收）**：新增 `updatePublished`，已公开菜谱保存后自动更新公开白名单字段；首次公开仍显式确认，撤回不会被并发更新复活。全量 948 项测试与原生编译通过，本函数已部署成功（9 文件、40.7 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。真实模拟器核验公开详情入口，未修改真实菜谱或执行跨账号保存测试；客户端未提审发布，见[核验记录](../../../output/auto-public-update/verification.json)。
 
 **2026-11-02 免完善资料关注部署**：首次主动关注在关系事务中创建系统默认昵称主页，取消关注不创建主页，已有资料保持。全量 914 项测试及原生编译通过；本函数已部署成功（9 文件、39.9 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。未操作真实账号关注关系，跨账号真机行为仍待验收，见[核验记录](../../../output/follow-without-profile/verification.json)。
 
@@ -65,10 +65,11 @@
 | `profile` | `profileId,offset?` | `{profile,isSelf,following,followedBy,publishedCount,followingCount,followerCount,recipes,nextOffset}` |
 | `profileSummary` | `profileId` | `{profile,isSelf,following,followedBy}`；不查询菜谱或统计，用于详情页作者关系 |
 | `recipe` | `recipeId` | `{recipe,author}` |
-| `publish` | `sourceRecipeId` | `{recipe}` |
+| `previewPublication` | `sourceRecipeId` | `{recipe,author,previewToken,alreadyPublished}`，只读预览 |
+| `publish` | `sourceRecipeId,previewToken` | `{recipe}`，明确确认预览内容 |
 | `updatePublished` | `sourceRecipeId` | `{updated:true,recipe}` 或 `{updated:false}` |
 | `syncPublications` | 无（可传 `expectedOwner`） | `{updated,removed,hasMore}`；失败额外附带 `error` |
-| `unpublish` | `sourceRecipeId`，仅兼容清理已删除/内置记录 | `{ok:true}`；仍存在的用户菜谱返回 `CLIENT_UPDATE_REQUIRED` |
+| `unpublish` | `sourceRecipeId` | `{ok:true}`，撤回后自动同步不会重新公开 |
 | `follow` | `profileId,following:boolean` | `{following,followedBy}` |
 | `following` | `offset?` | `{profiles,nextOffset}` |
 | `followers` | `offset?` | `{profiles,nextOffset}` |
@@ -76,9 +77,9 @@
 | `discover` | `search?:string,cursor?:string` | `{recipes,nextCursor}` |
 | `shareCode` | `profileId,envVersion` | `{profileId,envVersion,codeURL}` |
 
-公开 `profile` / `author` 为 `{id,name,bio,babyAgeMonths,exists}`。只有本人 `mine`、`updateProfile` 与 `profile` 且 `isSelf:true` 的 `profile` 额外包含 `babyBirthDate:string|null`；访客主页、所有菜谱作者 DTO（包括本人读取自己的菜谱）、关注及粉丝列表均不含生日。本人身份只根据云函数可信上下文判断，不能用请求中的 `isSelf`、`owner` 或 `profileId` 冒充。主页名字 1–20 字，简介最多 120 字，不接受控制字符。`mine` 在尚未建主页时返回稳定 ID、自动昵称、空简介、`babyAgeMonths:null`、`babyBirthDate:null`、`exists:false`，不会写入数据库，也不会把宝宝称呼用作公开名字。用户首次保存主页、主动关注或同步首道用户菜谱时建立公开资料；自动创建的主页仅包含系统昵称和空简介。
+公开 `profile` / `author` 为 `{id,name,bio,babyAgeMonths,exists}`。只有本人 `mine`、`updateProfile` 与 `profile` 且 `isSelf:true` 的 `profile` 额外包含 `babyBirthDate:string|null`；访客主页、所有菜谱作者 DTO（包括本人读取自己的菜谱及分享预览）、关注及粉丝列表均不含生日。本人身份只根据云函数可信上下文判断，不能用请求中的 `isSelf`、`owner` 或 `profileId` 冒充。主页名字 1–20 字，简介最多 120 字，不接受控制字符。`mine` 在尚未建主页时返回稳定 ID、自动昵称、空简介、`babyAgeMonths:null`、`babyBirthDate:null`、`exists:false`，不会写入数据库，也不会把宝宝称呼用作公开名字。用户首次保存主页、主动关注或明确确认公开首道用户菜谱时建立公开资料；自动创建的主页仅包含系统昵称和空简介。
 
-默认昵称由 `sha256('public-default-name:' + owner)` 派生，为“小胡萝卜 / 小南瓜 / 小番茄 / 小土豆 / 小西兰花 / 小玉米”之一加 1000–9999 的四位数字。同一账号稳定，不保证全局唯一；名称不携带原始微信身份，不替换已有自定义名字；读取不会写入 `baby_bites_profiles`，首次主动关注或同步用户菜谱会在对应事务中保存默认昵称。本人主页直接显示此名称，主按钮统一为“编辑资料”。关注和上传菜谱均无需先填写资料；默认昵称预览自身不代表 `exists:true`。只含内置菜谱的账号不会因对账创建主页。
+默认昵称由 `sha256('public-default-name:' + owner)` 派生，为“小胡萝卜 / 小南瓜 / 小番茄 / 小土豆 / 小西兰花 / 小玉米”之一加 1000–9999 的四位数字。同一账号稳定，不保证全局唯一；名称不携带原始微信身份，不替换已有自定义名字；读取不会写入 `baby_bites_profiles`，首次主动关注或明确确认公开菜谱会在对应事务中保存默认昵称。本人主页直接显示此名称，主按钮统一为“编辑资料”。关注和公开菜谱均无需先填写资料；默认昵称预览自身不代表 `exists:true`。任何账号都不会仅因菜谱自动对账而创建主页。
 
 `babyBirthDate` 是可选的严格 `YYYY-MM-DD` 日期字符串或 `null`。服务端拒绝错误类型、格式、无效日历日期、早于 `1900-01-01` 或晚于中国 UTC+8 当天的日期，返回 `INVALID_BABY_BIRTH_DATE`；不会把错误日期滚动为下个月。省略字段时，在事务内保留已有生日；明确传 `null` 同时清除生日和旧手动月龄。填写有效生日也会清除旧手动月龄，之后每次读取按生日和服务端中国日期计算已满月数，不把计算值写回数据库。月末生日在当月没有对应日时取该月最后一天，例如 `2025-01-31` 至 `2025-02-28` 为 1 个月，`2024-02-29` 至 `2025-02-28` 为 12 个月。生日计算结果不受旧手动输入的 120 个月上限限制。
 
@@ -86,7 +87,7 @@
 
 生日只保存在禁止客户端直读写的 `baby_bites_profiles` 内部资料中，仅本人接口返回；公开的是动态月龄。生日不进入私人 snapshot、菜谱发布副本、关注记录或分享码参数。`baby-age.js` 与客户端 `utils/baby-age.js` 使用同一份中国日期、日期校验与月末算法；服务端使用可注入的 `now()` 测试跨日和生日边界。修改或清除在显式保存主页后生效，读取不会创建主页或修改现有资料。
 
-`mine.published` 仅本人可见，条目为 `{id,sourceRecipeId,sourceUpdatedAt}`；修改时间取私人菜谱的 `updatedAt || createdAt || 0`。清单和计数均排除内置菜谱及可追溯的内置来源副本。新客户端在账号同步成功后调用 `syncPublications` 自动对账全部用户菜谱；旧客户端的 `updatePublished` 仍只更新已有记录。
+`mine.published` 仅本人可见，条目为 `{id,sourceRecipeId,sourceUpdatedAt}`；修改时间取私人菜谱的 `updatedAt || createdAt || 0`。清单和计数均排除内置菜谱及可追溯的内置来源副本。新客户端在账号同步成功后调用 `syncPublications`，只自动更新仍公开的既有菜谱及移除已删除、内置条目；未分享及已撤回的菜谱不会被创建或恢复。旧客户端的 `updatePublished` 仍只更新已有公开记录。
 
 `following` / `followers` 仅列出真实调用账号的关注/粉丝；传入 `owner`、`profileId` 不会切换为他人列表。每项只包含 `{id,name,bio,babyAgeMonths,exists,following,followedBy}`，其中 `following` 表示“我关注对方”，`followedBy` 表示“对方关注我”；两者都为 `true` 即互相关注，只有 `followedBy` 时可通过已有 `follow` 操作回关。`profile` 的关系布尔值同样相对于当前调用者，三个计数则属于被查看的主页；`publishedCount` 为总数，不是当前 20 条列表的长度。
 
@@ -106,7 +107,7 @@
 
 关注动态使用稳定排序游标 `nextCursor`，每 20 个关注主页一次查询，每批最多读取 21 条，最多关注 200 人，单次动态查询读取量有上限。刷新首页时不传游标；继续加载使用服务器原样返回的游标。新公开发生在分页期间不会在后续游标中重复出现，重新刷新即可看到。删除、内置过滤和并发变化可能使当前页不足 20 条，仍应按返回的 `nextCursor` 继续。
 
-`discover` 返回已同步的用户菜谱，按既有 `sortKey` 展示最新发布/更新；没有“热门”排行或虚构推荐。搜索最多 60 个字符、6 个空格分隔关键词，按 NFKC/小写规范化后对菜名、食材名称和当前公开作者名作字面量包含匹配，多个词均需命中上述字段之一；不搜索私密心得、宝宝资料、用餐记录或公开简介。不读取私人快照，也不为了搜索而公开任何内容。
+`discover` 返回用户明确公开的菜谱，按既有 `sortKey` 展示；没有“热门”排行或虚构推荐。搜索最多 60 个字符、6 个空格分隔关键词，按 NFKC/小写规范化后对菜名、食材名称和当前公开作者名作字面量包含匹配，多个词均需命中上述字段之一；不搜索私密心得、宝宝资料、用餐记录或公开简介。不读取私人快照，也不为了搜索而公开任何内容。
 
 最新列表每次读取至多 21 条公开索引候选，搜索每次读取至多 61 条、检查前 60 条；初次查询投影不包含大段做法或照片指针，仅命中候选再读取完整公开食谱，最多返回 20 条且沿用响应体上限和可见性二次检查。候选限定 `published:true`，由新索引排序后在云函数内匹配，避免对全库执行无索引正则。游标格式为 `v1.<规范化search的SHA256>.<最后已消费sortKey>`，服务端校验格式及搜索一致性，切换搜索必须清空游标。扫描窗口没有匹配时可返回 `recipes:[]` 和非空 `nextCursor`，客户端应允许继续加载，只有 `nextCursor:null` 才代表已到末尾；稀疏结果可能需要多页寻找，当前没有额外搜索服务或新数据回填。
 
@@ -114,7 +115,7 @@
 
 生成结果必须是至多 512 KiB 的 PNG 或 JPEG；根据实际 Buffer 文件头确定格式，不假设微信默认返回 PNG，也不单靠 `contentType` 信任内容。图片放入服务端管理的 `social/<profileId>/codes/<envVersion>/v1-<unique>.png` 或 `.jpg`。每个主页按三个版本缓存到 `baby_bites_profiles.shareCodes` 内部元数据，公开资料白名单不包含该字段；资料编辑与缓存写入使用事务，保留并发改名、生日修改或清除及旧月龄，不改写账号私人快照。后续请求复用图片并重新签发 300 秒 HTTPS `codeURL`，不返回 cloud fileID、不放开存储权限。300 秒指下载链接有效期，不是已保存二维码的扫描有效期。并发生成可能产生少量未引用文件，沿用保留策略，不在请求中删除文件。获取海报不会自动分享或发布小程序。
 
-失败为 `{error:{code,message}}`，message 已是可展示的中文。错误码包括 `ACCOUNT_CHANGED`、`UNAUTHENTICATED`、`INVALID_ENV`、`INVALID_REQUEST`、`INVALID_ACCOUNT`、`INVALID_SNAPSHOT`、`INVALID_PHOTO`、`INVALID_BABY_AGE`、`STORAGE_FAILED`、`SYNC_REQUIRED`、`PROFILE_REQUIRED`、`NOT_FOUND`、`CONFLICT`、`FOLLOW_LIMIT`、`SOCIAL_FAILED`。主页码另有 `SHARE_CODE_NOT_PUBLISHED`（正式版返回微信 41030，提示正式主页尚未发布）、`SHARE_CODE_UNAVAILABLE`（微信接口/权限暂不可用）、`SHARE_CODE_FAILED`（无效图片或图片存取失败）；用户可先使用原生“发送给朋友”。不会透传底层诊断中的文件路径或其他账号信息。
+失败为 `{error:{code,message}}`，message 已是可展示的中文。错误码包括 `ACCOUNT_CHANGED`、`UNAUTHENTICATED`、`INVALID_ENV`、`INVALID_REQUEST`、`INVALID_ACCOUNT`、`INVALID_SNAPSHOT`、`INVALID_PHOTO`、`INVALID_BABY_AGE`、`STORAGE_FAILED`、`SYNC_REQUIRED`、`PROFILE_REQUIRED`、`PREVIEW_REQUIRED`、`PREVIEW_STALE`、`NOT_FOUND`、`CONFLICT`、`FOLLOW_LIMIT`、`SOCIAL_FAILED`。主页码另有 `SHARE_CODE_NOT_PUBLISHED`（正式版返回微信 41030，提示正式主页尚未发布）、`SHARE_CODE_UNAVAILABLE`（微信接口/权限暂不可用）、`SHARE_CODE_FAILED`（无效图片或图片存取失败）；用户可先使用原生“发送给朋友”。不会透传底层诊断中的文件路径或其他账号信息。
 
 ## 公开资料内容审核（2026-10-30）
 
@@ -126,21 +127,25 @@
 
 `checkProfile` 供无写入预检和部署验收，与保存共用格式校验及审核，明确返回 `saved:false`，不创建主页、不进入事务，也不更新生日或分享码。正常保存不能凭预检结果跳过审核。使用独立 action 可保证旧部署遇到该请求仅报不支持，不会因忽略参数而意外保存。
 
-## 用户菜谱自动共享与内置隔离
+## 分享预览、明确确认与内置隔离
 
 私人快照允许可选 `allergies` 与 `allergiesUpdatedAt` 并严格校验，保持与私人同步协议兼容；这些信息不进入主页、菜谱、分享、发现或关注接口的公开白名单。推荐筛选由调用者的客户端使用自己的私人记录完成，不向社交接口上传过敏食物。
 
-2026-11-02 规则变更：用户菜谱不再区分私密与公开。新增、导入、保存副本及存量用户菜谱，在当前账号完成同步后自动进入公共列表。旧手动公开/撤回规则及文中历史验收记录不代表当前交互。本次代码与测试尚未部署或上传。
+2026-11-02 最新规则：保存自己的菜谱后提示“已收进你的食谱，也分享给其他家长吧”；将自己的菜谱记录为“很喜欢”后提示“宝宝喜欢这道菜，把做法分享出去吧”。操作为“公开分享”和“先留给自己”，不预选公开，先展示预览，再由用户确认。新增、导入、保存副本、用餐记录及历史菜谱同步都不能替代公开确认；本规则取代此前未部署的自动公开方案，不回填历史未分享菜谱。本次代码与测试尚未部署或上传。
 
-`syncPublications` 只接受可信身份上下文及可选 `expectedOwner`，不接受客户端拼装的菜谱内容、owner 或 fileID。每批至多下载一份当前账号已提交的快照，与账号索引比对，优先移除已删除、墓碑覆盖或内置来源条目，再新增或更新用户菜谱，每次最多处理 8 条。返回 `hasMore:true` 时客户端继续调用；中途失败也返回已完成的 `updated/removed`，客户端先使缓存失效，再保留待同步状态重试。每条变更在事务内复核 snapshot revision/fileID 与记录 generation；首道用户菜谱与安全默认主页在同一事务创建，已有资料完整保留。
+客户端先完成当前账号私人同步，再调用 `previewPublication`。服务端只从该账号已提交的快照读取菜谱，输出公开白名单 `recipe` 和实际公开的 `author`；无主页时显示确认后将采用的系统默认昵称。预览照片仅向本人签发私人照片的 300 秒 HTTPS URL，不复制照片、不创建主页、不写数据库。返回的 `alreadyPublished` 表示是否已有仍有效的分享版，`previewToken` 是绑定账号、快照 revision/fileID、菜谱白名单、照片路径、作者公开资料及现有发布 generation/状态的 SHA-256 版本摘要，不包含私人字段。
 
-只有整批对账完成且快照未变时，服务端才在原账号索引合并写入 `publicationPolicyVersion:1` 与 `publicationRevision`。同 revision 且策略有效的下一次对账只读取账号索引，不下载快照或扫描公共列表。`babyBitesSync.commit` 的原有完整索引写入会自然移除标记，新 revision 必须重新对账；身份响应仍只投影 owner/revision/fileID。无快照账号不创建任何记录，只含内置的快照也可标记完成。标记不改变业务 revision、快照路径或过敏记录时间。
+确认时调用 `publish({sourceRecipeId,previewToken})`。没有有效 token（包括旧客户端直调发布）返回 `PREVIEW_REQUIRED`；内容、快照、作者或发布状态改变时返回 `PREVIEW_STALE`，必须重新展示预览并再次确认，不能自动重试发布。确认请求不接受客户端拼装的公开内容。复制照片后，事务再次核对快照、公开记录版本和作者资料；仅在确认成功时创建首道公开菜谱和安全默认主页。撤回后旧预览不能重新公开；重新预览并明确确认才可再次分享。
+
+`syncPublications` 只接受可信身份上下文及可选 `expectedOwner`，不接受客户端拼装的菜谱内容、owner 或 fileID。每批至多下载一份当前账号已提交的快照，与账号索引比对，优先移除已删除、墓碑覆盖或内置来源条目，再更新已明确公开且仍有效的菜谱，每次最多处理 8 条。它不会创建新公开记录或主页，也不会恢复已撤回条目。返回 `hasMore:true` 时客户端继续调用；中途失败也返回已完成的 `updated/removed`，客户端先使缓存失效，再保留待同步状态重试。每条变更在事务内复核 snapshot revision/fileID 与记录 generation；已有资料完整保留。
+
+只有整批对账完成且快照未变时，服务端才在原账号索引合并写入 `publicationPolicyVersion:2` 与 `publicationRevision`。同 revision 且策略有效的下一次对账只读取账号索引，不下载快照或扫描公共列表。`babyBitesSync.commit` 的原有完整索引写入会自然移除标记，新 revision 必须重新对账；身份响应仍只投影 owner/revision/fileID。无快照账号不创建任何记录，只含内置或未分享菜谱的快照也可标记完成。标记不改变业务 revision、快照路径或过敏记录时间。
 
 内置身份同时检查固定 21 个 ID、`isExample` 和历史来源记录；保存副本的 `shared-<publicId>` 与来源链都不能绕过。来源文档在单次请求内去重读取，递归逐路径检查循环。当前快照已知的内置身份在对账前登记，撤除墓碑保留 `builtin:true` 和来源，防止原记录退下后其他账号副本重新出现。发现、关注、访客主页、详情旧链接和对应计数统一排除这些记录；本机内置菜谱及个人选餐不受影响。
 
 公共清单每次最多读取两窗、每窗 1000 条投影；超出范围的历史索引由批量对账逐步清理，未完成时不会标记为已对账。公共读取遇到过量历史记录明确提示作者同步整理，不返回被截断的总数。过滤后的空页仍推进原始游标。
 
-旧 `publish` 兼容为确保菜谱已共享：同更新时间的重复分享不写记录、不重新复制照片，也不改变排序；`updatePublished` 继续保留其仅更新已有记录的旧合约。旧 `unpublish` 对仍存在的用户菜谱返回 `CLIENT_UPDATE_REQUIRED`，提示升级后删除；它仅允许清理已删除或内置记录。新客户端先提交删除墓碑，再通过批量对账移除公共记录。
+`publish` 只有携带匹配预览 token 时才能确认分享；同更新时间、已公开的重复确认不写记录、不重新复制照片，也不改变排序。`updatePublished` 保留仅更新已有公开记录的旧合约，不需要预览 token；首次公开与撤回后重新公开都不能通过它完成。`unpublish` 保留主动撤回语义，撤回立即影响后续公共读取，并使已发出的预览版本失效。删除自己的菜谱时先提交删除墓碑，再通过批量对账移除公共记录。
 
 自动更新保留稳定公开 ID、`publishedAt` 与 `sortKey`，不因普通保存反复置顶。服务端内部 `sourcePhotoHash` 用于复用未变化的公开照片；替换或清除照片时同步相应变化，旧记录首次自动更新会补齐该字段。私人心得、收藏、宝宝资料和用餐记录均不进入公开记录。暂时失败时私人提交仍有效，客户端保留待同步状态，并在后续修改、联网恢复、回到前台或手动同步时重试。
 

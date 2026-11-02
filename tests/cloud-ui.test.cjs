@@ -68,6 +68,7 @@ function setup(options = {}) {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
         if (dependency === '../../utils/store') return store;
+        if (dependency === '../../components/share-prompt/controller') return require('../components/share-prompt/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;
         if (dependency === '../../config/cloud') return {socialEnabled: true};
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};

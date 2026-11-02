@@ -100,7 +100,9 @@ const errors = {
   RECIPE_NOT_FOUND: '这道菜谱已移除，或暂时无法查看。',
   NOT_PUBLIC: '这道菜谱已移除，或暂时无法查看。',
   BUILTIN_RECIPE: '内置菜谱仅供自己使用，可以将小程序分享给朋友。',
-  CLIENT_UPDATE_REQUIRED: '请更新小程序后重试，菜谱现在会自动同步给大家。',
+  CLIENT_UPDATE_REQUIRED: '请更新小程序后重新打开分享预览。',
+  PREVIEW_REQUIRED: '请先查看分享预览，再确认公开。',
+  PREVIEW_STALE: '菜谱或作者资料已有更新，请重新查看预览后再确认。',
   INVALID_PROFILE: '公开昵称请填写 1–20 个字，简介不超过 120 个字。',
   PROFILE_NAME_REJECTED: '昵称未通过内容审核，请修改后重试。',
   PROFILE_BIO_REJECTED: '简介未通过内容审核，请修改后重试。',
@@ -294,13 +296,53 @@ function saveProfile(input) {
 function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
-async function publishRecipe(sourceRecipeId) {
+async function shareReady(sourceRecipeId) {
   const owner = await ready();
   const recipe = store.getRecipe(sourceRecipeId);
   if (isBuiltInRecipe(recipe)) fail('内置菜谱仅供自己使用，可以将小程序分享给朋友。', 'BUILTIN_RECIPE');
   const info = store.getSyncInfo();
   if (info.dirty || !recipe) fail('请先保存并同步这道菜谱，再分享。', 'SYNC_REQUIRED');
-  return mutate('publish', {sourceRecipeId}, owner);
+  return owner;
+}
+function normalizeSharePreview(result) {
+  const text = (value, max, empty = false) => typeof value === 'string' && value.length <= max &&
+    (empty || value.trim()) && !/[\u0000-\u001f\u007f]/.test(value);
+  const recipe = result && result.recipe, author = result && result.author;
+  if (!object(result) || !publicId(result.previewToken) || typeof result.alreadyPublished !== 'boolean' ||
+    !object(recipe) || !publicId(recipe.id) || !object(author) || !profileId(author.id) ||
+    recipe.profileId !== author.id || !text(author.name, 20) || !text(author.bio || '', 120, true) ||
+    !(author.babyAgeMonths == null || Number.isInteger(author.babyAgeMonths) && author.babyAgeMonths >= 0 && author.babyAgeMonths <= 120) ||
+    !text(recipe.name, 60) || !text(recipe.category, 40) || !text(recipe.texture, 40) ||
+    !Number.isFinite(recipe.minutes) || recipe.minutes < 1 || recipe.minutes > 480 ||
+    !Array.isArray(recipe.ingredients) || !recipe.ingredients.length || recipe.ingredients.length > 50 ||
+    !recipe.ingredients.every(item => object(item) && text(item.name, 80) && text(item.amount, 80, true)) ||
+    !Array.isArray(recipe.steps) || !recipe.steps.length || recipe.steps.length > 30 ||
+    !recipe.steps.every(step => typeof step === 'string' && step.trim() && step.length <= 2000) ||
+    (recipe.photoURL && (typeof recipe.photoURL !== 'string' || recipe.photoURL.length > 8000 || !/^https:\/\//.test(recipe.photoURL)))) {
+    fail('暂时无法读取分享预览，请重试。', 'INVALID_PREVIEW');
+  }
+  const ageGroups = normalizeAgeGroups(recipe.ageGroups);
+  const source = recipe.source;
+  if (source && (!object(source) || !profileId(source.profileId) || !publicId(source.recipeId) || !text(source.authorName, 30))) {
+    fail('菜谱来源暂时无法确认，请重试。', 'INVALID_PREVIEW');
+  }
+  return {previewToken: result.previewToken, alreadyPublished: result.alreadyPublished,
+    author: {id: author.id, name: author.name, bio: author.bio || '', babyAgeMonths: author.babyAgeMonths == null ? null : author.babyAgeMonths},
+    recipe: withCover({id: recipe.id, profileId: author.id, authorName: author.name,
+      name: recipe.name, category: recipe.category, texture: recipe.texture, minutes: recipe.minutes,
+      ingredients: recipe.ingredients.map(item => ({name: item.name, amount: item.amount})), steps: recipe.steps.slice(),
+      imageKey: typeof recipe.imageKey === 'string' ? recipe.imageKey : '', photoURL: recipe.photoURL || '',
+      ...(ageGroups === undefined ? {} : {ageGroups}),
+      ...(source ? {source: {profileId: source.profileId, recipeId: source.recipeId, authorName: source.authorName}} : {})})};
+}
+async function previewPublication(sourceRecipeId) {
+  const owner = await shareReady(sourceRecipeId);
+  return normalizeSharePreview(await request('previewPublication', {sourceRecipeId}, owner));
+}
+async function publishRecipe(sourceRecipeId, previewToken) {
+  const owner = await shareReady(sourceRecipeId);
+  if (!publicId(previewToken)) fail(errors.PREVIEW_REQUIRED, 'PREVIEW_REQUIRED');
+  return mutate('publish', {sourceRecipeId, previewToken}, owner);
 }
 function unpublishRecipe(sourceRecipeId) { return mutate('unpublish', {sourceRecipeId}); }
 function setFollowing(id, following) {
@@ -404,5 +446,5 @@ function addToCookbook(id) {
   return work;
 }
 
-module.exports = {getMine, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, publishRecipe, unpublishRecipe,
+module.exports = {getMine, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe};

@@ -1,0 +1,27 @@
+<t-navbar title="{{published ? '已公开分享' : '分享预览'}}" left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="share-preview-page">
+  <view class="preview-intro"><view class="preview-title">{{published ? '谢谢你分享这道菜' : '公开前，先看看'}}</view><text>{{published ? '其他家长现在可以查看做法，也可以发送给朋友。' : alreadyPublished ? '这道菜已经分享过。下方是其他家长可看到的内容，已分享菜谱的修改会自动更新。' : '确认公开后，其他家长会在发现和你的主页看到以下内容。'}}</text></view>
+  <view wx:if="{{loading}}" class="preview-loading"><t-loading size="40rpx" /><text>正在准备分享预览…</text></view>
+  <view wx:if="{{error}}" class="preview-error" role="alert"><text>{{error}}</text><t-button wx:if="{{!loading && !confirming && !published}}" theme="primary" variant="text" size="small" bind:tap="reload">重新查看预览</t-button></view>
+  <view wx:if="{{recipe && !loading}}" class="preview-card">
+    <image wx:if="{{photoSrc && !photoFailed}}" class="preview-photo" src="{{photoSrc}}" data-token="{{previewToken}}" mode="aspectFit" bindload="imageLoaded" binderror="imageError" aria-label="将分享的菜谱照片" />
+    <view wx:else class="preview-art"><food-art name="{{recipe.ingredients[0].name}}" size="150" /><text>{{photoFailed ? '照片尚未加载' : '食材示意'}}</text></view>
+    <view class="preview-content">
+      <view class="preview-recipe-name">{{recipe.name}}</view>
+      <view class="preview-meta">{{recipe.category}} · {{recipe.minutes}} 分钟 · {{recipe.texture}}</view>
+      <view class="preview-meta">适用月龄：{{ageLabels}}</view>
+      <view class="preview-author"><text>作者：{{author.name}}</text><text wx:if="{{author.bio}}">{{author.bio}}</text><text wx:if="{{author.babyAgeMonths !== null}}">宝宝 {{author.babyAgeMonths}} 个月</text></view>
+      <view wx:if="{{recipe.source}}" class="preview-source">参考自 {{recipe.source.authorName}}</view>
+      <view class="preview-section-title">食材与用量</view>
+      <view wx:for="{{recipe.ingredients}}" wx:key="index" class="preview-ingredient"><text>{{item.name}}</text><text>{{item.amount || '适量'}}</text></view>
+      <view class="preview-section-title">做法</view>
+      <view wx:for="{{recipe.steps}}" wx:key="index" class="preview-step"><text>{{index + 1}}.</text><text>{{item}}</text></view>
+    </view>
+  </view>
+  <view class="preview-privacy">不会分享：小心得、宝宝称呼和生日、过敏记录、收藏及用餐记录。</view>
+  <view class="preview-actions">
+    <t-button theme="default" variant="outline" block disabled="{{confirming}}" bind:tap="back">{{published || alreadyPublished ? '返回' : '先留给自己'}}</t-button>
+    <t-button wx:if="{{published}}" theme="primary" block open-type="share">发送给朋友</t-button>
+    <t-button wx:else theme="primary" block loading="{{confirming}}" disabled="{{loading || confirming || !previewToken || !photoReady}}" bind:tap="confirmPublish">确认公开分享</t-button>
+  </view>
+</view>

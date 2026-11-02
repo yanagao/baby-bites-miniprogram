@@ -14,8 +14,9 @@ function fail(code) {
 }
 
 // Do not call social.js here: publishing there waits for private cloud sync.
-// This helper runs after that sync. The server reconciles all user recipes and
-// deletions from its committed snapshot; no local recipe content is submitted.
+// This helper runs after that sync. The server updates only recipes previously
+// shared by explicit confirmation and removes deleted ones. It must never turn
+// a private save/import/meal record into a new publication.
 async function syncPublished({owner, isCurrent, onUpdated}) {
   if (config.socialEnabled !== true) return {updated: 0, removed: 0};
   let updated = 0, removed = 0;

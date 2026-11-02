@@ -64,5 +64,5 @@
     <text class="settings-version-number">版本 1.4.0</text>
   </view>
 </view>
-<t-dialog visible="{{importVisible}}" title="合并这份备份？" content="将菜谱和用餐记录合并到本机；相同内容保留较新的修改。导入的非内置菜谱会自动分享菜名、照片、食材和做法。" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
+<t-dialog visible="{{importVisible}}" title="合并这份备份？" content="将菜谱和用餐记录合并到本机；相同内容保留较新的修改。导入不会自动公开新菜谱，分享前可以先预览。" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
 <t-dialog visible="{{exportVisible}}" title="备份已准备好" content="{{exportDescription}}" confirm-btn="{{exportConfirmButton}}" cancel-btn="取消" bind:confirm="confirmExportDialog" bind:cancel="cancelExportDialog" />

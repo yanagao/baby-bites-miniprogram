@@ -1,0 +1,20 @@
+.share-preview-page {padding:16rpx 28rpx calc(160rpx + env(safe-area-inset-bottom));color:#345158;}
+.preview-intro {margin-bottom:24rpx;font-size:var(--font-secondary);line-height:var(--line-height-body);color:#6e8589;}
+.preview-title {margin-bottom:10rpx;font-size:var(--font-section-title);font-weight:600;color:#345158;}
+.preview-loading {display:flex;justify-content:center;align-items:center;gap:14rpx;padding:60rpx 0;font-size:var(--font-body);}
+.preview-error {display:flex;align-items:center;gap:12rpx;padding:20rpx;margin-bottom:20rpx;border-radius:18rpx;background:#fff1b8;color:#745e2b;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.preview-error>text {flex:1;overflow-wrap:anywhere;}
+.preview-card {border:1rpx solid #e2edf0;border-radius:24rpx;overflow:hidden;background:#fff;}
+.preview-photo {display:block;width:100%;height:380rpx;background:#eff8f8;}
+.preview-art {height:250rpx;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12rpx;background:#eff8f8;color:#82969a;font-size:var(--font-caption);}
+.preview-content {padding:26rpx;}
+.preview-recipe-name {font-size:var(--font-section-title);font-weight:600;line-height:1.5;overflow-wrap:anywhere;}
+.preview-meta {margin-top:10rpx;font-size:var(--font-caption);color:#6e8589;line-height:var(--line-height-body);}
+.preview-author {display:flex;flex-direction:column;gap:6rpx;padding:18rpx;margin-top:20rpx;border-radius:14rpx;background:#eff8f8;font-size:var(--font-secondary);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.preview-source {margin-top:16rpx;font-size:var(--font-caption);color:#6e8589;}
+.preview-section-title {margin:28rpx 0 14rpx;font-size:var(--font-card-title);font-weight:600;}
+.preview-ingredient {display:flex;justify-content:space-between;gap:20rpx;padding:12rpx 0;border-bottom:1rpx solid #eff8f8;font-size:var(--font-body);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.preview-step {display:flex;gap:14rpx;margin:14rpx 0;font-size:var(--font-body);line-height:var(--line-height-body);white-space:pre-wrap;overflow-wrap:anywhere;}
+.preview-step>text:last-child {flex:1;min-width:0;}
+.preview-privacy {padding:20rpx 0;color:#6e8589;font-size:var(--font-caption);line-height:var(--line-height-body);}
+.preview-actions {position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:1fr 1fr;gap:16rpx;padding:16rpx 28rpx calc(18rpx + env(safe-area-inset-bottom));background:#fff;border-top:1rpx solid #e2edf0;--td-button-medium-font:500 var(--font-secondary)/var(--line-height-body) var(--td-font-family);}

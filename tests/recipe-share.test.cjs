@@ -3,32 +3,33 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {setup, pending, turn, assertUnshareable, clone, OWNER, OTHER, PUBLIC_ID, AUTHOR_ID, LOCAL_ID} = require('./detail-runtime.cjs');
 
-test('user recipe shares after automatic sync without a confirmation or profile setup', async () => {
+test('unshared recipes enter preview without publishing or requiring profile setup', async () => {
   for (const profileExists of [true, false]) {
     const app = setup({profileExists}); const page = await app.open();
+    const before = clone(app.store.getState());
     assertUnshareable(page);
     await page.requestShare();
-    assert.deepEqual(app.calls.publish, [LOCAL_ID]);
-    assert.equal(page.data.shareVisible, true);
-    assert.deepEqual(app.calls.navigation, []);
+    assert.deepEqual(app.calls.publish, []);
+    assert.equal(page.data.shareVisible, false);
+    assert.equal(app.calls.navigation.length, 1);
+    assert.equal(app.calls.navigation[0].url, '/pages/share-preview/index?id=' + LOCAL_ID);
     assert.equal(page.requestPublish, undefined);
     assert.equal(page.confirmPublish, undefined);
     assert.equal(page.unpublish, undefined);
-    const share = page.onShareAppMessage();
-    assert.equal(share.path, '/pages/public-recipe/index?id=' + PUBLIC_ID);
-    assert.equal(share.imageUrl, '/assets/cute/pocket-mascot.png');
-    assert.doesNotMatch(JSON.stringify(share), /只给自己|宝宝私密|私密用餐|private-recipe-one/);
+    assert.equal(app.isPublished(), false);
+    assert.deepEqual(clone(app.store.getState()), before);
+    assertUnshareable(page);
   }
 });
 
-test('duplicate taps join a single sync and cannot expose a share before it completes', async () => {
+test('duplicate taps open only one preview and returning allows another deliberate preview', async () => {
   const app = setup(); const page = await app.open();
-  const gate = pending(); app.hooks.publish = () => gate.promise;
-  const work = page.requestShare(); await page.requestShare();
-  assert.deepEqual(app.calls.publish, [LOCAL_ID]); assertUnshareable(page);
-  assert.equal(page.data.publicBusy, true);
-  gate.resolve(); await work;
-  assert.equal(page.data.publicBusy, false); assert.equal(page.data.shareVisible, true);
+  await page.requestShare(); await page.requestShare();
+  assert.equal(app.calls.navigation.length, 1); assertUnshareable(page);
+  assert.deepEqual(app.calls.publish, []);
+  await page.onShow(); await page.requestShare();
+  assert.equal(app.calls.navigation.length, 2);
+  assert.deepEqual(app.calls.publish, []);
 });
 
 test('already synced recipes share the server snapshot without posting unsynced local edits', async () => {
@@ -53,36 +54,41 @@ test('starter recipes remain local and only share the fixed app card even after 
   }
 });
 
-test('saved copies use automatic sync and retain their original author attribution', async () => {
+test('saved copies also need preview and keep their author attribution', async () => {
   const source = {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'};
   const app = setup({recipe: {source}}); const page = await app.open();
   await page.requestShare();
-  assert.deepEqual(app.calls.publish, [LOCAL_ID]); assert.equal(page.data.shareVisible, true);
+  assert.deepEqual(app.calls.publish, []); assert.equal(page.data.shareVisible, false);
+  assert.equal(app.calls.navigation[0].url, '/pages/share-preview/index?id=' + LOCAL_ID);
   assert.deepEqual(clone(app.store.getRecipe(LOCAL_ID).source), source);
 });
 
-test('an unreadable sync status does not guess a share URL and retries without a new confirmation', async () => {
+test('unreadable sharing status does not guess a URL or publish and retries into preview', async () => {
   const app = setup(); app.hooks.mine = () => { throw Error('离线'); }; const page = await app.open();
   await page.requestShare(); assert.deepEqual(app.calls.publish, []); assertUnshareable(page);
+  assert.deepEqual(app.calls.navigation, []);
   delete app.hooks.mine; await page.requestShare();
-  assert.equal(page.data.shareVisible, true); assert.deepEqual(app.calls.publish, [LOCAL_ID]);
+  assert.equal(app.calls.navigation[0].url, '/pages/share-preview/index?id=' + LOCAL_ID);
+  assert.deepEqual(app.calls.publish, []); assertUnshareable(page);
 });
 
-test('sync failure leaves a retryable state without exposing a local title or creating a profile route', async () => {
+test('preview navigation failure is retryable without publishing or exposing local content', async () => {
   const app = setup({profileExists: false}); const page = await app.open();
-  app.hooks.publish = () => { throw Error('暂时离线'); };
-  await page.requestShare(); assertUnshareable(page); assert.equal(page.data.shareVisible, false);
-  assert.match(page.data.publicError, /离线/); assert.deepEqual(app.calls.navigation, []);
-  delete app.hooks.publish; await page.requestShare();
-  assert.equal(page.data.shareVisible, true); assert.equal(app.calls.publish.length, 2);
+  await page.requestShare(); app.calls.navigation[0].fail();
+  assertUnshareable(page); assert.equal(page.data.shareVisible, false);
+  assert.match(page.data.shareError, /预览/);
+  await page.requestShare();
+  assert.equal(app.calls.navigation.length, 2);
+  assert.deepEqual(app.calls.publish, []);
 });
 
-test('a failed server snapshot retries without submitting the same recipe again', async () => {
-  const app = setup(); const page = await app.open();
-  app.hooks.recipe = () => { throw Error('菜谱暂不可读取'); };
-  await page.requestShare(); assertUnshareable(page); assert.equal(app.calls.publish.length, 1);
+test('a failed published snapshot retries without submitting the recipe again', async () => {
+  const app = setup({published: true}); app.hooks.recipe = () => { throw Error('菜谱暂不可读取'); };
+  const page = await app.open();
+  await page.requestShare(); assertUnshareable(page); assert.deepEqual(app.calls.publish, []);
   delete app.hooks.recipe; await page.requestShare();
-  assert.equal(page.data.shareVisible, true); assert.equal(app.calls.publish.length, 1);
+  assert.equal(page.data.shareVisible, true); assert.deepEqual(app.calls.publish, []);
+  assert.deepEqual(app.calls.navigation, []);
 });
 
 test('invalid server identities or names cannot become share metadata', async () => {
@@ -128,13 +134,16 @@ test('account changes immediately clear shares and A to B to A does not revive t
   }
 });
 
-test('a pending sync cannot reopen sharing after an account change or page unload', async () => {
+test('a pending status read cannot open preview after account change or page unload', async () => {
   for (const mode of ['switch', 'unload']) {
-    const app = setup(); const page = await app.open(); const gate = pending(); app.hooks.publish = () => gate.promise;
+    const app = setup(); const page = await app.open(); const gate = pending();
+    page.setData({publicReady: false}); app.hooks.mine = () => gate.promise;
     const work = page.requestShare();
     if (mode === 'switch') app.store.bindAccount(OTHER); else page.onUnload();
-    const updates = app.calls.updates; gate.reject(Error('late result')); await work;
-    assert.equal(app.calls.updates, updates); assertUnshareable(page); assert.equal(page.data.shareVisible, false);
+    const updates = app.calls.updates;
+    gate.resolve({profile: {exists: false}, published: []}); await work;
+    assert.equal(app.calls.updates, updates); assertUnshareable(page);
+    assert.deepEqual(app.calls.navigation, []); assert.deepEqual(app.calls.publish, []);
   }
 });
 
@@ -162,4 +171,12 @@ test('unload removes subscriptions and disabled social does not start recipe syn
   const updates = app.calls.updates; app.emitSync(); await turn(); assert.equal(app.calls.updates, updates);
   const disabled = setup({enabled: false}); const local = await disabled.open(); await local.requestShare();
   assert.equal(disabled.calls.mine, 0); assert.deepEqual(disabled.calls.publish, []); assertUnshareable(local);
+});
+
+test('background synchronization never publishes a recipe the user kept for themselves', async () => {
+  const app = setup(); const before = clone(app.store.getState()); const page = await app.open();
+  app.emitSync(); await turn();
+  assert.equal(app.isPublished(), false); assert.deepEqual(app.calls.publish, []);
+  assert.deepEqual(app.calls.navigation, []); assert.deepEqual(clone(app.store.getState()), before);
+  assertUnshareable(page);
 });

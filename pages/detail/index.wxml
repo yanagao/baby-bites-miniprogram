@@ -15,10 +15,10 @@
   </view>
   <view wx:if="{{socialEnabled}}" class="publication-panel">
     <view class="publication-heading">
-      <view class="publication-status"><text class="publication-label">{{builtIn ? '内置菜谱' : '菜谱同步'}}</text><view class="publication-state {{!builtIn && publicReady && publicInfo && !publicChanged ? 'publication-state-public' : ''}}"><t-icon name="{{builtIn ? 'book' : publicReady && publicInfo && !publicChanged ? 'check-circle' : 'cloud-upload'}}" size="28rpx" /><text>{{builtIn ? '保留在你的菜谱中' : publicError ? '同步失败' : publicReady && publicInfo && !publicChanged ? '已同步' : '等待同步'}}</text></view></view>
+      <view class="publication-status"><text class="publication-label">{{builtIn ? '内置菜谱' : '菜谱分享'}}</text><view class="publication-state {{!builtIn && publicReady && publicInfo && !publicChanged ? 'publication-state-public' : ''}}"><t-icon name="{{builtIn ? 'book' : publicReady && publicInfo && !publicChanged ? 'check-circle' : 'share'}}" size="28rpx" /><text>{{builtIn ? '保留在你的菜谱中' : publicError ? '暂时无法读取' : publicReady ? publicInfo ? publicChanged ? '分享内容待更新' : '已分享' : '尚未分享' : '正在读取'}}</text></view></view>
     </view>
     <view wx:if="{{!builtIn && (publicLoading || publicBusy)}}" class="publication-loading"><t-loading size="28rpx" /><text>{{publicBusy ? '正在同步菜谱…' : '正在读取同步状态…'}}</text></view>
-    <view class="publication-hint">{{builtIn ? '内置菜谱供你选餐和记录用餐，不会出现在推荐和他人可见的主页中。分享仅发送小程序入口。' : '保存后，菜名、照片、食材和做法会自动同步到推荐和主页。小心得、宝宝信息和用餐记录仅自己可见。'}}</view>
+    <view class="publication-hint">{{builtIn ? '内置菜谱供你选餐和记录用餐，不会出现在推荐和他人可见的主页中。分享仅发送小程序入口。' : publicInfo ? '这道菜已分享给其他家长，保存后的菜谱修改会自动更新。小心得、宝宝信息和用餐记录不会公开。' : '菜谱先收在你的食谱里。选择公开分享并确认预览后，其他家长才会看到菜名、照片、食材和做法。小心得、宝宝信息和用餐记录不会公开。'}}</view>
     <view wx:if="{{!builtIn && publicChanged}}" class="publication-hint">修改已保存，联网同步后会自动更新。</view>
     <view wx:if="{{recipe.source}}" class="publication-source">来自 {{recipe.source.authorName}} 的菜谱</view>
     <view wx:if="{{publicError}}" class="publication-error"><text>{{publicError}}</text><t-button size="small" theme="primary" variant="text" disabled="{{publicLoading || publicBusy || deleting}}" bind:tap="refreshPublication">重试</t-button></view>

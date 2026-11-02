@@ -10,6 +10,7 @@
     "t-collapse": "/miniprogram_npm/tdesign-miniprogram/collapse/collapse",
     "t-collapse-panel": "/miniprogram_npm/tdesign-miniprogram/collapse-panel/collapse-panel",
     "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
-    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar"
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "share-prompt": "/components/share-prompt/index"
   }
 }

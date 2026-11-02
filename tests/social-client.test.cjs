@@ -674,7 +674,7 @@ test('edited built-in recipes remain personal and cannot be published', async ()
   assert.deepEqual(app.calls.map(item => item.action), ['sync']);
 });
 
-test('user recipes can be shared after synchronization without a profile setup request', async () => {
+test('user recipes are shared only with a preview token after synchronization and without profile setup', async () => {
   const app = setup();
   const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '私人心得'});
   app.hooks.sync = () => {
@@ -682,9 +682,10 @@ test('user recipes can be shared after synchronization without a profile setup r
     app.store.applySyncedSnapshot(app.store.getSyncSnapshot(),
       {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
   };
-  await app.social.publishRecipe(id);
+  const previewToken = 'e'.repeat(64);
+  await app.social.publishRecipe(id, previewToken);
   assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
-  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, expectedOwner: OWNER});
+  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, previewToken, expectedOwner: OWNER});
   assert.equal(app.store.getRecipe(id).isExample, false);
   assert.equal(app.store.getRecipe(id).note, '私人心得');
 });
@@ -710,6 +711,73 @@ test('duplicate add taps share one request and create an independent attributed 
   assert.equal(app.social.findImportedRecipe(PUBLIC_ID).name, '我改过的南瓜饭');
   assert.equal((await app.social.addToCookbook(PUBLIC_ID)).added, false);
   assert.equal(app.social.findImportedRecipe(PUBLIC_ID).name, '我改过的南瓜饭');
+});
+
+function readyUserRecipe(app) {
+  const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '不分享的小心得'});
+  app.hooks.sync = () => {
+    const info = app.store.getSyncInfo();
+    if (info.dirty) app.store.applySyncedSnapshot(app.store.getSyncSnapshot(),
+      {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
+  };
+  return id;
+}
+function sharePreviewResult() {
+  return {recipe: publicRecipe(), author: {id: PROFILE_ID, name: '我的小厨房', bio: '家常辅食', babyAgeMonths: 8},
+    previewToken: 'e'.repeat(64), alreadyPublished: false};
+}
+
+test('previewing synchronizes private data and requests a read-only preview without publishing or writing a profile', async () => {
+  const app = setup(), id = readyUserRecipe(app);
+  const server = sharePreviewResult();
+  server.recipe.note = '不分享的小心得'; server.recipe.favorite = true;
+  server.author.babyBirthDate = '2026-01-01'; server.author.owner = OWNER;
+  server.allergies = ['鸡蛋']; server.logs = [{note: '不分享的用餐记录'}];
+  app.hooks.request = args => args.data.action === 'previewPublication' ? server : undefined;
+  const preview = await app.social.previewPublication(id);
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'previewPublication']);
+  assert.deepEqual(app.calls[1], {action: 'previewPublication', sourceRecipeId: id, expectedOwner: OWNER});
+  assert.equal(preview.previewToken, server.previewToken);
+  assert.equal(preview.recipe.name, server.recipe.name);
+  assert.equal(preview.author.name, server.author.name);
+  assert.doesNotMatch(JSON.stringify(preview), /不分享|babyBirthDate|allergies|favorite|logs|owner/);
+  assert.equal(app.store.getRecipe(id).note, '不分享的小心得');
+});
+
+test('missing or invalid confirmation tokens never send a publication request', async () => {
+  for (const token of [undefined, null, '', 'short', {}]) {
+    const app = setup(), id = readyUserRecipe(app);
+    await assert.rejects(app.social.publishRecipe(id, token), error => error.code === 'PREVIEW_REQUIRED');
+    assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+  }
+});
+
+test('preview response validation rejects broken tokens, photos, author identity and recipe content', async () => {
+  for (const alter of [value => { value.previewToken = 'bad'; }, value => { value.alreadyPublished = 'yes'; },
+    value => { value.recipe.ingredients = []; }, value => { value.recipe.photoURL = 'http://photo'; },
+    value => { value.author.id = 'invalid'; }, value => { value.author.babyAgeMonths = -1; },
+    value => { value.recipe.source = {recipeId: 'invalid'}; }]) {
+    const app = setup(), id = readyUserRecipe(app), response = sharePreviewResult();
+    alter(response);
+    app.hooks.request = () => response;
+    await assert.rejects(app.social.previewPublication(id), error => error.code === 'INVALID_PREVIEW');
+    assert.equal(app.calls.some(item => item.action === 'publish'), false);
+  }
+});
+
+test('preview failure or account changes cannot result in publication or reuse of old account content', async () => {
+  const app = setup(), id = readyUserRecipe(app);
+  app.hooks.request = () => { app.store.bindAccount(OTHER); return sharePreviewResult(); };
+  await assert.rejects(app.social.previewPublication(id), error => error.code === 'ACCOUNT_CHANGED');
+  assert.equal(app.calls.some(item => item.action === 'publish'), false);
+});
+
+test('stale confirmation asks for a new preview without silently re-previewing or republishing', async () => {
+  const app = setup(), id = readyUserRecipe(app);
+  app.hooks.request = () => ({error: {code: 'PREVIEW_STALE', message: 'private diagnostics'}});
+  await assert.rejects(app.social.publishRecipe(id, 'e'.repeat(64)), error =>
+    error.code === 'PREVIEW_STALE' && /重新查看预览/.test(error.message) && !/private diagnostics/.test(error.message));
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
 });
 
 test('copying public photos creates a local persistent file and removes the temporary download', async () => {

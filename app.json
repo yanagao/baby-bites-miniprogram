@@ -15,7 +15,8 @@
     "pages/allergies/index",
     "pages/profile/index",
     "pages/following/index",
-    "pages/public-recipe/index"
+    "pages/public-recipe/index",
+    "pages/share-preview/index"
   ],
   "window": {
     "navigationBarTitleText": "小口袋",

@@ -42,6 +42,7 @@ Page({
   async onShow() {
     if (!this.accountOK(false)) return;
     this._visible = true;
+    this._openingPreview = false;
     this.setData({shareVisible: false});
     this.refresh();
     if (this.data.socialEnabled) await this.refreshPublication();
@@ -204,23 +205,17 @@ Page({
     }
   },
   async requestShare() {
-    if (!this.data.socialEnabled || !this.actionAllowed() || this.data.publicLoading || this.data.shareLoading || this.data.builtIn) return;
+    if (!this.data.socialEnabled || !this.actionAllowed() || this.data.publicLoading || this.data.shareLoading || this.data.builtIn || this._openingPreview) return;
     if (!this.data.publicReady && !(await this.refreshPublication())) return;
-    if (!this.accountOK(false)) return;
+    if (!this.accountOK(false) || !this.data.recipe || this.data.builtIn || this.data.deleting || this.data.deleteVisible) return;
     if (!this.data.publicInfo) {
-      this.setData({publicBusy: true, publicError: '', shareError: ''});
-      this.updateShareMenu();
-      try {
-        await social.publishRecipe(this.recipeId);
-        if (!this.accountOK(false)) return;
-        await this.refreshPublication(true);
-      } catch (error) {
-        if (this.accountOK(false)) this.publicationFailed(error, '菜谱暂未同步，请联网后重试。');
-      } finally {
-        if (this.accountOK(false)) {
-          this.setData({publicBusy: false}); this.updateShareMenu(); this.refreshAfterSync();
-        }
-      }
+      this._openingPreview = true;
+      wx.navigateTo({url: '/pages/share-preview/index?id=' + encodeURIComponent(this.recipeId),
+        fail: () => {
+          this._openingPreview = false;
+          if (this.accountOK(false)) this.setData({shareError: '暂时无法打开分享预览，请重试。'});
+        }});
+      return;
     } else if (!this.data.shareRecipe) await this.refreshShareRecipe(this._publicRequest);
     if (this.accountOK(false) && this.shareAvailable()) this.setData({shareVisible: true});
   },
