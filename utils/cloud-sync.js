@@ -242,9 +242,11 @@ async function synchronize() {
     const localInfo = store.getSyncInfo();
     if (remoteInfo.revision < localInfo.revision) fail('云端版本早于本机缓存，本机数据已保留，请稍后重试。');
     if (!remoteInfo.fileID && !localInfo.hasLocalData) return;
-    // A validated account revision identifies an already applied snapshot.
-    // Avoid downloading it again and notifying every read view with unchanged data.
-    if (!localInfo.dirty && localInfo.hasLocalData && remoteInfo.revision === localInfo.revision) return;
+    // An older parser may have discarded fields while saving this same revision.
+    // Only skip a snapshot fully applied by the current parser and persisted with
+    // its schema marker; upgrades must restore the complete remote data first.
+    if (remoteInfo.fileID && !localInfo.dirty && localInfo.hasLocalData && localInfo.snapshotCurrent &&
+      remoteInfo.revision === localInfo.revision) return;
     // Capture this sequence before any download or upload. applySyncedSnapshot
     // merges edits made during these awaits and leaves them pending for another pass.
     const local = normalizeSnapshot(store.getSyncSnapshot(), owner, true);
@@ -307,6 +309,7 @@ function syncNow(options = {}) {
   const age = Date.now() - status.identityCheckedAt;
   if (options && options.ifNeeded === true && status.state === 'synced' &&
     lastSyncedEpoch === ownerEpoch && localInfo.owner && status.owner === localInfo.owner &&
+    (!localInfo.hasLocalData || localInfo.snapshotCurrent) &&
     !localInfo.dirty && !localInfo.blocked && !disconnected && !status.identityInvalid &&
     age >= 0 && age < FOREGROUND_CHECK_INTERVAL) return Promise.resolve(getStatus());
   if (timer) { clearTimeout(timer); timer = null; }

@@ -9,6 +9,9 @@ const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
 const ACCOUNT_PREFIX = 'baby-bites-account-';
+// Bump when snapshot parsing gains fields older clients discarded. Keep this
+// beside the data in __sync: older writers drop unknown metadata on persistence.
+const SNAPSHOT_SCHEMA_VERSION = 1;
 const validOwner = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 let owner = null;
 let sync = freshSync();
@@ -126,7 +129,7 @@ function validateData(data) {
 
 function freshSync() {
   return {sequence: 0, revision: 0, dirty: false, hasLocalData: false,
-    deleted: {recipes: [], logs: []}, migratedLegacy: false};
+    snapshotSchemaVersion: 0, deleted: {recipes: [], logs: []}, migratedLegacy: false};
 }
 
 function emptyState() { return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []}; }
@@ -158,6 +161,7 @@ function validateSync(value, fallbackHasData) {
     !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.dirty !== 'boolean' ||
     typeof value.hasLocalData !== 'boolean' || typeof value.migratedLegacy !== 'boolean') fail('账号同步缓存格式不正确。');
   return {sequence: value.sequence, revision: value.revision, dirty: value.dirty,
+    snapshotSchemaVersion: value.snapshotSchemaVersion === SNAPSHOT_SCHEMA_VERSION ? SNAPSHOT_SCHEMA_VERSION : 0,
     hasLocalData: value.hasLocalData, migratedLegacy: value.migratedLegacy, deleted: validateDeleted(value.deleted)};
 }
 function readAccount(value) {
@@ -223,7 +227,7 @@ function getLog(logId) { init(); const log = state.logs.find(item => item.id ===
 function getSyncInfo() {
   init();
   return {owner, sequence: sync.sequence, revision: sync.revision, dirty: sync.dirty,
-    hasLocalData: sync.hasLocalData, blocked: readBlocked};
+    hasLocalData: sync.hasLocalData, snapshotCurrent: sync.snapshotSchemaVersion === SNAPSHOT_SCHEMA_VERSION, blocked: readBlocked};
 }
 function getSyncSnapshot() {
   init();
@@ -328,7 +332,7 @@ function applySyncedSnapshot(snapshot, options) {
     {...incoming, data: {...incoming.data, ...mergeAllergies(state, incoming.data)}};
   const validated = validateData(merged.data);
   const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync,
-    hasLocalData: true, deleted: merged.deleted});
+    hasLocalData: true, snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION, deleted: merged.deleted});
   writeState(validated, nextSync, owner);
   state = validated;
   sync = nextSync;

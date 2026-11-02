@@ -26,6 +26,16 @@ function state(recipes = [], overrides = {}) {
   return Object.assign({version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes, logs: []}, overrides);
 }
 function snapshot(data = state()) { return {version: 1, data, deleted: {recipes: [], logs: []}}; }
+// Cache shape written by the pre-allergy client's validateData/validateSync.
+// It has a valid cloud revision but neither the new data nor a parser marker.
+function legacyCache(data, revision = 1) {
+  const {allergies, allergiesUpdatedAt, ...knownData} = copy(data);
+  return {version: 1, data: knownData, __sync: {sequence: 0, revision, dirty: false,
+    hasLocalData: true, migratedLegacy: false, deleted: {recipes: [], logs: []}}};
+}
+function cachedStorage(data, revision = 1) {
+  return new Map([['baby-bites-active-owner', OWNER], ['baby-bites-account-' + OWNER, legacyCache(data, revision)]]);
+}
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -35,7 +45,7 @@ function setup(options = {}) {
   const localFiles = new Map(Object.entries(options.files || {}));
   const cloudFiles = new Map();
   const records = new Map();
-  const storage = new Map();
+  const storage = new Map(Array.from(options.storage || [], ([key, value]) => [key, copy(value)]));
   if (options.initial != null) storage.set('baby-bites-v1', copy(options.initial));
   const hooks = {};
   const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], unlink: [], read: [], social: []};
@@ -80,7 +90,7 @@ function setup(options = {}) {
   const wx = {
     env: {USER_DATA_PATH: 'wxfile://usr'},
     getStorageSync(key) { return copy(storage.get(key)); },
-    setStorageSync(key, value) { storage.set(key, copy(value)); },
+    setStorageSync(key, value) { if (hooks.storage) hooks.storage(key, value); storage.set(key, copy(value)); },
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
     getFileSystemManager() { return manager; },
     onNetworkStatusChange(listener) { networkListener = listener; },
@@ -680,6 +690,116 @@ test('unchanged account revisions skip downloads and store notifications but sti
   assert.equal(notifications, 1);
   assert.equal(app.store.getRecipe('remote').name, '另一台设备的新菜名');
   assert.equal(app.sync.getStatus().revision, 4);
+});
+
+test('upgrading an old clean cache restores same-revision allergies before enabling download skips', async () => {
+  const egg = recipe('egg', {ingredients: [{name: '鸡蛋', amount: '1 个'}]});
+  const remote = snapshot(state([egg, recipe('pumpkin')], {allergies: ['鸡蛋'], allergiesUpdatedAt: 20}));
+  const app = setup({storage: cachedStorage(remote.data, 7)});
+  app.putRemote(OWNER, remote, 7);
+  assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.equal(app.store.getState().allergies, undefined);
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.download.length, 1);
+  assert.equal(app.calls.commit, 0);
+  assert.equal(app.store.getSyncInfo().revision, 7);
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
+  assert.deepEqual(copy(app.store.getState().allergies), ['鸡蛋']);
+  const selectors = require('../utils/selectors');
+  assert.deepEqual(copy(selectors.listRecipes(app.store.getState(), {excludeAllergies: true}).map(item => item.id)), ['pumpkin']);
+  assert.match(selectors.enrichRecipe(app.store.getState(), egg).allergyWarning, /鸡蛋/);
+
+  let changes = 0;
+  app.store.subscribe(() => changes++);
+  await app.sync.syncNow();
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.calls.download.length, 1);
+  assert.equal(changes, 0);
+  const restarted = setup({storage: app.storage});
+  restarted.putRemote(OWNER, remote, 7);
+  await restarted.sync.syncNow();
+  assert.equal(restarted.calls.identity, 1);
+  assert.equal(restarted.calls.download.length, 0, 'the complete-cache marker survives restart');
+  assert.deepEqual(copy(restarted.store.getState().allergies), ['鸡蛋']);
+});
+
+test('foreground startup also restores old caches with empty or absent allergy settings', async () => {
+  for (const allergyFields of [{allergies: [], allergiesUpdatedAt: 20}, {}]) {
+    const remote = snapshot(state([recipe('remote')], allergyFields));
+    const app = setup({storage: cachedStorage(remote.data, 4)});
+    app.putRemote(OWNER, remote, 4);
+    await app.sync.start();
+    assert.equal(app.sync.getStatus().state, 'synced');
+    assert.equal(app.calls.download.length, 1);
+    assert.equal(app.calls.commit, 0);
+    assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
+    assert.deepEqual(copy(app.store.getState().allergies), allergyFields.allergies);
+    await app.sync.syncNow({ifNeeded: true});
+    assert.equal(app.calls.identity, 1);
+    await app.sync.syncNow();
+    assert.equal(app.calls.identity, 2);
+    assert.equal(app.calls.download.length, 1);
+  }
+});
+
+test('downgrade writes drop the parser marker so re-upgrading restores omitted fields again', async () => {
+  const remote = snapshot(state([recipe('remote')], {allergies: ['鸡蛋'], allergiesUpdatedAt: 20}));
+  const app = setup();
+  app.putRemote(OWNER, remote, 5);
+  await app.sync.syncNow();
+  const oldWrite = legacyCache(app.store.getState(), 5);
+  app.storage.set('baby-bites-account-' + OWNER, oldWrite);
+  const upgraded = setup({storage: app.storage});
+  upgraded.putRemote(OWNER, remote, 5);
+  assert.equal(upgraded.store.getState().allergies, undefined);
+  await upgraded.sync.syncNow();
+  assert.equal(upgraded.calls.download.length, 1);
+  assert.equal(upgraded.calls.commit, 0);
+  assert.deepEqual(copy(upgraded.store.getState().allergies), ['鸡蛋']);
+  assert.equal(upgraded.store.getSyncInfo().snapshotCurrent, true);
+});
+
+test('failed upgrade downloads, parsing and persistence remain incomplete and retry the same revision', async () => {
+  for (const failure of ['download', 'parse', 'storage']) {
+    const remote = snapshot(state([recipe('remote')], {allergies: ['鸡蛋'], allergiesUpdatedAt: 20}));
+    const app = setup({storage: cachedStorage(remote.data, 3)});
+    const remoteFile = app.putRemote(OWNER, remote, 3);
+    if (failure === 'download') app.hooks.download = () => { throw Error('network offline'); };
+    if (failure === 'parse') app.cloudFiles.set(remoteFile, Buffer.from('{invalid json'));
+    if (failure === 'storage') app.hooks.storage = () => { throw Error('quota exceeded'); };
+    await app.sync.syncNow();
+    assert.notEqual(app.sync.getStatus().state, 'synced', failure);
+    assert.equal(app.store.getSyncInfo().snapshotCurrent, false, failure);
+    assert.equal(app.store.getState().allergies, undefined, failure);
+    assert.equal(app.storage.get('baby-bites-account-' + OWNER).__sync.snapshotSchemaVersion, undefined, failure);
+    delete app.hooks.download; delete app.hooks.storage;
+    app.putRemote(OWNER, remote, 3);
+    await app.sync.syncNow({ifNeeded: true});
+    assert.equal(app.sync.getStatus().state, 'synced', failure);
+    assert.equal(app.calls.download.length, 2, failure);
+    assert.equal(app.calls.commit, 0, failure);
+    assert.deepEqual(copy(app.store.getState().allergies), ['鸡蛋'], failure);
+    assert.equal(app.store.getSyncInfo().snapshotCurrent, true, failure);
+  }
+});
+
+test('edits made before the first upgraded sync merge with restored allergy settings', async () => {
+  const remote = snapshot(state([recipe('remote')], {allergies: ['鸡蛋'], allergiesUpdatedAt: 20}));
+  const app = setup({storage: cachedStorage(remote.data, 2)});
+  app.putRemote(OWNER, remote, 2);
+  app.store.setNickname('本机新称呼');
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.download.length, 1);
+  assert.equal(app.calls.commit, 1);
+  assert.deepEqual(copy(app.store.getState().allergies), ['鸡蛋']);
+  assert.equal(app.store.getState().nickname, '本机新称呼');
+  assert.equal(app.getRemote().data.nickname, '本机新称呼');
+  assert.deepEqual(app.getRemote().data.allergies, ['鸡蛋']);
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
 });
 
 test('foreground checks reuse confirmed clean state for thirty seconds and periodically reconcile publications', async () => {

@@ -41,6 +41,96 @@ function oneRecipe(id, updatedAt, name = id) {
 }
 function empty() { return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []}; }
 function dataWith(recipes) { return Object.assign(empty(), {recipes}); }
+function accountCache(data = empty(), schemaVersion) {
+  return {version: 1, data: copy(data), __sync: {sequence: 0, revision: 3, dirty: false, hasLocalData: true,
+    deleted: {recipes: [], logs: []}, migratedLegacy: false,
+    ...(schemaVersion === undefined ? {} : {snapshotSchemaVersion: schemaVersion})}};
+}
+
+test('reading, binding and ordinary edits do not certify legacy snapshot caches', () => {
+  const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  app.store.bindAccount(A);
+  app.store.setNickname('保留本机修改');
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  assert.equal(app.store.getSyncInfo().dirty, true);
+  assert.equal(app.reload().getSyncInfo().snapshotCurrent, false);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 0);
+
+  const legacy = setup({[LEGACY]: empty()});
+  legacy.store.setNickname('待迁移资料');
+  legacy.store.bindAccount(B);
+  assert.equal(legacy.store.getSyncInfo().snapshotCurrent, false);
+  assert.equal(legacy.saved[key(B)].__sync.snapshotSchemaVersion, 0);
+});
+
+test('only a successfully persisted complete snapshot certifies its account cache across restarts', () => {
+  const data = {...empty(), allergies: ['鸡蛋'], allergiesUpdatedAt: 100};
+  const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
+  app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 1);
+  assert.deepEqual(app.reload().getState().allergies, ['鸡蛋']);
+  const restarted = app.reload();
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
+  assert.doesNotMatch(JSON.stringify(restarted.getSyncSnapshot()), /snapshotSchemaVersion|snapshotCurrent|__sync/);
+  assert.doesNotMatch(restarted.exportBackup(), /snapshotSchemaVersion|snapshotCurrent|__sync/);
+
+  restarted.bindAccount(B);
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, false);
+  assert.equal(restarted.getState().allergies, undefined);
+  restarted.bindAccount(A);
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
+  assert.deepEqual(restarted.getState().allergies, ['鸡蛋']);
+  restarted.setNickname('本机继续编辑');
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
+  assert.equal(restarted.getSyncInfo().dirty, true, 'a local edit must still upload even with a current parser marker');
+});
+
+test('failed snapshot persistence keeps the unverified marker and data atomic until retry succeeds', () => {
+  const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
+  const data = {...empty(), allergies: ['牛奶'], allergiesUpdatedAt: 100};
+  const before = copy(app.saved[key(A)]);
+  const notifications = [];
+  app.store.subscribe(info => notifications.push(info));
+  app.fail(key(A));
+  assert.throws(() => app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3}), /保存失败/);
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  assert.equal(app.store.getState().allergies, undefined);
+  assert.deepEqual(app.saved[key(A)], before);
+  assert.equal(notifications.length, 0);
+  const restarted = app.reload();
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, false);
+  app.fail(null);
+  restarted.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
+  assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
+  assert.deepEqual(restarted.getState().allergies, ['牛奶']);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 1);
+});
+
+test('missing, unknown and malformed parser versions remain readable but cannot certify completeness', () => {
+  for (const version of [undefined, 0, 2, '1', null, -1, true, {}]) {
+    const data = {...empty(), allergies: ['花生'], allergiesUpdatedAt: 100};
+    const app = setup({[ACTIVE]: A, [key(A)]: accountCache(data, version)});
+    assert.equal(app.store.getSyncInfo().blocked, false);
+    assert.equal(app.store.getSyncInfo().snapshotCurrent, false, 'unrecognized marker: ' + JSON.stringify(version));
+    assert.deepEqual(app.store.getState().allergies, ['花生']);
+    app.store.bindAccount(B);
+    app.store.bindAccount(A);
+    assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+    assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 0);
+  }
+});
+
+test('rejected snapshots cannot add the current parser marker to an old account cache', () => {
+  const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
+  const before = copy(app.saved[key(A)]);
+  assert.equal(app.store.applySyncedSnapshot(snapshot(empty()), {owner: A, sequence: 0, revision: 2}), false);
+  assert.throws(() => app.store.applySyncedSnapshot(snapshot(empty()), {owner: B, sequence: 0, revision: 4}), /账号已切换/);
+  assert.throws(() => app.store.applySyncedSnapshot(snapshot({...empty(), allergies: ['']}), {owner: A, sequence: 0, revision: 4}));
+  assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
+  assert.deepEqual(app.saved[key(A)], before);
+});
 
 test('recipe age metadata survives sync merge, account restore and explicit clearing without filling legacy rows', () => {
   const legacy = oneRecipe('legacy-age', 1), tagged = {...oneRecipe('tagged-age', 2), ageGroups: ['9-11', '18+']};
