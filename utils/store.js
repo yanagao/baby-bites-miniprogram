@@ -4,7 +4,8 @@ const seed = require('../data/recipes');
 const selectors = require('./selectors');
 const {normalizeCategory} = require('./categories');
 const {normalizeAgeGroups} = require('./recipe-ages');
-const {mergeSnapshots} = require('./sync-merge');
+const {normalizeAllergies} = require('./allergies');
+const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
 const ACCOUNT_PREFIX = 'baby-bites-account-';
@@ -74,6 +75,9 @@ function validateData(data) {
   }
   const nickname = data.nickname == null ? '宝宝' : data.nickname;
   if (!validString(nickname, 20) || !nickname.trim() || !validTimestamp(data.profileUpdatedAt)) fail('宝宝称呼或更新时间不正确。');
+  const allergies = normalizeAllergies(data.allergies);
+  if (data.allergiesUpdatedAt !== undefined && (allergies === undefined ||
+    !Number.isSafeInteger(data.allergiesUpdatedAt) || data.allergiesUpdatedAt < 0)) fail('过敏食物更新时间不正确。');
   const recipeIds = new Set();
   const recipes = data.recipes.map(recipe => {
     const category = isObject(recipe) ? normalizeCategory(recipe.category, recipe.name) : null;
@@ -116,7 +120,8 @@ function validateData(data) {
     return {id: log.id, recipeId: log.recipeId, rating: log.rating, date: log.date,
       portion: log.portion || '', note: log.note || '', createdAt: log.createdAt || 0, updatedAt: log.updatedAt || 0};
   });
-  return {version: 1, nickname: nickname.trim(), profileUpdatedAt: data.profileUpdatedAt || 0, recipes, logs};
+  return {version: 1, nickname: nickname.trim(), profileUpdatedAt: data.profileUpdatedAt || 0,
+    ...(allergies === undefined ? {} : {allergies, allergiesUpdatedAt: data.allergiesUpdatedAt || 0}), recipes, logs};
 }
 
 function freshSync() {
@@ -319,7 +324,8 @@ function applySyncedSnapshot(snapshot, options) {
   if (options.revision < sync.revision) return false;
   const incoming = validateSnapshot(snapshot);
   const editedDuringSync = options.sequence !== sync.sequence;
-  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming) : incoming;
+  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming) :
+    {...incoming, data: {...incoming.data, ...mergeAllergies(state, incoming.data)}};
   const validated = validateData(merged.data);
   const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync,
     hasLocalData: true, deleted: merged.deleted});
@@ -442,6 +448,16 @@ function setNickname(value) {
   return nickname;
 }
 
+function setAllergies(value) {
+  const allergies = normalizeAllergies(value);
+  if (allergies === undefined) fail('请填写有效的过敏食物记录。');
+  commit(next => {
+    next.allergies = allergies;
+    next.allergiesUpdatedAt = timestamp(next.allergiesUpdatedAt);
+  });
+  return allergies.slice();
+}
+
 function importBackup(text, options) {
   if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) fail('备份内容为空或超过 5 MB，请选择有效的备份。');
   let parsed;
@@ -492,6 +508,7 @@ function importBackup(text, options) {
       next.nickname = incoming.nickname;
       next.profileUpdatedAt = incoming.profileUpdatedAt;
     }
+    Object.assign(next, mergeAllergies(next, incoming));
   }, true);
   return summary;
 }
@@ -504,7 +521,7 @@ function exportBackup() {
 
 module.exports = {
   STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
-  toggleFavorite, addLog, updateLog, deleteLog, setNickname, importBackup, exportBackup,
+  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setAllergies, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, applySyncedSnapshot,
   subscribe, validateData, validateSnapshot
 };

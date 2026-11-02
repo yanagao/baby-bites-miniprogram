@@ -5,6 +5,9 @@ const cloudConfig = require('../../config/cloud');
 const social = require('../../utils/social');
 const options = values => values.map(value => ({label: value, value}));
 Page({
+  onShareAppMessage() {
+    return {title: '口袋食谱 · 今天辅食吃什么', path: '/pages/recipes/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     socialEnabled: cloudConfig.socialEnabled === true,
     warning: '', category: '全部', search: '', texture: '全部口感', sort: 'recent',

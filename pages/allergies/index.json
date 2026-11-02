@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "宝宝过敏食物",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty"
+  }
+}

@@ -1,6 +1,12 @@
 # 小口袋公开主页与关注
 
-函数名 `babyBitesSocial`，AppID `wxc6c61fbebebe3340`，现有环境 `cloud1-5gxmasdl05652531`。本目录只提供可部署代码，不会自动创建主页、关注别人或公开现有菜谱。
+**2026-11-02 请求性能优化**：`mine` 只投影公开清单必要字段并并行读取统计，`profile` 并行读取独立信息并复用作者；新增 `profileSummary`，访客仅 3 次文档读取，不查询菜谱或计数。发现列表以最多 5 路并发处理详情，保持排序、字节上限、游标和最终公开状态检查。全量 1038 项测试及原生编译通过；部署成功（9 文件、41.8 KB），Active、30 秒、Node.js 16.13，部署后 8 个 JS/JSON 运行文件与本地一致，见[核验记录](../../../output/request-performance/verification.json)。未调整数据库权限或索引；客户端未提审发布。
+
+**2026-11-02 自动更新部署**：新增 `updatePublished`，已公开菜谱保存后自动更新公开白名单字段；首次公开仍显式确认，撤回不会被并发更新复活。全量 948 项测试与原生编译通过，本函数已部署成功（9 文件、40.7 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。真实模拟器核验公开详情入口，未修改真实菜谱或执行跨账号保存测试；客户端未提审发布，见[核验记录](../../../output/auto-public-update/verification.json)。
+
+**2026-11-02 免完善资料关注部署**：首次主动关注在关系事务中创建系统默认昵称主页，取消关注不创建主页，已有资料保持。全量 914 项测试及原生编译通过；本函数已部署成功（9 文件、39.9 KB），状态 Active、30 秒超时、Node.js 16.13。部署后下载的 8 个 JS/JSON 运行文件与本地测试版本逐字节一致。未操作真实账号关注关系，跨账号真机行为仍待验收，见[核验记录](../../../output/follow-without-profile/verification.json)。
+
+函数名 `babyBitesSocial`，AppID `wxc6c61fbebebe3340`，现有环境 `cloud1-5gxmasdl05652531`。读取接口不会自动创建主页、关注别人或公开现有菜谱；用户主动关注时，可使用系统默认昵称建立最小公开主页，无需完善资料。
 
 **2026-10-23 历史配置验收**：当时的函数已部署，以下三个集合均已创建并设为“所有用户不可读写”。两个非唯一复合索引已在控制台核验，名称分别为 `profile_published_sort`、`profile_published_id`。真实只读 `mine`、`following`、`feed` 成功，尚无公开主页、公开菜谱或关注；客户端直接读取三个集合均返回权限拒绝 `-502003`。原有存储权限保持不变。当时按用户要求关闭社交入口，未进行真实发布、跨账号分享、照片下载及复制验收。
 
@@ -57,8 +63,10 @@
 | `updateProfile` | `name,bio,babyBirthDate?`（兼容旧 `babyAgeMonths?`） | `{profile}` |
 | `checkProfile` | 同 `updateProfile`，只校验与审核 | `{validated:true,saved:false}` |
 | `profile` | `profileId,offset?` | `{profile,isSelf,following,followedBy,publishedCount,followingCount,followerCount,recipes,nextOffset}` |
+| `profileSummary` | `profileId` | `{profile,isSelf,following,followedBy}`；不查询菜谱或统计，用于详情页作者关系 |
 | `recipe` | `recipeId` | `{recipe,author}` |
 | `publish` | `sourceRecipeId` | `{recipe}` |
+| `updatePublished` | `sourceRecipeId` | `{updated:true,recipe}` 或 `{updated:false}` |
 | `unpublish` | `sourceRecipeId` | `{ok:true}` |
 | `follow` | `profileId,following:boolean` | `{following,followedBy}` |
 | `following` | `offset?` | `{profiles,nextOffset}` |
@@ -67,9 +75,9 @@
 | `discover` | `search?:string,cursor?:string` | `{recipes,nextCursor}` |
 | `shareCode` | `profileId,envVersion` | `{profileId,envVersion,codeURL}` |
 
-公开 `profile` / `author` 为 `{id,name,bio,babyAgeMonths,exists}`。只有本人 `mine`、`updateProfile` 与 `profile` 且 `isSelf:true` 的 `profile` 额外包含 `babyBirthDate:string|null`；访客主页、所有菜谱作者 DTO（包括本人读取自己的菜谱）、关注及粉丝列表均不含生日。本人身份只根据云函数可信上下文判断，不能用请求中的 `isSelf`、`owner` 或 `profileId` 冒充。主页名字 1–20 字，简介最多 120 字，不接受控制字符。`mine` 在尚未建主页时返回稳定 ID、自动昵称、空简介、`babyAgeMonths:null`、`babyBirthDate:null`、`exists:false`，不会写入数据库，也不会把宝宝称呼用作公开名字。用户第一次保存主页后才建立公开资料。
+公开 `profile` / `author` 为 `{id,name,bio,babyAgeMonths,exists}`。只有本人 `mine`、`updateProfile` 与 `profile` 且 `isSelf:true` 的 `profile` 额外包含 `babyBirthDate:string|null`；访客主页、所有菜谱作者 DTO（包括本人读取自己的菜谱）、关注及粉丝列表均不含生日。本人身份只根据云函数可信上下文判断，不能用请求中的 `isSelf`、`owner` 或 `profileId` 冒充。主页名字 1–20 字，简介最多 120 字，不接受控制字符。`mine` 在尚未建主页时返回稳定 ID、自动昵称、空简介、`babyAgeMonths:null`、`babyBirthDate:null`、`exists:false`，不会写入数据库，也不会把宝宝称呼用作公开名字。用户首次保存主页或主动关注时建立公开资料；关注创建的主页仅包含系统昵称和空简介。
 
-默认昵称由 `sha256('public-default-name:' + owner)` 派生，为“小胡萝卜 / 小南瓜 / 小番茄 / 小土豆 / 小西兰花 / 小玉米”之一加 1000–9999 的四位数字。同一账号稳定，不保证全局唯一；名称不携带原始微信身份，不替换已有自定义名字，也不自动写入 `baby_bites_profiles`。本人主页直接显示此名称，主按钮统一为“编辑资料”。首次分享、公开菜谱及关注别人仍要求显式保存主页资料，可以直接保存自动昵称，无需手工取名；默认昵称自身不代表 `exists:true`。
+默认昵称由 `sha256('public-default-name:' + owner)` 派生，为“小胡萝卜 / 小南瓜 / 小番茄 / 小土豆 / 小西兰花 / 小玉米”之一加 1000–9999 的四位数字。同一账号稳定，不保证全局唯一；名称不携带原始微信身份，不替换已有自定义名字；读取不会写入 `baby_bites_profiles`，首次主动关注会在关系事务中保存默认昵称。本人主页直接显示此名称，主按钮统一为“编辑资料”。关注无需填写信息；尚无主页时分享主页、公开菜谱仍要求保存主页资料，可以直接保留自动昵称。默认昵称预览自身不代表 `exists:true`。
 
 `babyBirthDate` 是可选的严格 `YYYY-MM-DD` 日期字符串或 `null`。服务端拒绝错误类型、格式、无效日历日期、早于 `1900-01-01` 或晚于中国 UTC+8 当天的日期，返回 `INVALID_BABY_BIRTH_DATE`；不会把错误日期滚动为下个月。省略字段时，在事务内保留已有生日；明确传 `null` 同时清除生日和旧手动月龄。填写有效生日也会清除旧手动月龄，之后每次读取按生日和服务端中国日期计算已满月数，不把计算值写回数据库。月末生日在当月没有对应日时取该月最后一天，例如 `2025-01-31` 至 `2025-02-28` 为 1 个月，`2024-02-29` 至 `2025-02-28` 为 12 个月。生日计算结果不受旧手动输入的 120 个月上限限制。
 
@@ -77,15 +85,15 @@
 
 生日只保存在禁止客户端直读写的 `baby_bites_profiles` 内部资料中，仅本人接口返回；公开的是动态月龄。生日不进入私人 snapshot、菜谱发布副本、关注记录或分享码参数。`baby-age.js` 与客户端 `utils/baby-age.js` 使用同一份中国日期、日期校验与月末算法；服务端使用可注入的 `now()` 测试跨日和生日边界。修改或清除在显式保存主页后生效，读取不会创建主页或修改现有资料。
 
-`mine.published` 仅本人可见，条目为 `{id,sourceRecipeId,sourceUpdatedAt}`；修改时间取私人菜谱的 `updatedAt || createdAt || 0`。客户端以此判断是否需要重新公开更新。
+`mine.published` 仅本人可见，条目为 `{id,sourceRecipeId,sourceUpdatedAt}`；修改时间取私人菜谱的 `updatedAt || createdAt || 0`。客户端在私人同步成功后据此判断哪些已公开菜谱需要自动更新；失败后再次同步仍会核对，不依赖私人数据的 dirty 标记。
 
 `following` / `followers` 仅列出真实调用账号的关注/粉丝；传入 `owner`、`profileId` 不会切换为他人列表。每项只包含 `{id,name,bio,babyAgeMonths,exists,following,followedBy}`，其中 `following` 表示“我关注对方”，`followedBy` 表示“对方关注我”；两者都为 `true` 即互相关注，只有 `followedBy` 时可通过已有 `follow` 操作回关。`profile` 的关系布尔值同样相对于当前调用者，三个计数则属于被查看的主页；`publishedCount` 为总数，不是当前 20 条列表的长度。
 
-新关注（包括对已关注关系再次传 `following:true`）必须先保存本人公开主页，否则返回 `PROFILE_REQUIRED`，不会替用户创建主页或取用宝宝称呼。取消关注不要求本人主页或目标主页仍存在，方便旧账号清理关系。关注操作在一个事务内读取本人关系、双方主页和对方反向关系，仅在状态发生改变时写本人文档；重复请求不重复添加，计数直接来自关系记录，无额外计数器漂移。
+关注不要求完善资料。在目标主页、关注上限及双向关系校验通过后，若本人尚无主页，服务端会在同一事务中保存 `{owner,name:defaultProfileName(owner),bio:"",updatedAt}` 与关注关系；不接收客户端提供的昵称，不读取私人快照或宝宝信息，固定系统昵称无需用户文本审核。已有有效主页完整保留，存在但损坏的本人资料返回 `INVALID_ACCOUNT`，不会覆盖。重复关注不重复添加，也可补齐旧版无主页账号的默认档案；取消关注不创建主页，且不要求本人或目标主页仍存在。计数直接来自关系记录，无额外计数器漂移。用户之后主动修改昵称或简介仍经过原有文本审核。
 
-旧版本允许未设置公开主页的账号关注别人；这些关系保留并计入关系数，不自动替旧账号生成公开资料。粉丝列表跳过尚无有效公开主页的旧账号；本人以后保存主页时，该已有关系才以公开资料出现在列表中。因此历史关系可能造成计数高于当前可展示的主页数，页面应保留服务器提供的分页位置。缺失或损坏的主页不会暴露对应内部 owner 或私有资料。
+旧版本允许未设置公开主页的账号关注别人；这些关系保留并计入关系数，不自动替旧账号生成公开资料。粉丝列表跳过尚无有效公开主页的旧账号；本人以后保存主页或再次主动关注时，该已有关系会以公开资料出现在列表中。因此历史关系可能造成计数高于当前可展示的主页数，页面应保留服务器提供的分页位置。缺失或损坏的主页不会暴露对应内部 owner 或私有资料。
 
-公开菜谱白名单：`{id,profileId,authorName,name,category,minutes,texture,ingredients,steps,imageKey,photoURL,updatedAt,publishedAt}`，另可包含 `ageGroups`。月龄标签仅从已提交的私人快照读取，枚举为 `6-8 / 9-11 / 12-17 / 18+`；数组最多 4 项，校验后去重并按枚举排序。缺失字段保持省略，`[]` 表示明确清空；客户端将两者均解释为不限月龄，参与任意月龄的抽选，不需要补写全部标签。发布请求自行附带的标签不作为来源。保存副本时保留明确的标签，更新公开版本仍须用户主动操作。如果来自其他公开食谱，可带 `source:{profileId,recipeId,authorName}`。来源作者名由服务器真实记录解析，不能靠客户端伪造；原作者撤回公开后，已有副本和已保存的来源仍然保留。不会返回私人 note、favorite、宝宝称呼、用餐记录、内部 owner、来源私有菜谱 ID、云文件 ID。
+公开菜谱白名单：`{id,profileId,authorName,name,category,minutes,texture,ingredients,steps,imageKey,photoURL,updatedAt,publishedAt}`，另可包含 `ageGroups`。月龄标签仅从已提交的私人快照读取，枚举为 `6-8 / 9-11 / 12-17 / 18+`；数组最多 4 项，校验后去重并按枚举排序。缺失字段保持省略，`[]` 表示明确清空；客户端将两者均解释为不限月龄，参与任意月龄的抽选，不需要补写全部标签。发布请求自行附带的标签不作为来源。保存副本时保留明确的标签，已公开菜谱保存修改后自动同步这些公开字段。如果来自其他公开食谱，可带 `source:{profileId,recipeId,authorName}`。来源作者名由服务器真实记录解析，不能靠客户端伪造；原作者撤回公开后，已有副本和已保存的来源仍然保留。不会返回私人 note、favorite、宝宝称呼、用餐记录、内部 owner、来源私有菜谱 ID、云文件 ID 或内部照片 hash。
 
 `recipe-covers.js` 为 21 个准确默认菜谱 ID 映射 `imageKey: 'dish:<id>'`，不根据任意私人 ID、相似菜名或通用食材键推测。新公开默认菜谱时写入该公开配图键；旧公开记录在详情、主页、发现及关注动态读取时按内部已存的默认来源 ID 兼容补出键，不写回旧记录，也不暴露私人来源 ID。已有明确 `dish:<id>` 的保存副本再次公开时保留该键。作者自传照片仍单独通过 `photoURL` 返回并优先展示，配图键不会替代其照片。
 
@@ -119,7 +127,11 @@
 
 ## 公开、复制与撤回边界
 
-公开必须从当前账号已提交的私人快照选择一条，服务器不接收客户端拼装的任意内容或 fileID。公开前验证整个快照及照片归属；事务提交时再次确认快照版本和公开版本没变。公开内容是独立快照，后续私人修改不会自动泄露，必须再次公开更新。
+私人快照允许可选 `allergies` 与 `allergiesUpdatedAt` 并严格校验，保持与私人同步协议兼容；这些信息不进入主页、菜谱、分享、发现或关注接口的公开白名单。推荐筛选由调用者的客户端使用自己的私人记录完成，不向社交接口上传过敏食物。
+
+首次公开必须由用户确认，并从当前账号已提交的私人快照选择一条，服务器不接收客户端拼装的任意内容或 fileID。公开前验证整个快照及照片归属；事务提交时再次确认快照版本和公开版本没变。已公开菜谱后续保存由客户端自动调用 `updatePublished`，仅从最新私人快照重新提取公开白名单字段。后台更新不创建首次公开记录，已私密、撤回或无变化时返回 `updated:false`；事务再次检查公开状态、generation 和私人 revision，撤回不会被并发更新复活。
+
+自动更新保留稳定公开 ID、`publishedAt` 与 `sortKey`，不因普通保存反复置顶。服务端内部 `sourcePhotoHash` 用于复用未变化的公开照片；替换或清除照片时同步相应变化，旧记录首次自动更新会补齐该字段。私人心得、收藏、宝宝资料和用餐记录均不进入公开记录。暂时失败时私人提交仍有效，客户端保留待同步状态，并在后续修改、联网恢复、回到前台或手动同步时重试。
 
 一键添加应重新请求 `recipe`，确认仍公开；存在作者自传照片时，将 `photoURL` 下载到访客自己的本机文件，再加入访客自己的菜谱并由私人同步上传。只有默认配图时保留 `dish:<id>` 键，不下载或上传静态图片，也不填充私人 `photo`。不得把原作者的私有 cloud fileID 写到访客菜谱中。复制不会复制收藏、用餐记录或私密心得。重复添加由客户端按稳定公开 ID 去重；既有副本不会被原作者后续修改或撤回自动覆盖。
 

@@ -12,6 +12,7 @@ function evaluatePage(name, context) {
     const runtime = {...context, module, exports: module.exports, require(dep) {
       const resolved = path.resolve(path.dirname(file), dep + '.js');
       if (resolved === path.join(root, 'pages/profile/page.js')) return evaluate(resolved);
+      if (dep.endsWith('/allergies')) return require('../utils/allergies');
       if (dep.endsWith('/profile-content')) return require('../utils/profile-content');
       if (dep.endsWith('/profile-avatar')) return require('../utils/profile-avatar');
       if (dep.endsWith('/baby-age')) return context.babyAge || require('../utils/baby-age');

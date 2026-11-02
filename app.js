@@ -70,7 +70,8 @@ App({
       if (!page) return;
       if (/^pages\/(home|recipes|ingredients|ingredient-results|records|detail|mine|profile)\/index$/.test(page.route) && page.refresh) {
         page.refresh();
-      } else if (page.route === 'pages/random/index' && page.onShow) page.onShow();
+      } else if (typeof page.refreshAllergies === 'function') page.refreshAllergies();
+      else if (page.route === 'pages/random/index' && page.onShow) page.onShow();
     });
     cloudSync.start();
     if (!this._unsubscribeCovers) this._unsubscribeCovers = coverLoader.subscribe(refreshCoverView);
@@ -80,7 +81,7 @@ App({
   onShow() {
     this.prepareCovers();
     if (this.globalData.iconFontState === 'unavailable') this.prepareIcons();
-    if (cloudSync.getStatus().state !== 'syncing') cloudSync.syncNow();
+    if (cloudSync.getStatus().state !== 'syncing') cloudSync.syncNow({ifNeeded: true});
   },
   prepareIcons() {
     if (this._iconFontPromise) return this._iconFontPromise;

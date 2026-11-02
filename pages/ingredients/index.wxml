@@ -10,6 +10,7 @@
   </view>
   <view class="ingredients-panel">
     <view class="pantry-selector">
+      <view wx:if="{{hasAllergies}}" class="muted">已按宝宝的过敏记录跳过相关食材菜谱</view>
       <view class="pantry-search"><t-search value="{{search}}" placeholder="搜索食材，如：南瓜、鸡肉" shape="round" bind:change="searchIngredient" maxlength="30" /></view>
       <view class="pantry-selection-bar"><view class="selection-title"><text class="selection-heading">我家现有食材</text><text class="selection-count">（已选 {{pantry.length}} 项）</text></view><button class="clear-selection" disabled="{{!pantry.length}}" bindtap="clearPantry" aria-label="清空已选食材">清空</button></view>
       <view class="ingredient-grid" wx:if="{{options.length}}">
@@ -33,7 +34,7 @@
           <t-icon class="inline-match-arrow" name="chevron-right" size="30rpx" />
         </button>
       </view>
-      <view wx:else class="inline-matches-empty"><view>暂时还没有匹配的菜谱</view><text>换几样食材试试，推荐会随选择更新</text></view>
+      <view wx:else class="inline-matches-empty"><view>暂时还没有匹配的菜谱</view><text>{{hasAllergies ? '已排除含已记录过敏食材的菜谱，可以调整食材或添加其他菜谱' : '换几样食材试试，推荐会随选择更新'}}</text></view>
       <view wx:if="{{matchCount}}" class="pantry-footer"><text>先看看家里有什么，再决定做什么</text><t-button theme="primary" shape="round" block bind:tap="showMatches">查看菜谱（{{matchCount}}）<t-icon slot="suffix" name="chevron-right" size="30rpx" /></t-button></view>
     </view>
   </view>

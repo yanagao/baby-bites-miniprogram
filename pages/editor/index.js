@@ -8,6 +8,9 @@ const ageGroupFields = values => ({
 });
 
 Page({
+  onShareAppMessage() {
+    return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     categories: categories.slice(1), textures, categoryIndex: 0, textureIndex: 0,
     ...ageGroupFields([]), ageGroupsDirty: false,

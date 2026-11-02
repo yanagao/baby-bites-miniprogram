@@ -24,7 +24,10 @@ function categoryFields(selectedCategories) {
   };
 }
 Page({
-  data: {...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, candidateCount: 0, hasRecipes: false, accountError: '', filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: ''},
+  onShareAppMessage() {
+    return {title: '今天吃什么？来抽一道菜 · 小口袋', path: '/pages/random/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
+  data: {...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, hasAllergies: false, candidateCount: 0, hasRecipes: false, accountError: '', filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: ''},
   onLoad() {
     this._sessionOwner = store.getSyncInfo().owner;
     this._accountBound = Boolean(this._sessionOwner);
@@ -52,7 +55,7 @@ Page({
       this.lastId = null;
       this._ageDefaultRequest++;
       this._ageDefaultPending = false;
-      this.setData({...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, candidateCount: 0, hasRecipes: false, filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: '', accountError: message});
+      this.setData({...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, hasAllergies: false, candidateCount: 0, hasRecipes: false, filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: '', accountError: message});
     }
     if (report) ui.error(new Error(message));
     return false;
@@ -98,7 +101,7 @@ Page({
       const pool = this.candidates(state);
       const current = this.data.result && pool.find(recipe => recipe.id === this.data.result.id);
       if (!current) this.draw();
-      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length)});
+      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   toggleFilters() { if (this.accountOK(false)) this.setData({filtersVisible: !this.data.filtersVisible}); },
@@ -146,7 +149,7 @@ Page({
       const state = store.getState();
       const result = selectors.randomRecipe(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, skipDisliked: this.data.skipDisliked, lastId: this.lastId});
       this.lastId = result ? result.id : null;
-      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length)});
+      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   favorite() {

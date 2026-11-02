@@ -27,7 +27,8 @@ function navigationHarness() {
     }
     return helpers;
   };
-  const requireModule = name => name.endsWith('/tab-bar') ? loadHelpers() : name.endsWith('/selectors') ? require('../utils/selectors') : {};
+  const requireModule = name => name.endsWith('/tab-bar') ? loadHelpers() : name.endsWith('/selectors') ? require('../utils/selectors') :
+    name.endsWith('/account') ? {check: () => true} : {};
   vm.runInNewContext(fs.readFileSync(path.join(root, 'components/bottom-navigation/index.js'), 'utf8'), {
     ...common, require: requireModule, Component: value => { component = value; }
   });

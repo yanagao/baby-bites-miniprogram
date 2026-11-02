@@ -55,6 +55,7 @@ function setup(options = {}) {
     require(name) {
       if (name === '../../utils/store') return store;
       if (name === '../../utils/social') return social;
+      if (name === '../../utils/cloud-sync') return {subscribe() { return () => {}; }};
       if (name === '../../config/cloud') return {socialEnabled: options.enabled !== false};
       if (name === '../../utils/selectors') return selectors;
       if (name === '../../utils/ui') return {error(error) { calls.errors.push(error.message); }, back() { calls.backs += 1; }};
@@ -113,6 +114,28 @@ test('publication requires confirmation, and cancel does not change private or p
   assert.equal(app.calls.publish, 0);
   assert.equal(app.isPublished(), false);
   assert.deepEqual(copy(app.store.getState()), copy(original));
+});
+
+test('already public recipes never open another publication confirmation or publish again', async () => {
+  const app = setup({published: true}); const page = await app.open();
+  app.store.toggleFavorite('one'); page.refresh();
+  assert.equal(page.data.publicChanged, true);
+  page.requestPublish(); await page.confirmPublish();
+  assert.equal(page.data.publishVisible, false);
+  assert.equal(app.calls.publish, 0);
+  assert.deepEqual(app.calls.navigation, []);
+  page.setData({publishVisible: true}); await page.confirmPublish();
+  assert.equal(page.data.publishVisible, false, 'a stale confirmation cannot republish');
+  assert.equal(app.calls.publish, 0);
+});
+
+test('returning to a recipe published elsewhere does not restore a stale first-publication confirmation', async () => {
+  const app = setup(); const page = await app.open();
+  page.requestPublish();
+  app.hooks.mine = () => ({profile: {exists: true}, published: [{id: PUBLIC_ID, sourceRecipeId: 'one', sourceUpdatedAt: 1}]});
+  await page.onShow(); await page.confirmPublish();
+  assert.equal(page.data.publishVisible, false);
+  assert.equal(app.calls.publish, 0);
 });
 
 test('a missing public profile opens setup without publishing', async () => {

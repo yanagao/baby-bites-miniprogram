@@ -12,6 +12,7 @@
   <view class="random-content">
     <view wx:if="{{accountError}}" class="random-empty"><view class="random-empty-description">{{accountError}}</view><t-button theme="primary" shape="round" block bind:tap="back">返回</t-button></view>
     <block wx:else>
+      <view wx:if="{{hasAllergies}}" class="random-pool-note">已按过敏记录跳过相关食材，清除偏好不会关闭此项</view>
       <view wx:if="{{hasRecipes}}" class="random-filters">
         <view class="random-section-heading"><text class="random-section-title">按月龄</text><text class="random-section-caption">可多选</text></view>
         <view wx:if="{{ageDefaultLoading || defaultAgeHint}}" class="random-age-default">{{ageDefaultLoading ? '正在读取宝宝月龄…' : defaultAgeHint}}</view>
@@ -50,7 +51,7 @@
         <view class="random-pool-note">{{candidateCount === 1 ? '当前范围只有这一道，试试其他月龄或分类吧' : '当前偏好可选 ' + candidateCount + ' 道，换一个会避开当前这道'}}</view>
       </block>
       <view wx:else class="random-empty">
-        <image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="random-empty-title">{{hasRecipes ? '换个偏好试试吧' : '先装进一道拿手菜'}}</view><view class="random-empty-description">{{hasRecipes ? '当前偏好没有可选菜谱，调整月龄、分类或关闭跳过后再试。' : '把做过的辅食收进食谱，下次让小口袋帮你选。'}}</view>
+        <image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="random-empty-title">{{hasRecipes ? '换个偏好试试吧' : '先装进一道拿手菜'}}</view><view class="random-empty-description">{{hasRecipes ? (hasAllergies ? '已跳过含已记录过敏食材的菜谱，当前偏好下没有可选结果。可以调整月龄、分类或添加其他菜谱。' : '当前偏好没有可选菜谱，调整月龄、分类或关闭跳过后再试。') : '把做过的辅食收进食谱，下次让小口袋帮你选。'}}</view>
         <t-button wx:if="{{hasRecipes}}" theme="primary" shape="round" block bind:tap="resetFilters">清除偏好</t-button><t-button wx:else theme="primary" shape="round" block bind:tap="add">添加菜谱</t-button>
       </view>
       <view class="random-tip"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view><view class="random-tip-title">不知道吃什么时，<text>来这里选一道～</text></view><view class="random-tip-text">按月龄、分类和用餐喜好抽选。<text>口感和食材仍需按宝宝实际情况调整。</text></view></view><view class="random-tip-spark" aria-hidden="true">✦</view></view>

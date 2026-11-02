@@ -38,10 +38,11 @@ function setup(options = {}) {
   const storage = new Map();
   if (options.initial != null) storage.set('baby-bites-v1', copy(options.initial));
   const hooks = {};
-  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], unlink: [], read: []};
+  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], unlink: [], read: [], social: []};
   let currentOwner = OWNER;
   let networkListener;
   let timerId = 0;
+  let now = Date.now();
   const timers = new Map();
   function putRemote(owner, incoming, revision = 1) {
     const id = fileID(owner, 'snapshots', `remote-${revision}.json`);
@@ -86,6 +87,10 @@ function setup(options = {}) {
     cloud: {
       init(args) { calls.init.push(args); },
       callFunction(args) { dispatch(args, async () => {
+        if (args.name === 'babyBitesSocial') {
+          calls.social.push(copy(args.data));
+          return {result: hooks.social ? await hooks.social(args) : {profile: {exists: false}, published: []}};
+        }
         if (args.data.action === 'identity') {
           calls.identity += 1;
           if (hooks.identity) {
@@ -128,11 +133,18 @@ function setup(options = {}) {
   const storeModule = {exports: {}};
   vm.runInNewContext(code('store.js'), {module: storeModule, require: requireStore, wx, console}, {filename: 'store.js'});
   const store = storeModule.exports;
+  const config = {env: options.unconfigured ? '' : ENV, functionName: 'babyBitesSync', socialEnabled: options.socialEnabled === true};
+  const publicationModule = {exports: {}};
+  vm.runInNewContext(code('publication-sync.js'), {module: publicationModule, wx,
+    require(name) { if (name === './store') return store; if (name === '../config/cloud') return config; throw Error(name); }
+  });
   const syncModule = {exports: {}};
   const context = {module: syncModule, wx, console, ArrayBuffer, Uint8Array,
+    Date: class extends Date { static now() { return now; } },
     require(name) {
-      if (name === '../config/cloud') return {env: options.unconfigured ? '' : ENV, functionName: 'babyBitesSync'};
+      if (name === '../config/cloud') return config;
       if (name === './store') return store;
+      if (name === './publication-sync') return publicationModule.exports;
       return requireStore(name);
     },
     setTimeout(callback) { timerId += 1; timers.set(timerId, callback); return timerId; },
@@ -142,6 +154,7 @@ function setup(options = {}) {
   const sync = syncModule.exports;
   return {wx, sync, store, calls, hooks, records, localFiles, cloudFiles, storage, putRemote, getRemote,
     setOwner(value) { currentOwner = value; },
+    advanceTime(milliseconds) { now += milliseconds; },
     network(isConnected) { if (networkListener) networkListener({isConnected}); },
     runTimers() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     timerCount() { return timers.size; }};
@@ -544,4 +557,288 @@ test('a commit response for a changed authenticated owner does not acknowledge l
   assert.equal(app.store.getSyncInfo().revision, 0);
   assert.equal(app.store.getSyncInfo().owner, OWNER);
   assert.ok(app.store.getRecipe('local'));
+});
+
+test('public updates wait for committed private data and retry even after private dirty state is cleared', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('published'), recipe('private')])});
+  let publishedAt = 0, failUpdate = true;
+  app.hooks.social = args => {
+    assert.equal(app.store.getSyncInfo().dirty, false);
+    assert.equal(app.getRemote().data.recipes.length, 2);
+    assert.equal(args.data.expectedOwner, OWNER);
+    if (args.data.action === 'mine') return {profile: {exists: true},
+      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
+    assert.equal(args.data.action, 'updatePublished');
+    assert.equal(args.data.sourceRecipeId, 'published');
+    if (failUpdate) throw Error('offline');
+    publishedAt = app.getRemote().data.recipes.find(item => item.id === 'published').updatedAt;
+    return {updated: true};
+  };
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+  assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.timerCount(), 0, 'a failed public update does not spin retries');
+  failUpdate = false;
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.commit, 1, 'retry does not commit private data again');
+  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  await app.sync.syncNow();
+  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2, 'unchanged public data is skipped');
+});
+
+test('private save failure never runs public reconciliation and reconnect resumes deferred updates', async () => {
+  const failed = setup({socialEnabled: true, initial: state([recipe('published')])});
+  failed.hooks.beforeCommit = () => { throw Error('network unavailable'); };
+  await failed.sync.start();
+  assert.deepEqual(failed.calls.social, []);
+  assert.equal(failed.store.getSyncInfo().dirty, true);
+  delete failed.hooks.beforeCommit;
+  failed.network(false);
+  await failed.sync.syncNow();
+  assert.deepEqual(failed.calls.social, []);
+  failed.network(true);
+  await failed.sync.syncNow();
+  assert.equal(failed.sync.getStatus().state, 'synced');
+  assert.ok(failed.calls.social.some(item => item.action === 'mine'));
+});
+
+test('editing again during public reconciliation synchronizes and reconciles the newer save', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('published')])});
+  let publishedAt = 0, first = true;
+  app.hooks.social = args => {
+    if (args.data.action === 'mine') return {profile: {exists: true},
+      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
+    publishedAt = app.getRemote().data.recipes[0].updatedAt;
+    if (first) {
+      first = false;
+      app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
+    }
+    return {updated: true};
+  };
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.getRemote().data.recipes[0].name, '第二次保存的菜名');
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  assert.equal(publishedAt, app.store.getRecipe('published').updatedAt);
+});
+
+test('a failed public update still commits a private save queued while it was in flight without retrying itself', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('published')])});
+  let updates = 0;
+  app.hooks.social = args => {
+    if (args.data.action === 'mine') return {profile: {exists: true},
+      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+    updates++;
+    if (updates === 1) app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
+    throw Error('temporary public update failure');
+  };
+  await app.sync.start();
+  assert.equal(app.getRemote().data.recipes[0].name, '第二次保存的菜名');
+  assert.equal(app.store.getRecipe('published').name, '第二次保存的菜名');
+  assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.equal(app.calls.commit, 2);
+  assert.equal(updates, 1, 'a failed publication must not retry itself while draining private changes');
+  assert.deepEqual(app.calls.social.map(item => item.action), ['mine', 'updatePublished']);
+  assert.equal(app.timerCount(), 0);
+  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+});
+
+test('an A to B to A account switch during public lookup cannot publish the stale account request', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('published')])});
+  app.hooks.social = args => {
+    assert.equal(args.data.action, 'mine');
+    app.store.bindAccount(OTHER); app.store.bindAccount(OWNER);
+    return {profile: {exists: true}, published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'error');
+  assert.match(app.sync.getStatus().message, /账号已切换/);
+  assert.equal(app.calls.social.length, 1);
+});
+
+test('unchanged account revisions skip downloads and store notifications but still check server identity', async () => {
+  const app = setup();
+  app.putRemote(OWNER, snapshot(state([recipe('remote')])), 3);
+  await app.sync.syncNow();
+  let notifications = 0;
+  app.store.subscribe(() => notifications++);
+  await app.sync.syncNow();
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.calls.download.length, 1);
+  assert.equal(app.calls.commit, 0);
+  assert.equal(notifications, 0);
+  assert.equal(app.sync.getStatus().revision, 3);
+
+  app.putRemote(OWNER, snapshot(state([recipe('remote', {name: '另一台设备的新菜名', updatedAt: 2})])), 4);
+  await app.sync.syncNow();
+  assert.equal(app.calls.download.length, 2);
+  assert.equal(notifications, 1);
+  assert.equal(app.store.getRecipe('remote').name, '另一台设备的新菜名');
+  assert.equal(app.sync.getStatus().revision, 4);
+});
+
+test('foreground checks reuse confirmed clean state for thirty seconds and periodically reconcile publications', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('local')])});
+  await app.sync.start();
+  const initial = app.sync.getStatus();
+  await app.sync.syncNow({ifNeeded: true});
+  await app.sync.start();
+  app.network(true);
+  app.advanceTime(29999);
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 1);
+  assert.equal(app.calls.social.length, 1);
+  assert.equal(app.sync.getStatus().lastSyncedAt, initial.lastSyncedAt);
+
+  app.advanceTime(1);
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.calls.social.length, 2, 'periodic checks reconcile changes made by older clients');
+  assert.equal(app.calls.download.length, 0);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 0);
+  assert.equal(app.sync.getStatus().identityCheckedAt, initial.identityCheckedAt + 30000);
+
+  await app.sync.syncNow();
+  assert.equal(app.calls.identity, 3, 'an explicit sync always contacts the server');
+  assert.equal(app.calls.social.length, 3);
+});
+
+test('joining an in-flight sync without edits does not queue another identity or publication check', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('local')])});
+  const entered = deferred(), release = deferred();
+  app.hooks.social = async () => {
+    entered.resolve(); await release.promise;
+    return {profile: {exists: false}, published: []};
+  };
+  const first = app.sync.start();
+  await entered.promise;
+  assert.equal(app.sync.syncNow(), first);
+  assert.equal(app.sync.syncNow({ifNeeded: true}), first);
+  release.resolve();
+  await first;
+  assert.equal(app.calls.identity, 1);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.calls.social.length, 1);
+});
+
+test('edits included while awaiting identity do not cause a second redundant pass', async () => {
+  const app = setup({initial: state([recipe('local')])});
+  const entered = deferred(), release = deferred();
+  app.hooks.identity = async () => { entered.resolve(); await release.promise; };
+  const work = app.sync.start();
+  await entered.promise;
+  app.store.setNickname('身份确认时的新称呼');
+  release.resolve();
+  await work;
+  assert.equal(app.calls.identity, 1);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.getRemote().data.nickname, '身份确认时的新称呼');
+  assert.equal(app.store.getSyncInfo().dirty, false);
+});
+
+test('dirty edits and failed checks bypass the foreground interval and preserve verified identity on network failure', async () => {
+  const app = setup({initial: state([recipe('local')])});
+  await app.sync.syncNow();
+  const checkedAt = app.sync.getStatus().identityCheckedAt;
+  app.store.setNickname('新称呼');
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.getRemote().data.nickname, '新称呼');
+
+  app.hooks.identity = () => { throw Error('network timeout'); };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.equal(app.sync.getStatus().identityCheckedAt, checkedAt);
+  assert.equal(app.sync.getStatus().identityInvalid, false, 'network failures do not invalidate verified identity');
+  delete app.hooks.identity;
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 4);
+  assert.equal(app.sync.getStatus().state, 'synced');
+});
+
+test('fresh startup, account switches and invalid identity responses cannot use the foreground cache', async () => {
+  const app = setup();
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+  app.store.bindAccount(OWNER);
+  assert.equal(app.sync.getStatus().identityCheckedAt, 0);
+  assert.equal(app.sync.getStatus().identityInvalid, true);
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 1);
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+  app.store.bindAccount(OTHER);
+  app.store.bindAccount(OWNER);
+  assert.equal(app.sync.getStatus().identityCheckedAt, 0);
+  assert.equal(app.sync.getStatus().identityInvalid, true);
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+
+  app.hooks.identity = () => ({owner: 'invalid', revision: 0, fileID: ''});
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'error');
+  assert.equal(app.sync.getStatus().identityCheckedAt, 0);
+  assert.equal(app.sync.getStatus().identityInvalid, true);
+  app.hooks.identity = () => { throw Error('network timeout'); };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().identityInvalid, true, 'network retries cannot restore an invalidated identity');
+  delete app.hooks.identity;
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 5);
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+});
+
+test('server account mismatches invalidate previously confirmed identity for all subscribers', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('local')])});
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+  const changes = [];
+  app.sync.subscribe(status => changes.push(status.identityInvalid));
+  app.hooks.social = () => ({error: {code: 'ACCOUNT_CHANGED'}});
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'error');
+  assert.equal(app.sync.getStatus().identityCheckedAt, 0);
+  assert.equal(app.sync.getStatus().identityInvalid, true);
+  assert.ok(changes.includes(true));
+  delete app.hooks.social;
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.sync.getStatus().identityInvalid, false);
+  assert.equal(app.sync.getStatus().state, 'synced');
+});
+
+test('publication change versions report partial successes, retry pending work immediately and stay unchanged after no-op checks', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('first'), recipe('second')])});
+  const publishedAt = {first: 0, second: 0};
+  let failSecond = true;
+  app.hooks.social = args => {
+    if (args.data.action === 'mine') return {profile: {exists: true}, published: [
+      {id: 'c'.repeat(64), sourceRecipeId: 'first', sourceUpdatedAt: publishedAt.first},
+      {id: 'd'.repeat(64), sourceRecipeId: 'second', sourceUpdatedAt: publishedAt.second}
+    ]};
+    if (args.data.sourceRecipeId === 'second' && failSecond) throw Error('temporary failure');
+    publishedAt[args.data.sourceRecipeId] = 1;
+    return {updated: true};
+  };
+  const versions = [];
+  app.sync.subscribe(status => versions.push(status.publicationVersion));
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.equal(app.sync.getStatus().revision, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 1);
+  assert.ok(versions.includes(1));
+  failSecond = false;
+  await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.identity, 2);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.calls.download.length, 0);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
 });

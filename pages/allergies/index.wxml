@@ -1,0 +1,25 @@
+<t-navbar z-index="100" title="宝宝过敏食物" placeholder left-arrow delta="{{0}}" bind:go-back="cancel" />
+<view wx:if="{{accountError}}" class="allergies-unavailable"><t-empty icon="info-circle" description="{{accountError}}"><t-button slot="action" theme="primary" bind:tap="cancel">返回</t-button></t-empty></view>
+<view wx:else class="allergies-page">
+  <view class="allergies-intro">保存后会自动跳过含这些食材的推荐菜谱。</view>
+  <view class="allergies-privacy">仅自己可见，随当前微信账号同步。</view>
+  <view class="allergies-section">
+    <view class="allergies-heading">已记录 <text>{{allergies.length}} / 50</text></view>
+    <view wx:if="{{allergies.length}}" class="allergies-chips"><button wx:for="{{allergies}}" wx:key="*this" class="allergies-chip allergies-selected" data-name="{{item}}" disabled="{{saving}}" bindtap="removeFood" aria-label="{{'移除' + item}}"><text>{{item}}</text><t-icon name="close" size="24rpx" /></button></view>
+    <view wx:else class="allergies-empty">还没有记录过敏食物</view>
+    <view wx:if="{{allergies.length}}" class="allergies-note">点一下已记录的食物即可移除，保存后生效。</view>
+  </view>
+  <view class="allergies-section">
+    <view class="allergies-heading">常用食物</view>
+    <view class="allergies-chips"><button wx:for="{{options}}" wx:key="name" class="allergies-chip {{item.selected ? 'allergies-selected' : ''}}" data-name="{{item.name}}" aria-pressed="{{item.selected}}" disabled="{{saving}}" bindtap="toggleFood">{{item.name}}<t-icon wx:if="{{item.selected}}" name="check" size="24rpx" /></button></view>
+  </view>
+  <view class="allergies-section">
+    <view class="allergies-heading">添加其他食物</view>
+    <view class="allergies-input"><t-input value="{{input}}" placeholder="例如：芒果" maxlength="40" borderless disabled="{{saving}}" bind:change="changeInput" bind:enter="addFood" /><t-button theme="primary" variant="text" size="small" disabled="{{saving}}" bind:tap="addFood">添加</t-button></view>
+    <view class="allergies-note">每次添加一种食物，最多 40 个字。</view>
+  </view>
+  <view class="allergies-boundary">按已填写食材和常见名称匹配，仍需核对包装配料。</view>
+  <view wx:if="{{error}}" class="allergies-error" role="alert">{{error}}</view>
+  <view class="allergies-actions"><view class="allergies-cancel"><t-button theme="default" shape="round" block disabled="{{saving}}" bind:tap="cancel">取消</t-button></view><view class="allergies-save"><t-button theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">保存</t-button></view></view>
+</view>
+<t-dialog visible="{{discardVisible}}" title="放弃修改？" content="过敏食物的本次修改尚未保存。" confirm-btn="{{ {content: '放弃修改', theme: 'danger'} }}" cancel-btn="继续编辑" bind:confirm="discard" bind:cancel="continueEditing" />

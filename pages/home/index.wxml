@@ -21,6 +21,7 @@
     </button>
   </view>
   <view class="recommendations-section">
+    <view wx:if="{{hasAllergies}}" class="muted">已按宝宝的过敏记录跳过相关食材菜谱</view>
     <view class="section-heading"><view class="section-title">{{recommendationTitle}}</view><button class="section-more" bindtap="goRecipes" aria-label="查看全部食谱"><text>更多</text><t-icon name="chevron-right" size="28rpx" /></button></view>
     <view wx:if="{{recommendations.length}}" class="recommendation-grid">
       <button wx:for="{{recommendations}}" wx:key="id" class="recommendation-card" data-id="{{item.id}}" bindtap="openRecipe" aria-label="查看{{item.name}}的做法">
@@ -28,7 +29,7 @@
         <view class="recommendation-name">{{item.name}}</view><view class="recommendation-meta">{{item.minutes}} 分钟 · {{item.texture}}</view><view wx:if="{{item.recentMealCount}}" class="recommendation-frequency">近30天做过 {{item.recentMealCount}} 次</view>
       </button>
     </view>
-    <view wx:else class="home-empty panel"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="brush">先装进一道拿手菜</view><text>收好做过的辅食，下次让小口袋帮你选</text><t-button theme="primary" shape="round" block bind:tap="addRecipe">添加菜谱</t-button></view>
+    <view wx:else class="home-empty panel"><image src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" /><view class="brush">{{hasAllergies && hasRecipes ? '暂时没有可推荐的菜谱' : '先装进一道拿手菜'}}</view><text>{{hasAllergies && hasRecipes ? '已跳过含已记录过敏食材的菜谱，可以添加其他菜谱' : '收好做过的辅食，下次让小口袋帮你选'}}</text><t-button theme="primary" shape="round" block bind:tap="addRecipe">添加菜谱</t-button></view>
   </view>
 </view>
 <bottom-navigation id="bottom-navigation" />

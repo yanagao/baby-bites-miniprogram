@@ -27,6 +27,62 @@ function snapshot(owner = ownerFor('alice')) {
   };
 }
 
+test('both cloud validators preserve optional private allergy settings and reject malformed values', () => {
+  const validators = [validateSnapshot, require('../cloudfunctions/babyBitesSocial/private-snapshot').validateSnapshot];
+  for (const validate of validators) {
+    const check = data => validate(Buffer.from(JSON.stringify(data)), {env: ENV, owner: ownerFor('alice'), now: NOW});
+    assert.equal(Object.hasOwn(check(snapshot()).data, 'allergies'), false);
+    assert.equal(Object.hasOwn(check(snapshot()).data, 'allergiesUpdatedAt'), false);
+    const configured = snapshot();
+    configured.data.allergies = [' 鸡蛋 ', '牛奶', '鸡蛋'];
+    assert.deepEqual(check(configured).data.allergies, ['鸡蛋', '牛奶']);
+    assert.equal(check(configured).data.allergiesUpdatedAt, 0);
+    configured.data.allergies = [];
+    configured.data.allergiesUpdatedAt = NOW;
+    assert.deepEqual(check(configured).data.allergies, []);
+    for (const allergies of [null, '', {}, [''], ['  '], [1], ['鸡蛋\n'], ['牛奶\u007f'], ['甲'.repeat(41)], Array(51).fill('鸡蛋')]) {
+      const data = snapshot(); data.data.allergies = allergies;
+      assert.throws(() => check(data), error => error.code === 'INVALID_SNAPSHOT' && /过敏/.test(error.message));
+    }
+    for (const allergiesUpdatedAt of [null, -1, 1.1, '1', Number.MAX_SAFE_INTEGER + 1]) {
+      const data = snapshot(); Object.assign(data.data, {allergies: ['鸡蛋'], allergiesUpdatedAt});
+      assert.throws(() => check(data), error => error.code === 'INVALID_SNAPSHOT');
+    }
+    const orphan = snapshot(); orphan.data.allergiesUpdatedAt = NOW;
+    assert.throws(() => check(orphan), error => error.code === 'INVALID_SNAPSHOT');
+  }
+});
+
+test('private cloud commits retain allergy protection against omitted or older settings', async () => {
+  const env = fakeEnvironment();
+  const owner = ownerFor('alice');
+  const initial = snapshot(); Object.assign(initial.data, {allergies: ['鸡蛋'], allergiesUpdatedAt: NOW});
+  const fileID = env.upload('alice', 'allergies.json', initial);
+  const handler = env.handler();
+  assert.equal((await handler({action: 'commit', baseRevision: 0, fileID})).revision, 1);
+  assert.equal(env.records.get(owner).allergiesUpdatedAt, NOW);
+  assert.equal(Object.hasOwn(env.records.get(owner), 'allergies'), false);
+  const before = clone(env.records.get(owner));
+  const oldClient = env.upload('alice', 'old-client.json', snapshot());
+  const dropped = await handler({action: 'commit', baseRevision: 1, fileID: oldClient});
+  assert.equal(dropped.error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.deepEqual(env.records.get(owner), before);
+  const stale = snapshot(); Object.assign(stale.data, {allergies: [], allergiesUpdatedAt: NOW - 1});
+  const staleFile = env.upload('alice', 'stale-settings.json', stale);
+  const conflict = await handler({action: 'commit', baseRevision: 1, fileID: staleFile});
+  assert.deepEqual(conflict, {conflict: true, owner, revision: 1, fileID});
+  assert.deepEqual(env.records.get(owner), before);
+  const clear = snapshot(); Object.assign(clear.data, {allergies: [], allergiesUpdatedAt: NOW + 1});
+  const clearFile = env.upload('alice', 'clear-settings.json', clear);
+  assert.equal((await handler({action: 'commit', baseRevision: 1, fileID: clearFile})).revision, 2);
+  assert.equal(env.records.get(owner).allergiesUpdatedAt, NOW + 1);
+  assert.equal((await handler({action: 'commit', baseRevision: 2, fileID: oldClient})).error.code, 'CLIENT_UPDATE_REQUIRED');
+  const identity = await handler({action: 'identity'});
+  assert.deepEqual(Object.keys(identity).sort(), ['fileID', 'owner', 'revision']);
+  const bobFile = env.upload('bob');
+  assert.equal((await env.handler('bob')({action: 'commit', baseRevision: 0, fileID: bobFile})).revision, 1);
+});
+
 test('both cloud snapshot validators accept optional age groups without inventing legacy values', () => {
   const validators = [validateSnapshot, require('../cloudfunctions/babyBitesSocial/private-snapshot').validateSnapshot];
   for (const validate of validators) {

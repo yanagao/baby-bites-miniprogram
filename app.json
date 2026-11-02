@@ -12,6 +12,7 @@
     "pages/record-editor/index",
     "pages/random/index",
     "pages/settings/index",
+    "pages/allergies/index",
     "pages/profile/index",
     "pages/following/index",
     "pages/public-recipe/index"

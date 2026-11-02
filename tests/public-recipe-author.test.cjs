@@ -15,14 +15,14 @@ function setup(overrides = {}) {
   let owner = 'owner-a';
   const listeners = new Set();
   const calls = {errors: [], toasts: [], routes: [], updates: 0, profiles: [], follows: [], saves: []};
-  const store = {getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {
     showToast(value) { calls.toasts.push(value.title); }, navigateTo(value) { calls.routes.push(value.url); },
     showShareMenu() {}, hideShareMenu() {}, previewImage() {}
   };
   const social = {
     getRecipe: async () => ({recipe, author}), findImportedRecipe: () => null,
-    getProfile: async (id, offset) => { calls.profiles.push([id, offset]); return {profile: author, isSelf: false, following: false, followedBy: true}; },
+    getProfileSummary: async (id, options) => { calls.profiles.push([id, options]); return {profile: author, isSelf: false, following: false, followedBy: true}; },
     setFollowing: async (id, following) => { calls.follows.push([id, following]); return {following, followedBy: true}; },
     addToCookbook: async id => { calls.saves.push(id); return {recipeId: 'shared-copy', added: true}; }, ...overrides
   };
@@ -34,6 +34,8 @@ function setup(overrides = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/public-recipe/index.js'), 'utf8'), {
     Page(value) { definition = value; }, wx,
     require(dep) {
+      if (dep.endsWith('/store')) return store;
+      if (dep.endsWith('/allergies')) return require('../utils/allergies');
       if (dep.endsWith('/social')) return social;
       if (dep.endsWith('/account')) return accountModule.exports;
       if (dep.endsWith('/profile-avatar')) return {getProfileAvatar};
@@ -46,16 +48,36 @@ function setup(overrides = {}) {
   return {page, calls, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }};
 }
 
-test('author relationship loads independently after the recipe becomes readable', async () => {
+test('public detail revalidates withdrawal on every return and uses only lightweight author summaries', async () => {
+  let reads = 0; const summaries = [];
+  const {page} = setup({getRecipe: async () => {
+    if (++reads === 3) throw Error('已取消公开');
+    return {recipe, author};
+  }, getProfile: () => { throw Error('Full profile pages are unnecessary here'); },
+  getProfileSummary: async (id, options) => { summaries.push({id, options}); return {isSelf: false, following: false}; }});
+  await page.onShow(); await page.onShow();
+  assert.equal(reads, 2); assert.equal(summaries.length, 2);
+  await page.refreshAuthorRelationship(); assert.equal(summaries[2].options.force, true);
+  await page.onShow();
+  assert.equal(page.data.recipe, null); assert.equal(page.data.importedId, '');
+  assert.equal(page.onShareAppMessage().path, '/pages/home/index');
+});
+
+test('recipe reading and sharing stay available while saving waits for author ownership', async () => {
   const pending = deferred();
-  const {page, calls} = setup({getProfile: () => pending.promise});
+  const {page, calls} = setup({getProfileSummary: () => pending.promise});
   const loading = page.load(); await turn();
   assert.equal(page.data.loading, false); assert.equal(page.data.recipe.id, recipe.id);
   assert.equal(page.data.relationLoading, true);
+  assert.equal(page.data.authorKnown, false);
+  assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + recipe.id);
   await page.add();
-  assert.deepEqual(calls.saves, [recipe.id]); assert.equal(page.data.importedId, 'shared-copy');
+  assert.deepEqual(calls.saves, []); assert.equal(page.data.importedId, '');
   pending.resolve({profile: author, following: false, followedBy: true, isSelf: false}); await loading;
   assert.equal(page.data.relationReady, true); assert.equal(page.data.followedBy, true);
+  assert.equal(page.data.authorKnown, true);
+  await page.add();
+  assert.deepEqual(calls.saves, [recipe.id]); assert.equal(page.data.importedId, 'shared-copy');
 });
 
 test('public recipe author avatars depend on the public ID, preserve the DTO, and survive a nickname change', async () => {
@@ -70,9 +92,9 @@ test('public recipe author avatars depend on the public ID, preserve the DTO, an
   assert.equal(page.data.author.avatar, getProfileAvatar(original.id));
 });
 
-test('relationship failure preserves recipe, share, save, and author navigation, then retries', async () => {
+test('an initial ownership failure preserves recipe, share and author navigation but waits to save until retry succeeds', async () => {
   let attempts = 0;
-  const {page, calls} = setup({getProfile: async () => {
+  const {page, calls} = setup({getProfileSummary: async () => {
     if (++attempts === 1) throw Error('关注状态读取失败');
     return {profile: author, isSelf: false, following: false, followedBy: true};
   }});
@@ -81,36 +103,82 @@ test('relationship failure preserves recipe, share, save, and author navigation,
   assert.equal(page.data.relationError, '关注状态读取失败'); assert.equal(page.data.relationReady, false);
   assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + recipe.id);
   page.openAuthor(); assert.deepEqual(calls.routes, ['/pages/profile/index?id=' + author.id]);
-  await page.add(); assert.equal(page.data.importedId, 'shared-copy');
+  await page.add(); assert.equal(page.data.importedId, ''); assert.deepEqual(calls.saves, []);
+  assert.equal(page.data.authorKnown, false);
   await page.refreshAuthorRelationship();
   assert.equal(page.data.relationError, ''); assert.equal(page.data.relationReady, true);
+  await page.add(); assert.equal(page.data.importedId, 'shared-copy');
+});
+
+test('known other authors remain saveable when a later relationship refresh fails', async () => {
+  let attempts = 0;
+  const {page, calls} = setup({getProfileSummary: async () => {
+    if (++attempts > 1) throw Error('关注状态读取失败');
+    return {profile: author, isSelf: false, following: false, followedBy: true};
+  }});
+  await page.load();
+  assert.equal(page.data.authorKnown, true); assert.equal(page.data.authorIsSelf, false);
+  await page.refreshAuthorRelationship();
+  assert.equal(page.data.relationReady, false); assert.equal(page.data.relationError, '关注状态读取失败');
+  assert.equal(page.data.authorKnown, true);
+  await page.add();
+  assert.deepEqual(calls.saves, [recipe.id]); assert.equal(page.data.importedId, 'shared-copy');
+});
+
+test('a delayed own-author response never permits copying or opening an existing duplicate', async () => {
+  const pending = deferred();
+  const {page, calls} = setup({getProfileSummary: () => pending.promise,
+    findImportedRecipe: () => ({id: 'previous-duplicate'})});
+  const loading = page.load(); await turn();
+  await page.add(); page.openOwn();
+  assert.deepEqual(calls.saves, []); assert.deepEqual(calls.routes, []);
+  pending.resolve({profile: author, isSelf: true, following: false, followedBy: false}); await loading;
+  assert.equal(page.data.authorKnown, true); assert.equal(page.data.authorIsSelf, true);
+  await page.add(); page.openOwn();
+  assert.deepEqual(calls.saves, []); assert.deepEqual(calls.routes, []);
+  assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + recipe.id);
+});
+
+test('invalid ownership flags are never interpreted as another author', async () => {
+  for (const isSelf of [undefined, null, 0, 'false', {}]) {
+    const {page, calls} = setup({getProfileSummary: async () => ({profile: author, isSelf, following: false})});
+    await page.load(); await page.add();
+    assert.equal(page.data.authorKnown, false);
+    assert.equal(page.data.relationReady, false);
+    assert.ok(page.data.relationError);
+    assert.deepEqual(calls.saves, []);
+  }
 });
 
 test('follow-back uses author public ID and confirms mutual relationship', async () => {
   const {page, calls} = setup();
   await page.load(); await page.toggleFollow();
-  assert.deepEqual(calls.profiles, [[author.id, 0]]);
+  assert.deepEqual(calls.profiles, [[author.id, undefined]]);
   assert.deepEqual(calls.follows, [[author.id, true]]);
   assert.equal(page.data.following, true); assert.equal(page.data.followedBy, true);
   assert.deepEqual(calls.toasts, ['已互相关注']);
   await page.toggleFollow(); assert.equal(page.data.following, false);
 });
 
-test('own author hides follow behavior and unknown relationships cannot be mutated', async () => {
-  const {page, calls} = setup({getProfile: async () => ({isSelf: true, profile: author, following: false, followedBy: false})});
-  await page.load(); await page.toggleFollow();
+test('own author blocks following and copying, and unknown relationships cannot be mutated', async () => {
+  const {page, calls} = setup({getProfileSummary: async () => ({isSelf: true, profile: author, following: false, followedBy: false})});
+  await page.load(); await page.toggleFollow(); await page.add();
   assert.equal(page.data.authorIsSelf, true); assert.deepEqual(calls.follows, []);
+  assert.equal(page.data.authorKnown, true); assert.deepEqual(calls.saves, []);
   page.setData({authorIsSelf: false, relationReady: false}); await page.toggleFollow();
   assert.deepEqual(calls.follows, []);
 });
 
-test('missing own public profile exposes setup without losing recipe or faking a follow', async () => {
-  const {page, calls} = setup({setFollowing: async () => { throw Object.assign(Error('先设置主页'), {code: 'PROFILE_REQUIRED'}); }});
+test('recipe author follow does not require reading or completing the current user profile', async () => {
+  const {page, calls} = setup({
+    getMine: async () => { throw Error('关注不需要读取本人资料'); },
+    saveProfile: async () => { throw Error('关注不应保存资料'); }
+  });
   await page.load(); await page.toggleFollow();
-  assert.equal(page.data.needsProfile, true); assert.equal(page.data.following, false);
+  assert.equal(page.data.following, true);
   assert.equal(page.data.recipe.id, recipe.id); assert.equal(page.data.error, ''); assert.equal(page.data.followBusy, false);
-  page.openProfileSetup(); assert.deepEqual(calls.routes, ['/pages/profile/index?edit=1']);
-  assert.deepEqual(calls.toasts, []);
+  assert.deepEqual(calls.follows, [[author.id, true]]); assert.deepEqual(calls.routes, []);
+  assert.deepEqual(calls.toasts, ['已互相关注']); assert.deepEqual(calls.errors, []);
 });
 
 test('follow is deduplicated and page-show does not interrupt an active mutation', async () => {
@@ -137,7 +205,7 @@ test('a failed follow leaves known relationship unchanged and can retry without 
 
 test('late relationship read cannot overwrite a newer read', async () => {
   const older = deferred(), newer = deferred(); let reads = 0;
-  const {page} = setup({getProfile: () => ++reads === 1 ? older.promise : newer.promise});
+  const {page} = setup({getProfileSummary: () => ++reads === 1 ? older.promise : newer.promise});
   const load = page.load(); await turn();
   const refresh = page.refreshAuthorRelationship();
   newer.resolve({profile: author, isSelf: false, following: true, followedBy: true}); await refresh;
@@ -147,22 +215,24 @@ test('late relationship read cannot overwrite a newer read', async () => {
 
 test('account switch invalidates late relationship and follow responses', async () => {
   const pending = deferred();
-  const fixture = setup({getProfile: () => pending.promise});
+  const fixture = setup({getProfileSummary: () => pending.promise});
   const task = fixture.page.load(); await turn(); fixture.changeOwner('owner-b', false);
   pending.resolve({profile: author, following: true, followedBy: true, isSelf: false}); await task;
   assert.equal(fixture.page.data.recipe, null); assert.match(fixture.page.data.error, /账号已切换/);
   assert.equal(fixture.page.data.author, null);
+  assert.equal(fixture.page.data.authorKnown, false);
   const following = deferred();
   const next = setup({setFollowing: () => following.promise});
   await next.page.load(); const mutation = next.page.toggleFollow(); next.changeOwner('owner-b');
   following.resolve({following: true, followedBy: true}); await mutation;
   assert.equal(next.page.data.recipe, null); assert.deepEqual(next.calls.toasts, []);
+  assert.equal(next.page.data.authorKnown, false);
 });
 
 test('unloaded page ignores pending author request and mutation failures', async () => {
   for (const operation of ['read', 'follow']) {
     const pending = deferred();
-    const {page, calls} = setup(operation === 'read' ? {getProfile: () => pending.promise} : {setFollowing: () => pending.promise});
+    const {page, calls} = setup(operation === 'read' ? {getProfileSummary: () => pending.promise} : {setFollowing: () => pending.promise});
     let task;
     if (operation === 'read') { task = page.load(); await turn(); }
     else { await page.load(); task = page.toggleFollow(); }

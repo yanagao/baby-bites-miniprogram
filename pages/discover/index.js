@@ -1,10 +1,13 @@
 const social = require('../../utils/social');
+const store = require('../../utils/store');
+const {findRecipeAllergens} = require('../../utils/allergies');
 const account = require('../profile/account');
 const {syncTabBar} = require('../../utils/tab-bar');
 
-function read(tab, search, cursor) {
-  return tab === 'following' ? social.getFeed(cursor) : social.getDiscover({search, cursor});
+function read(tab, search, cursor, options) {
+  return tab === 'following' ? social.getFeed(cursor, options) : social.getDiscover({search, cursor, ...(options && options.force === true ? {force: true} : {})});
 }
+const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 function appendUnique(existing, incoming) {
   const known = new Set(existing.map(item => item.id));
   return existing.concat(incoming.filter(item => {
@@ -27,13 +30,32 @@ function recommend(recipes) {
 }
 
 Page({
+  onShareAppMessage() {
+    return {title: '发现辅食菜谱 · 小口袋', path: '/pages/discover/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {tab: 'recommended', search: '', query: '', loading: true, loadingMore: false,
-    error: '', loadMoreError: '', recipes: [], nextCursor: null},
-  onLoad() { this.request = 0; account.bind(this); },
-  onShow() { syncTabBar(this); return this.load(); },
+    error: '', loadMoreError: '', recipes: [], nextCursor: null, hasAllergies: false, skippedAllergyCount: 0},
+  onLoad() { this.request = 0; this._allRecipes = []; account.bind(this); },
+  onShow() {
+    syncTabBar(this);
+    if (!account.check(this)) return;
+    if (!this.data.error && !this.data.loading && this._loadedKey === this.data.tab + ':' + this.data.query &&
+      this._loadedAt && Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === readVersion()) {
+      this.refreshAllergies(); return;
+    }
+    return this.load();
+  },
   onReady() { syncTabBar(this); },
   onUnload() { this.request++; account.dispose(this); },
-  reload() { return account.reload(this); },
+  reload() { return account.reload(this, {force: true}); },
+  disposeLocalContent() { this._allRecipes = []; this._loadedAt = 0; this.setData({hasAllergies: false, skippedAllergyCount: 0}); },
+  refreshAllergies() {
+    if (!account.check(this)) return;
+    const allergies = store.getState().allergies || [];
+    const all = this._allRecipes || [];
+    const recipes = allergies.length ? all.filter(recipe => !findRecipeAllergens(recipe, allergies).length) : all;
+    this.setData({recipes, hasAllergies: Boolean(allergies.length), skippedAllergyCount: all.length - recipes.length});
+  },
   changeTab(event) {
     const tab = event.detail.value;
     if (!account.check(this) || !['recommended', 'latest', 'following'].includes(tab) || tab === this.data.tab) return;
@@ -56,16 +78,22 @@ Page({
     this.setData({search: '', query: ''});
     return this.load();
   },
-  async load() {
+  async load(options) {
     if (!account.check(this)) return;
     const request = ++this.request;
     const {tab, query} = this.data;
-    this.setData({loading: true, loadingMore: false, error: '', loadMoreError: '', recipes: [], nextCursor: null});
+    const version = readVersion();
+    this._allRecipes = [];
+    this.refreshAllergies();
+    this.setData({loading: true, loadingMore: false, error: '', loadMoreError: '', recipes: [], nextCursor: null, hasAllergies: false, skippedAllergyCount: 0});
     try {
-      const result = await read(tab, query);
+      const result = await read(tab, query, undefined, options);
       if (!account.check(this) || request !== this.request) return;
       const recipes = appendUnique([], result.recipes);
-      this.setData({loading: false, recipes: tab === 'recommended' ? recommend(recipes) : recipes, nextCursor: result.nextCursor || null});
+      this._allRecipes = tab === 'recommended' ? recommend(recipes) : recipes;
+      this._loadedKey = tab + ':' + query; this._loadedAt = Date.now(); this._loadedVersion = version;
+      this.setData({loading: false, nextCursor: result.nextCursor || null});
+      this.refreshAllergies();
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
       if (error.code === 'ACCOUNT_CHANGED') { account.invalidate(this); return; }
@@ -81,7 +109,9 @@ Page({
       const result = await read(tab, query, nextCursor);
       if (!account.check(this) || request !== this.request) return;
       const incoming = tab === 'recommended' ? recommend(result.recipes) : result.recipes;
-      this.setData({recipes: appendUnique(this.data.recipes, incoming), nextCursor: result.nextCursor || null});
+      this._allRecipes = appendUnique(this._allRecipes || [], incoming);
+      this.setData({nextCursor: result.nextCursor || null});
+      this.refreshAllergies();
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
       if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this);
@@ -91,10 +121,11 @@ Page({
     }
   },
   onReachBottom() { if (!this.data.loadMoreError) return this.loadMore(); },
-  async onPullDownRefresh() { try { await this.load(); } finally { wx.stopPullDownRefresh(); } },
+  async onPullDownRefresh() { try { await this.load({force: true}); } finally { wx.stopPullDownRefresh(); } },
   photoError(event) {
     if (!account.check(this)) return;
     const {id, url} = event.detail && event.detail.id ? event.detail : event.currentTarget.dataset;
+    this._allRecipes = (this._allRecipes || []).map(item => item.id === id && (item.displayPhoto || item.photoURL) === url ? {...item, photoURL: '', displayPhoto: ''} : item);
     const index = this.data.recipes.findIndex(item => item.id === id && (item.displayPhoto || item.photoURL) === url);
     if (index >= 0) this.setData({[`recipes[${index}].photoURL`]: '', [`recipes[${index}].displayPhoto`]: ''});
   },

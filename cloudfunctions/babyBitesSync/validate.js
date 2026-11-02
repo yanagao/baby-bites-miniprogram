@@ -31,6 +31,14 @@ function normalizeAgeGroups(value) {
   return AGE_GROUPS.filter(item => value.includes(item));
 }
 
+function normalizeAllergies(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 50 ||
+    !value.every(item => typeof item === 'string' && item.trim().length > 0 && item.trim().length <= 40 &&
+      !/[\u0000-\u001f\u007f-\u009f]/.test(item))) reject('过敏食物记录不正确或超过限制。');
+  return [...new Set(value.map(item => item.trim()))];
+}
+
 function keys(value, allowed) {
   return object(value) && Object.keys(value).every(key => allowed.includes(key));
 }
@@ -63,12 +71,20 @@ function validateSnapshot(content, {env, owner, now = Date.now()}) {
   try { snapshot = JSON.parse(content.toString('utf8')); }
   catch (_) { reject('同步文件不是有效的 JSON。'); }
   if (!keys(snapshot, ['version', 'data', 'deleted']) || snapshot.version !== 1 ||
-    !keys(snapshot.data, ['version', 'nickname', 'profileUpdatedAt', 'recipes', 'logs']) ||
+    !keys(snapshot.data, ['version', 'nickname', 'profileUpdatedAt', 'allergies', 'allergiesUpdatedAt', 'recipes', 'logs']) ||
     !keys(snapshot.deleted, ['recipes', 'logs'])) reject('同步文件格式不正确。');
   const data = snapshot.data;
   if (data.version !== 1 || !nonempty(data.nickname, 20) || !timestamp(data.profileUpdatedAt) ||
     !Array.isArray(data.recipes) || data.recipes.length > 1000 ||
     !Array.isArray(data.logs) || data.logs.length > 20000) reject('同步数据超过限制或缺少宝宝称呼。');
+  const allergies = normalizeAllergies(data.allergies);
+  if (data.allergiesUpdatedAt !== undefined && (allergies === undefined || !timestamp(data.allergiesUpdatedAt))) {
+    reject('过敏食物更新时间不正确。');
+  }
+  if (allergies !== undefined) {
+    data.allergies = allergies;
+    data.allergiesUpdatedAt = data.allergiesUpdatedAt || 0;
+  }
   const recipeIds = new Set();
   data.recipes.forEach(recipe => {
     if (!keys(recipe, ['id', 'name', 'category', 'minutes', 'texture', 'ingredients', 'steps', 'note', 'photo',

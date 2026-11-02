@@ -49,6 +49,26 @@ function setup(initial) {
     failStorage() { failStorage = true; }, failWrite(number) { failWriteAt = number; }};
 }
 
+test('portable backup export and import retain private allergy settings and an explicit clear', async () => {
+  const source = setup();
+  source.store.setAllergies([' 鸡蛋 ', '牛奶', '鸡蛋']);
+  const text = await source.backup.exportText();
+  const exported = JSON.parse(text);
+  assert.deepEqual(exported.allergies, ['鸡蛋', '牛奶']);
+  assert.ok(exported.allergiesUpdatedAt > 0);
+  const target = setup();
+  await target.backup.importText(text);
+  assert.deepEqual(target.store.getState().allergies, ['鸡蛋', '牛奶']);
+  const legacy = {...exported}; delete legacy.allergies; delete legacy.allergiesUpdatedAt;
+  await target.backup.importText(JSON.stringify(legacy));
+  assert.deepEqual(target.store.getState().allergies, ['鸡蛋', '牛奶']);
+  exported.allergies = [];
+  exported.allergiesUpdatedAt++;
+  await target.backup.importText(JSON.stringify(exported));
+  assert.deepEqual(target.store.getState().allergies, []);
+  assert.deepEqual(JSON.parse(await target.backup.exportText()).allergies, []);
+});
+
 function imageBackup(app, count = 1) {
   const data = app.store.getState();
   for (let i = 0; i < count; i += 1) {

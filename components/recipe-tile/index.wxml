@@ -10,7 +10,7 @@
     <view class="recipe-tile-name">{{recipe.name}}</view>
     <view class="recipe-tile-meta"><text wx:if="{{recipe.minutes}}">{{recipe.minutes}} 分钟</text><text wx:if="{{recipe.minutes && recipe.texture}}"> · </text><text>{{recipe.texture}}</text></view>
     <view wx:if="{{showVisibility && recipe.visibility === 'unknown'}}" class="recipe-tile-note">公开状态待确认</view>
-    <view wx:elif="{{showVisibility && recipe.publicChanged}}" class="recipe-tile-note">有修改待公开更新</view>
+    <view wx:elif="{{showVisibility && recipe.publicChanged}}" class="recipe-tile-note">修改等待自动同步</view>
   </view>
   <view wx:if="{{showAuthor && recipe.authorName}}" class="recipe-tile-author" catchtap="author" hover-class="recipe-tile-pressed" aria-role="button" aria-label="{{'打开' + recipe.authorName + '的主页'}}"><view class="recipe-tile-avatar"><image class="recipe-tile-avatar-image" src="{{authorAvatar}}" mode="aspectFit" aria-hidden="true" /></view><text>{{recipe.authorName}}</text></view>
 </view>

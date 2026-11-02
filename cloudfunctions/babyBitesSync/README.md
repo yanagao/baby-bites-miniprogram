@@ -27,6 +27,8 @@
 
 ## 协议与权限
 
+过敏记录为私人快照的可选 `data.allergies`（最多 50 个去重食物名称，每项 1–40 字）与 `data.allergiesUpdatedAt`（非负安全整数）。旧快照可缺省两字段，明确空数组用于清空。账号索引仅额外记录最后的 `allergiesUpdatedAt`，不复制食物内容；一旦记录过该字段，缺字段提交返回 `CLIENT_UPDATE_REQUIRED`，时间更旧的提交返回当前索引的 `conflict:true`，防止旧客户端静默清除设置。本人身份/索引响应仍只包含原有字段，不公开过敏内容或标记。
+
 客户端以 `wx.cloud.callFunction({name:'babyBitesSync', data:{action:'identity'}})` 查询当前账号。用户标识为 `sha256(APPID + ':' + OPENID)`；这些值只从 `cloud.getWXContext()` 读取，客户端传入的 owner/openid 不参与授权。
 
 - `identity` 返回 `{owner, revision, fileID}`；新账号为版本 `0`、空 `fileID`，查询不会写数据库。

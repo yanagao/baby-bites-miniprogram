@@ -51,6 +51,21 @@ function setup(name, social, options = {}) {
   return {page, calls, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }};
 }
 
+test('recent following pages retain pagination until a write or manual reload requires new data', async () => {
+  let version = 1; const reads = [];
+  const fixture = setup('following', {getReadVersion: () => version, getFollowing: async (offset, options) => {
+    reads.push({offset, options}); return {profiles: [offset ? second : friend], nextOffset: offset ? null : 20};
+  }}, {tab: 'people'});
+  await fixture.page.onShow(); await fixture.page.loadMore(); await fixture.page.onShow();
+  assert.equal(reads.length, 2); assert.equal(fixture.page.data.profiles.length, 2);
+  assert.equal(fixture.page.data.nextOffset, null); assert.equal(fixture.page.data.loading, false);
+  version++; await fixture.page.onShow(); assert.equal(reads.length, 3);
+  await fixture.page.reload(); assert.equal(reads[3].options.force, true);
+  fixture.page._loadedAt -= 30001; await fixture.page.onShow(); assert.equal(reads.length, 5);
+  fixture.changeOwner('owner-b', false); await fixture.page.onShow();
+  assert.equal(reads.length, 5); assert.equal(fixture.page.data.profiles.length, 0);
+});
+
 test('profile counters use server totals rather than the first recipe page', async () => {
   const {page} = setup('profile', {getProfile: async () => ({profile: friend, isSelf: false,
     following: false, followedBy: true, followingCount: 13, followerCount: 7, publishedCount: 45,
@@ -76,16 +91,20 @@ test('profile follow-back applies confirmed reciprocal state and follower count'
   assert.deepEqual(calls.toasts, ['已互相关注']);
 });
 
-test('missing public profile offers setup without pretending the follow succeeded', async () => {
+test('profile follow works without reading or setting up the current user profile', async () => {
   const {page, calls} = setup('profile', {
     getProfile: async () => ({profile: friend, isSelf: false, following: false, followedBy: true, followerCount: 7, recipes: []}),
-    setFollowing: async () => { throw Object.assign(Error('请设置主页'), {code: 'PROFILE_REQUIRED'}); }
+    getMine: async () => { throw Error('关注不需要读取本人资料'); },
+    saveProfile: async () => { throw Error('关注不应保存资料'); },
+    setFollowing: async (id, following) => { assert.equal(id, friend.id); return {following, followedBy: true}; }
   }, {id: friend.id});
   await page.load(); await page.toggleFollow();
-  assert.equal(page.data.needsProfile, true); assert.equal(page.data.following, false);
-  assert.equal(page.data.followerCount, 7); assert.equal(page.data.followBusy, false);
-  assert.deepEqual(calls.toasts, []); assert.deepEqual(calls.errors, []);
-  page.openMine(); assert.deepEqual(calls.routes, ['/pages/profile/index?edit=1']);
+  assert.equal(page.data.following, true); assert.equal(page.data.followerCount, 8);
+  await page.toggleFollow();
+  assert.equal(page.data.following, false); assert.equal(page.data.followerCount, 7);
+  assert.equal(page.data.followBusy, false); assert.equal(page.data.editing, false);
+  assert.deepEqual(calls.toasts, ['已互相关注', '已取消关注']);
+  assert.deepEqual(calls.errors, []); assert.deepEqual(calls.routes, []);
 });
 
 test('onboarding opens the public nickname form without creating a profile', async () => {
@@ -190,15 +209,18 @@ test('unfollowing reloads the outgoing list so shifted pagination cannot skip a 
   assert.equal(page.data.followBusyId, ''); assert.equal(page.data.nextOffset, null);
 });
 
-test('followers missing-profile failure retains rows and offers setup', async () => {
+test('followers can be followed back without opening profile setup', async () => {
   const {page, calls} = setup('following', {
     getFollowers: async () => ({profiles: [friend], nextOffset: null}),
-    setFollowing: async () => { throw Object.assign(Error('请先设置主页'), {code: 'PROFILE_REQUIRED'}); }
+    getMine: async () => { throw Error('关注不需要读取本人资料'); },
+    saveProfile: async () => { throw Error('关注不应保存资料'); },
+    setFollowing: async (id, following) => { assert.equal(id, friend.id); return {following, followedBy: true}; }
   }, {tab: 'followers'});
   await page.load(); await page.toggleFollow(tap(friend.id));
-  assert.equal(page.data.profiles.length, 1); assert.equal(page.data.profiles[0].following, false);
-  assert.equal(page.data.needsProfile, true); assert.equal(page.data.followBusyId, '');
-  page.openMine(); assert.deepEqual(calls.routes, ['/pages/profile/index?edit=1']);
+  assert.equal(page.data.profiles.length, 1); assert.equal(page.data.profiles[0].following, true);
+  assert.equal(page.data.followBusyId, ''); assert.deepEqual(calls.errors, []);
+  assert.deepEqual(calls.toasts, ['已互相关注']); assert.deepEqual(calls.routes, []);
+  page.openMine(); assert.deepEqual(calls.routes, ['/pages/profile/index']);
 });
 
 test('pending follow-back cannot restore rows or notify after account switch', async () => {

@@ -9,6 +9,7 @@ const config = require('../../config/cloud');
 const {syncTabBar} = require('../../utils/tab-bar');
 const {getProfileAvatar} = require('../../utils/profile-avatar');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 const normalizeBabyNickname = value => typeof value === 'string' && value.trim() ? value.trim() : '宝宝';
 const babyNicknameFields = state => {
   const nickname = state ? normalizeBabyNickname(state.nickname) : '';
@@ -29,7 +30,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     isTab, socialEnabled: config.socialEnabled === true, loading: true, error: '', profile: null, isSelf: isTab, following: false, followedBy: false,
     contentTab: 'recipes', visibility: 'all', logs: [], recipeCount: 0, favoriteCount: 0, logCount: 0,
     publicCount: 0, privateCount: 0, publicationReady: false, publicationError: '',
-    publishedCount: 0, followingCount: 0, followerCount: 0, needsProfile: false,
+    publishedCount: 0, followingCount: 0, followerCount: 0,
     recipes: [], nextOffset: null, loadingMore: false, editing: false, name: '', bio: '', saving: false, followBusy: false,
     profileSaveError: '', profileModerating: false, avatarPath: getProfileAvatar(),
     babyAgeMonths: null, babyAgeLabel: '', babyBirthDate: null, birthdayDirty: false,
@@ -48,31 +49,37 @@ module.exports = function createProfilePage(isTab = false) { return {
   },
   onShow() {
     if (isTab) syncTabBar(this);
-    if (!this.data.editing && !this.data.followBusy && !this.data.shareVisible) return this.load();
+    if (!account.check(this) || this.data.editing || this.data.followBusy || this.data.shareVisible) return;
+    if (!this.data.loading && !this.data.error && !this.data.publicationError && !this.setupRequested && !this.shareRequested &&
+      this._loadedAt && Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === readVersion()) {
+      this.refresh(); return;
+    }
+    return this.load();
   },
   onReady() { if (isTab) syncTabBar(this); },
   onUnload() { this.request++; this.disposeShare(); account.dispose(this); },
-  reload() { return account.reload(this); },
-  async load() {
+  reload() { return account.reload(this, {force: true}); },
+  async load(options) {
     if (!account.check(this)) return;
     const request = ++this.request;
+    const version = readVersion();
     this.publicSavedForEdit = false;
     this.published = [];
     const currentProfileId = this.data.profile && this.data.profile.id;
     const sameProfile = typeof currentProfileId === 'string' && /^[a-f0-9]{32}$/.test(currentProfileId) &&
       (this.profileId ? this.profileId === currentProfileId : this.data.isSelf);
-    this.setData({loading: true, error: '', avatarPath: getProfileAvatar(sameProfile ? currentProfileId : ''), loadingMore: false, saving: false, profileSaveError: '', profileModerating: false, needsProfile: false, publicationReady: false, publicationError: ''});
+    this.setData({loading: true, error: '', avatarPath: getProfileAvatar(sameProfile ? currentProfileId : ''), loadingMore: false, saving: false, profileSaveError: '', profileModerating: false, publicationReady: false, publicationError: ''});
     this.refresh();
     try {
       let result, mine;
       if (!this.data.socialEnabled && isTab) {
         result = {profile: {name: '我的小口袋', bio: '', exists: false}, isSelf: true, recipes: []};
-      } else if (this.profileId) {
-        result = await social.getProfile(this.profileId, 0);
+      } else if (this.profileId && !(sameProfile && this.data.isSelf)) {
+        result = await social.getProfile(this.profileId, 0, options);
         if (!account.check(this) || request !== this.request) return;
-        if (result.isSelf) mine = await social.getMine();
+        if (result.isSelf) mine = await social.getMine(options);
       } else {
-        mine = await social.getMine();
+        mine = await social.getMine(options);
         result = Object.assign({}, mine, {isSelf: true, following: false, followedBy: false, recipes: [], nextOffset: null});
       }
       if (!account.check(this) || request !== this.request) return;
@@ -83,6 +90,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       const publicationReady = !!mine && Array.isArray(mine.published) &&
         mine.published.every(item => item && typeof item.sourceRecipeId === 'string' && item.sourceRecipeId.trim());
       this.published = publicationReady ? mine.published : [];
+      this._loadedAt = Date.now(); this._loadedVersion = version;
       this.setData({
         profile, avatarPath: getProfileAvatar(profile.id), isSelf: !!result.isSelf, following: !!result.following, followedBy: !!result.followedBy,
         publishedCount: Number.isSafeInteger(result.publishedCount) ? count(result.publishedCount) :
@@ -96,8 +104,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       });
       if (result.isSelf) this.refresh();
       else this.setData({contentTab: 'recipes', visibility: 'public', recipeCount: count(result.publishedCount), favoriteCount: 0, logCount: 0, publicCount: 0, privateCount: 0});
-      if (profile.exists !== false) wx.showShareMenu({menus: ['shareAppMessage']});
-      else wx.hideShareMenu({menus: ['shareAppMessage']});
+      if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
       if (this.shareRequested && profile.exists !== false) { this.shareRequested = false; this.openShare(); }
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
@@ -107,7 +114,7 @@ module.exports = function createProfilePage(isTab = false) { return {
           publicationError: error.message || '公开状态暂时无法读取'});
         this.refresh();
       } else this.setData({loading: false, profile: null, avatarPath: getProfileAvatar(), ...babyAgeFields(null), ...babyNicknameFields(null), recipes: [], logs: [], error: error.message || '主页暂时无法加载'});
-      if (wx.hideShareMenu) wx.hideShareMenu({menus: ['shareAppMessage']});
+      if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
     }
   },
   refresh() {
@@ -119,7 +126,7 @@ module.exports = function createProfilePage(isTab = false) { return {
         ...(this.data.editing && !this.data.babyNicknameDirty ? babyNicknameFields(state) : {})});
     } catch (error) { ui.error(error); }
   },
-  disposeLocalContent() { this.published = []; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; },
+  disposeLocalContent() { this.published = []; this._loadedAt = 0; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; },
   changeContentTab(event) {
     if (!account.check(this)) return;
     const value = event.currentTarget && event.currentTarget.dataset.value || event.detail && event.detail.value;
@@ -235,7 +242,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     if (this.data.followBusy || !this.data.profile || this.data.isSelf) return;
     const previous = this.data.following;
     const request = ++this.request;
-    this.setData({followBusy: true, needsProfile: false, loadingMore: false});
+    this.setData({followBusy: true, loadingMore: false});
     try {
       const result = await social.setFollowing(this.data.profile.id, !previous);
       if (!account.check(this) || request !== this.request) return;
@@ -246,8 +253,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       wx.showToast({title: following ? followedBy ? '已互相关注' : '已关注' : '已取消关注', icon: 'none'});
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
-      if (error.code === 'PROFILE_REQUIRED') this.setData({needsProfile: true});
-      else { ui.error(error); if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this); }
+      ui.error(error); if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this);
     } finally { if (account.check(this) && request === this.request) this.setData({followBusy: false}); }
   },
   async loadMore() {
@@ -276,9 +282,9 @@ module.exports = function createProfilePage(isTab = false) { return {
     wx.navigateTo({url: '/pages/' + (this.data.isSelf ? 'detail' : 'public-recipe') + '/index?id=' + encodeURIComponent(id)});
   },
   openCookbook() { if (account.check(this)) wx.navigateTo({url: '/pages/recipes/index'}); },
+  openAllergies() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/allergies/index'}); },
   openFollowing() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/following/index?tab=people'}); },
   openFollowers() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/following/index?tab=followers'}); },
-  openMine() { if (account.check(this)) wx.navigateTo({url: '/pages/profile/index?edit=1'}); },
   openSettings() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/settings/index'}); },
   openRecords() { if (account.check(this) && this.data.isSelf) wx.switchTab({url: '/pages/records/index'}); },
   openLog(event) {
@@ -343,7 +349,7 @@ module.exports = function createProfilePage(isTab = false) { return {
   albumSettings() { if (account.check(this) && this.data.albumDenied) wx.openSetting({}); },
   onShareAppMessage() {
     const profile = account.check(this) && !this.data.loading && !this.data.error ? this.data.profile : null;
-    return profile && profile.exists !== false ? {title: profile.name + '的口袋食谱', path: '/pages/profile/index?id=' + encodeURIComponent(profile.id), imageUrl: '/assets/cute/pocket-mascot.png'} : {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index'};
+    return profile && profile.exists !== false ? {title: profile.name + '的口袋食谱', path: '/pages/profile/index?id=' + encodeURIComponent(profile.id), imageUrl: '/assets/cute/pocket-mascot.png'} : {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   back: ui.back
 

@@ -129,7 +129,7 @@ function publicDetail() {
   let owner = 'owner-a';
   const listeners = new Set();
   const calls = {routes: [], share: []};
-  const store = {getSyncInfo: () => ({owner}), subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}};
+  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}};
   const wx = {navigateTo(options) {calls.routes.push(options.url);},
     showShareMenu() {calls.share.push('show');}, hideShareMenu() {calls.share.push('hide');}};
   const account = {exports: {}};
@@ -140,6 +140,8 @@ function publicDetail() {
   let definition;
   vm.runInNewContext(fs.readFileSync(path.join(root, 'pages/public-recipe/index.js'), 'utf8'), {
     wx, Page(value) {definition = value;}, require(name) {
+      if (name.endsWith('/store')) return store;
+      if (name.endsWith('/allergies')) return require('../utils/allergies');
       if (name.endsWith('/account')) return account.exports;
       if (name.endsWith('/social')) return social;
       if (name.endsWith('/profile-avatar')) return require('../utils/profile-avatar');
@@ -162,11 +164,17 @@ test('public recipe shares only its public ID and cannot reuse a stale share aft
   const gate = pending(); app.social.getRecipe = () => gate.promise;
   const work = app.page.load();
   assert.equal(app.page.onShareAppMessage().path, '/pages/home/index');
+  assert.equal(app.page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
+  assert.equal(app.calls.share.at(-1), 'show');
   gate.reject(Error('作者已设为私密')); await work;
   assert.equal(app.page.onShareAppMessage().path, '/pages/home/index');
+  assert.equal(app.page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
+  assert.equal(app.calls.share.at(-1), 'show');
   app.page.setData({recipe: app.recipe, author: {id: 'b'.repeat(32)}});
   app.changeOwner();
   app.page.openAuthor(); app.page.openSource();
   assert.deepEqual(app.calls.routes, []);
   assert.equal(app.page.onShareAppMessage().path, '/pages/home/index');
+  assert.equal(app.page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
+  assert.equal(app.calls.share.at(-1), 'show');
 });
