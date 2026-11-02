@@ -1,6 +1,8 @@
 # 小口袋 · 微信小程序
 
-版本 1.3.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+版本 1.4.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+
+**2026-11-02 开发版本上传**：基于已合并的 MR #3 同步产品版本号为 1.4.0，微信官方 CLI 已返回上传成功。官方上传包总计 1,411,312 字节，主包 1,038,463 字节，资源分包 372,849 字节，见[上传包体记录](../output/release-1.4.0/upload-info.json)。功能代码此前 1048 项测试通过，本次版本号变更通过 17 页、215 个 JS/WXS 脚本和原生 WXML/WXSS 编译及包体预检。此次完成开发版本上传，尚未提交审核或发布正式版；本轮完整真机验收仍未完成。
 
 ## 打开与试用
 
