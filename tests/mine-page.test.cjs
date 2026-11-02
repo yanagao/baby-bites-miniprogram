@@ -271,3 +271,29 @@ test('refreshing the same confirmed profile keeps its avatar while the response 
     assert.equal(f.page.data.profile.name, '更新后的公开昵称');
   });
 });
+
+test('mine reuses recent public metadata while refreshing its private cookbook, but manual reload is fresh', async () => {
+  let version = 1; const reads = [];
+  const fixture = setup({social: {getReadVersion: () => version, getMine: async options => {
+    reads.push(options); return {profile, published: []};
+  }}});
+  await fixture.page.onShow();
+  fixture.changeState({recipes: [recipe('new')], logs: []});
+  await fixture.page.onShow();
+  assert.equal(reads.length, 1); assert.equal(fixture.page.data.loading, false);
+  assert.deepEqual(fixture.page.data.recipes.map(item => item.id), ['new']);
+  version++; await fixture.page.onShow(); assert.equal(reads.length, 2);
+  await fixture.page.reload(); assert.equal(reads.length, 3); assert.equal(reads[2].force, true);
+  fixture.changeOwner('owner-b', false); await fixture.page.onShow();
+  assert.equal(reads.length, 3); assert.equal(fixture.page.data.profile, null);
+});
+
+test('a confirmed own profile link reads only mine on subsequent loads', async () => {
+  let publicReads = 0;
+  const fixture = setup({pageName: 'profile', loadOptions: {id: profile.id}, social: {
+    getProfile: async () => { publicReads++; return {profile, isSelf: true, recipes: []}; }
+  }});
+  await fixture.page.load(); await fixture.page.load();
+  assert.equal(publicReads, 1); assert.equal(fixture.calls.mine, 2);
+  assert.equal(fixture.page.data.isSelf, true); assert.equal(fixture.page.data.followingCount, 5);
+});

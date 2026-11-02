@@ -5,14 +5,15 @@ const ui = require('../../utils/ui');
 const defaultPantryPreview = ['南瓜', '鸡蛋', '西兰花', '小米'];
 
 function homeRecipes(state) {
-  const all = selectors.listRecipes(state);
+  const all = selectors.listRecipes(state, {excludeAllergies: true});
+  const eligibleIds = new Set(all.map(recipe => recipe.id));
   const today = selectors.today();
   const day = 24 * 60 * 60 * 1000;
   const end = Date.parse(today + 'T00:00:00Z');
   const start = new Date(end - 29 * day).toISOString().slice(0, 10);
   const counts = new Map();
   for (const log of selectors.listLogs(state)) {
-    if (log.date < start || log.date > today) continue;
+    if (log.date < start || log.date > today || !eligibleIds.has(log.recipeId)) continue;
     const entry = counts.get(log.recipeId) || {count: 0, date: log.date, createdAt: log.createdAt || 0};
     entry.count += 1;
     counts.set(log.recipeId, entry);
@@ -27,9 +28,12 @@ function homeRecipes(state) {
 }
 
 Page({
+  onShareAppMessage() {
+    return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     nickname: '宝宝', greeting: '你好', warning: '', search: '', recommendations: [],
-    recommendationTitle: '今日推荐', recommendationOwner: '', pantryCount: 0, pantryPreview: defaultPantryPreview
+    hasAllergies: false, hasRecipes: false, recommendationTitle: '今日推荐', recommendationOwner: '', pantryCount: 0, pantryPreview: defaultPantryPreview
   },
   onShow() { syncTabBar(this); this.refresh(); },
   onReady() { syncTabBar(this); },
@@ -39,7 +43,7 @@ Page({
       const pantry = typeof getApp === 'function' ? getApp().globalData.pantry || [] : [];
       const hour = new Date().getHours();
       const greeting = hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
-      this.setData({greeting, nickname: state.nickname || '宝宝', warning: store.getWarning(),
+      this.setData({hasAllergies: Boolean(state.allergies && state.allergies.length), hasRecipes: Boolean(state.recipes.length), greeting, nickname: state.nickname || '宝宝', warning: store.getWarning(),
         recommendationOwner: store.getSyncInfo().owner || '',
         pantryCount: pantry.length, pantryPreview: pantry.length ? pantry.slice(0, 4) : defaultPantryPreview,
         ...homeRecipes(state)});

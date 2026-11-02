@@ -9,11 +9,47 @@ const {isValidBirthDate} = require('./baby-age');
 const {normalizeAgeGroups} = require('./recipe-ages');
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const imports = new Map();
+const READ_TTL = 30 * 1000;
+const MAX_CACHE_ENTRIES = 32;
+const MAX_CACHE_BYTES = 2 * 1024 * 1024;
+const readCache = new Map();
+const readFlights = new Map();
+let cacheBytes = 0;
+let readVersion = 0;
+let identity = null;
+let identityFlight = null;
+let identityRejected = false;
 let fileSequence = 0;
 let observedOwner = store.getSyncInfo().owner;
+let observedRevision = store.getSyncInfo().revision;
+let observedPublication = 0;
+let observedIdentityInvalid = false;
 let ownerEpoch = 0;
+function invalidateReads() {
+  readVersion += 1;
+  readCache.clear();
+  cacheBytes = 0;
+}
+function forgetIdentity(rejected = false) { identity = null; identityFlight = null; identityRejected = rejected; invalidateReads(); }
 store.subscribe(info => {
-  if (info.owner !== observedOwner) { observedOwner = info.owner; ownerEpoch += 1; }
+  if (info.owner !== observedOwner) {
+    observedOwner = info.owner; ownerEpoch += 1;
+    observedRevision = info.revision; observedPublication = 0; observedIdentityInvalid = false;
+    forgetIdentity();
+  }
+});
+if (typeof cloudSync.subscribe === 'function') cloudSync.subscribe(status => {
+  if (status.owner !== observedOwner) return;
+  if (status.identityInvalid === true && !observedIdentityInvalid) forgetIdentity(true);
+  observedIdentityInvalid = status.identityInvalid === true;
+  let changed = false;
+  if (Number.isSafeInteger(status.revision) && status.revision !== observedRevision) {
+    observedRevision = status.revision; changed = true;
+  }
+  if (Number.isSafeInteger(status.publicationVersion) && status.publicationVersion !== observedPublication) {
+    observedPublication = status.publicationVersion; changed = true;
+  }
+  if (changed) invalidateReads();
 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const publicId = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -74,7 +110,7 @@ const errors = {
   CONFLICT: '资料已发生变化，请刷新页面后重试。',
   SELF_FOLLOW: '这是你自己的主页，无需关注。',
   FOLLOW_LIMIT: '关注人数已达到上限，请整理后重试。',
-  PROFILE_REQUIRED: '请先设置公开主页，再关注好友或公开菜谱。',
+  PROFILE_REQUIRED: '请先设置公开主页，再公开菜谱或分享主页。',
   SYNC_REQUIRED: '请先完成菜谱同步，再公开这道菜谱。',
   SOURCE_NOT_FOUND: '这道菜谱还未同步，或已被删除，请返回食谱后重试。',
   INVALID_SNAPSHOT: '菜谱尚未完整同步，请完成同步后重试。',
@@ -100,7 +136,11 @@ async function request(action, data, owner) {
   if (!object(result)) fail('好友功能返回的信息不完整，请稍后重试。');
   if (result.error) {
     const code = result.error.code;
-    fail(errors[code] || '操作暂未完成，请稍后重试。', code);
+    if (code === 'ACCOUNT_CHANGED' || code === 'UNAUTHENTICATED') forgetIdentity(true);
+    else if (['NOT_FOUND', 'RECIPE_NOT_FOUND', 'NOT_PUBLIC', 'PROFILE_NOT_FOUND'].includes(code)) invalidateReads();
+    const message = action === 'follow' && code === 'PROFILE_REQUIRED'
+      ? '关注暂时未完成，请稍后重试。' : errors[code] || '操作暂未完成，请稍后重试。';
+    fail(message, code);
   }
   // Public artwork sources are presentation-only. Individual ready sources can
   // render while other covers load; copying still reads only the author's photoURL.
@@ -111,7 +151,7 @@ async function request(action, data, owner) {
   }
   return result;
 }
-async function readyIdentity() {
+async function readyIdentity(reuse = false) {
   requireEnabled();
   // Existing account caches can withdraw a public recipe even if an unrelated
   // private photo blocks snapshot upload. Identity still comes from WeChat.
@@ -124,9 +164,28 @@ async function readyIdentity() {
   const session = {id: info.owner, epoch: ownerEpoch};
   if (!session.id || info.blocked) fail('请先联网确认当前微信账号，再使用好友功能。', 'SYNC_REQUIRED');
   if (!config.env || !wx.cloud || typeof wx.cloud.init !== 'function') fail('好友功能暂未配置完成，请稍后重试。');
+  wx.cloud.init({env: config.env, traceUser: false});
+  if (reuse) {
+    const status = typeof cloudSync.getStatus === 'function' ? cloudSync.getStatus() : null;
+    const checkedAt = Math.max(identity && identity.id === session.id && identity.epoch === session.epoch ? identity.checkedAt : 0,
+      status && status.owner === session.id ? status.identityCheckedAt || 0 : 0);
+    const age = Date.now() - checkedAt;
+    if (!identityRejected && !(status && status.identityInvalid) && checkedAt > 0 && age >= 0 && age < READ_TTL) return session;
+    if (identityFlight && identityFlight.id === session.id && identityFlight.epoch === session.epoch) {
+      await identityFlight.work;
+      assertOwner(session);
+      return session;
+    }
+  }
+  const work = verifyIdentity(session);
+  const flight = {id: session.id, epoch: session.epoch, work};
+  if (reuse) identityFlight = flight;
+  try { await work; return session; }
+  finally { if (identityFlight === flight) identityFlight = null; }
+}
+async function verifyIdentity(session) {
   let response;
   try {
-    wx.cloud.init({env: config.env, traceUser: false});
     assertOwner(session);
     response = await call(wx.cloud, 'callFunction', {name: config.functionName || 'babyBitesSync',
       config: {env: config.env}, data: {action: 'identity'}});
@@ -137,12 +196,68 @@ async function readyIdentity() {
   assertOwner(session);
   const result = response && response.result;
   if (!result || result.error || typeof result.owner !== 'string' || !/^[a-f0-9]{64}$/.test(result.owner)) {
+    forgetIdentity(true);
     fail('未能确认当前微信账号，请联网重试。', 'SYNC_REQUIRED');
   }
-  if (result.owner !== session.id) fail('微信账号已切换，请重新打开当前页面。', 'ACCOUNT_CHANGED');
-  return session;
+  if (result.owner !== session.id) { forgetIdentity(true); fail('微信账号已切换，请重新打开当前页面。', 'ACCOUNT_CHANGED'); }
+  identity = {id: session.id, epoch: session.epoch, checkedAt: Date.now()};
+  identityRejected = false;
 }
 async function invoke(action, data) { return request(action, data, await readyIdentity()); }
+function removeCached(key) {
+  const entry = readCache.get(key);
+  if (entry) { cacheBytes -= entry.bytes; readCache.delete(key); }
+}
+function cacheResult(key, result) {
+  const json = JSON.stringify(result), bytes = json.length * 2;
+  removeCached(key);
+  if (bytes > MAX_CACHE_BYTES) return;
+  const now = Date.now();
+  for (const [oldKey, entry] of readCache) {
+    if (now >= entry.expiresAt) removeCached(oldKey);
+  }
+  while (readCache.size >= MAX_CACHE_ENTRIES || cacheBytes + bytes > MAX_CACHE_BYTES) {
+    removeCached(readCache.keys().next().value);
+  }
+  readCache.set(key, {json, bytes, expiresAt: now + READ_TTL});
+  cacheBytes += bytes;
+}
+function readCopy(result) {
+  // Each caller owns its view data; cover sources can become ready independently.
+  const value = JSON.parse(JSON.stringify(result));
+  if (object(value.recipe)) value.recipe = withCover(value.recipe);
+  if (Array.isArray(value.recipes)) value.recipes = value.recipes.map(withCover);
+  return value;
+}
+async function read(action, data, options = {}, cacheable = true) {
+  const owner = await readyIdentity(true);
+  assertOwner(owner);
+  const version = readVersion;
+  const key = owner.epoch + ':' + version + ':' + action + ':' + JSON.stringify(data || {});
+  const entry = readCache.get(key);
+  if (cacheable && !options.force && entry && Date.now() < entry.expiresAt) return readCopy(JSON.parse(entry.json));
+  if (entry && Date.now() >= entry.expiresAt) removeCached(key);
+  let work = readFlights.get(key);
+  if (!work) {
+    work = request(action, data, owner);
+    readFlights.set(key, work);
+  }
+  let result;
+  try { result = await work; }
+  finally { if (readFlights.get(key) === work) readFlights.delete(key); }
+  assertOwner(owner);
+  // A write or automatic publication completed while this read was in flight.
+  // Never let the older response repopulate the cache or overwrite the new view.
+  if (version !== readVersion) return read(action, data, options, cacheable);
+  if (cacheable) cacheResult(key, result);
+  return readCopy(result);
+}
+async function mutate(action, data, owner) {
+  invalidateReads();
+  try { return await (owner ? request(action, data, owner) : invoke(action, data)); }
+  finally { invalidateReads(); }
+}
+function getReadVersion() { return readVersion; }
 function checkProfileId(value) { if (!profileId(value)) fail('主页地址不正确，请重新打开好友分享的主页。', 'INVALID_INPUT'); }
 function checkRecipeId(value) { if (!publicId(value)) fail('菜谱地址不正确，请重新打开这道菜谱。', 'INVALID_INPUT'); }
 function offset(value) {
@@ -150,7 +265,7 @@ function offset(value) {
   if (!Number.isSafeInteger(result) || result < 0) fail('分页信息不正确，请刷新页面。', 'INVALID_INPUT');
   return result;
 }
-function getMine() { return invoke('mine'); }
+function getMine(options) { return read('mine', undefined, options); }
 function saveProfile(input) {
   if (!object(input) || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 20 ||
     typeof input.bio !== 'string' || input.bio.trim().length > 120 || /[\u0000-\u001f]/.test(input.name + input.bio)) {
@@ -171,10 +286,11 @@ function saveProfile(input) {
     }
     profile.babyBirthDate = birthDate;
   }
-  return invoke('updateProfile', profile);
+  return mutate('updateProfile', profile);
 }
-function getProfile(id, start) { checkProfileId(id); return invoke('profile', {profileId: id, offset: offset(start)}); }
-function getRecipe(id) { checkRecipeId(id); return invoke('recipe', {recipeId: id}); }
+function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
+function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
+function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
 async function publishRecipe(sourceRecipeId) {
   let owner = await ready();
   const recipe = store.getRecipe(sourceRecipeId);
@@ -189,23 +305,23 @@ async function publishRecipe(sourceRecipeId) {
   }
   const info = store.getSyncInfo();
   if (info.dirty || !store.getRecipe(sourceRecipeId)) fail('请先保存并同步这道菜谱，再公开。', 'SYNC_REQUIRED');
-  return request('publish', {sourceRecipeId}, owner);
+  return mutate('publish', {sourceRecipeId}, owner);
 }
-function unpublishRecipe(sourceRecipeId) { return invoke('unpublish', {sourceRecipeId}); }
+function unpublishRecipe(sourceRecipeId) { return mutate('unpublish', {sourceRecipeId}); }
 function setFollowing(id, following) {
   checkProfileId(id);
   if (typeof following !== 'boolean') fail('关注状态不正确，请重试。', 'INVALID_INPUT');
-  return invoke('follow', {profileId: id, following});
+  return mutate('follow', {profileId: id, following});
 }
-function getFollowing(start) { return invoke('following', {offset: offset(start)}); }
-function getFollowers(start) { return invoke('followers', {offset: offset(start)}); }
-function getFeed(cursor) { return invoke('feed', cursor == null ? {} : {cursor}); }
+function getFollowing(start, options) { return read('following', {offset: offset(start)}, options); }
+function getFollowers(start, options) { return read('followers', {offset: offset(start)}, options); }
+function getFeed(cursor, options) { return read('feed', cursor == null ? {} : {cursor}, options); }
 function getDiscover(input = {}) {
   if (!object(input) || (input.search !== undefined && (typeof input.search !== 'string' || input.search.length > 60)) ||
     (input.cursor != null && (typeof input.cursor !== 'string' || input.cursor.length > 4000))) {
     fail('搜索或分页信息不正确，请重试。', 'INVALID_INPUT');
   }
-  return invoke('discover', {search: (input.search || '').trim(), ...(input.cursor == null ? {} : {cursor: input.cursor})});
+  return read('discover', {search: (input.search || '').trim(), ...(input.cursor == null ? {} : {cursor: input.cursor})}, {force: input.force === true});
 }
 function getShareCode(id, envVersion) {
   checkProfileId(id);
@@ -293,5 +409,5 @@ function addToCookbook(id) {
   return work;
 }
 
-module.exports = {getMine, saveProfile, getProfile, getRecipe, publishRecipe, unpublishRecipe,
+module.exports = {getMine, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe};

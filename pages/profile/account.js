@@ -15,8 +15,8 @@ function invalidate(page) {
   page.request++;
   if (typeof page.disposeShare === 'function') page.disposeShare();
   if (typeof page.disposeLocalContent === 'function') page.disposeLocalContent();
-  const cleared = {profile: null, recipe: null, author: null, recipes: [], profiles: [], importedId: '', editing: false, name: '', bio: '', loading: false, loadingMore: false, saving: false, adding: false, followBusy: false, followBusyId: '', needsProfile: false, following: false, followedBy: false, followingCount: 0, followerCount: 0, publishedCount: 0, nextCursor: null, nextOffset: null};
-  Object.assign(cleared, {logs: [], isSelf: false, recipeCount: 0, favoriteCount: 0, logCount: 0,
+  const cleared = {profile: null, recipe: null, author: null, recipes: [], profiles: [], importedId: '', editing: false, name: '', bio: '', loading: false, loadingMore: false, saving: false, adding: false, followBusy: false, followBusyId: '', following: false, followedBy: false, followingCount: 0, followerCount: 0, publishedCount: 0, nextCursor: null, nextOffset: null};
+  Object.assign(cleared, {logs: [], isSelf: false, authorKnown: false, authorIsSelf: false, recipeCount: 0, favoriteCount: 0, logCount: 0,
     publicCount: 0, privateCount: 0, publicationReady: false, publicationLoading: false,
     publicationError: '', contentTab: 'recipes', visibility: 'all', babyAgeMonths: null, babyAgeLabel: '',
     babyBirthDate: null, birthdayDirty: false, birthdayAgeLabel: '', birthDateToday: '',
@@ -25,17 +25,21 @@ function invalidate(page) {
   const update = {error: MESSAGE};
   Object.keys(cleared).forEach(key => { if (key in page.data) update[key] = cleared[key]; });
   page.setData(update);
-  if (wx.hideShareMenu) wx.hideShareMenu({menus: ['shareAppMessage']});
+  // Pages with a share handler fall back to a fixed app card after invalidation.
+  // Account-specific content has already been cleared above.
+  if (typeof page.onShareAppMessage === 'function' && wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
+  else if (wx.hideShareMenu) wx.hideShareMenu({menus: ['shareAppMessage']});
 }
 function bind(page) {
   page.accountSession = {owner: store.getSyncInfo().owner || '', changed: false, disposed: false};
   page.accountSession.unsubscribe = store.subscribe(() => check(page));
+  if (typeof page.onShareAppMessage === 'function' && wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
 }
-function reload(page) {
+function reload(page, options) {
   if (!page.accountSession || page.accountSession.disposed) return;
   page.accountSession.owner = store.getSyncInfo().owner || '';
   page.accountSession.changed = false;
-  return page.load();
+  return page.load(options);
 }
 function dispose(page) {
   if (!page.accountSession) return;

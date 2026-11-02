@@ -16,7 +16,7 @@ function setup(social) {
   let owner = 'owner-a';
   const listeners = new Set();
   const calls = {routes: [], syncs: 0, updates: 0, refreshStops: 0};
-  const store = {getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {navigateTo(value) { calls.routes.push(value.url); }, hideShareMenu() {}, stopPullDownRefresh() { calls.refreshStops++; }};
   const accountModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/profile/account.js'), 'utf8'), {
@@ -26,6 +26,8 @@ function setup(social) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/discover/index.js'), 'utf8'), {
     Page(value) { definition = value; }, wx,
     require(dep) {
+      if (dep.endsWith('/store')) return store;
+      if (dep.endsWith('/allergies')) return require('../utils/allergies');
       if (dep.endsWith('/social')) return social;
       if (dep.endsWith('/account')) return accountModule.exports;
       if (dep.endsWith('/tab-bar')) return {syncTabBar() { calls.syncs++; }};
@@ -216,4 +218,32 @@ test('first-load failures offer retry and pull-down stops after either result', 
   assert.equal(page.data.loading, false); assert.equal(calls.refreshStops, 1);
   await page.reload(); assert.equal(page.data.error, ''); assert.equal(page.data.recipes.length, 1);
   await page.onPullDownRefresh(); assert.equal(calls.refreshStops, 2);
+});
+
+test('returning to discovery keeps loaded pages until expiry or a social write changes the version', async () => {
+  let version = 1; const queries = [];
+  const {page, changeOwner} = setup({getReadVersion: () => version, getDiscover: async options => {
+    queries.push({...options}); return {recipes: [options.cursor ? second : recipe], nextCursor: options.cursor ? null : 'next'};
+  }});
+  await page.onShow(); await page.loadMore(); await page.onShow();
+  assert.equal(queries.length, 2);
+  assert.deepEqual(page.data.recipes.map(item => item.id), [recipe.id, second.id]);
+  assert.equal(page.data.loading, false); assert.equal(page.data.nextCursor, null);
+  version++; await page.onShow(); assert.equal(queries.length, 3);
+  page._loadedAt -= 30001; await page.onShow(); assert.equal(queries.length, 4);
+  changeOwner('owner-b', false); await page.onShow();
+  assert.equal(queries.length, 4); assert.equal(page.data.recipes.length, 0);
+  assert.match(page.data.error, /账号已切换/);
+});
+
+test('discovery reload and pull-down bypass fresh data and do not stamp a mid-read invalidation as fresh', async () => {
+  let version = 1; const pending = deferred(), queries = [];
+  const {page, calls} = setup({getReadVersion: () => version, getDiscover: options => {
+    queries.push({...options}); return queries.length === 1 ? pending.promise : Promise.resolve({recipes: [recipe], nextCursor: null});
+  }});
+  const loading = page.load(); version++; pending.resolve({recipes: [recipe], nextCursor: null}); await loading;
+  await page.onShow(); assert.equal(queries.length, 2);
+  await page.reload(); await page.onPullDownRefresh();
+  assert.deepEqual(queries.slice(2).map(item => item.force), [true, true]);
+  assert.equal(calls.refreshStops, 1);
 });

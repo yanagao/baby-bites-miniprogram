@@ -17,13 +17,13 @@
     <view wx:if="{{profile.bio}}" class="profile-bio muted">{{profile.bio}}</view>
     <view wx:if="{{isSelf}}" class="profile-primary"><t-button class="profile-edit-trigger" theme="primary" shape="round" size="small" disabled="{{loading}}" bind:tap="edit">编辑资料</t-button></view>
     <view wx:elif="{{!isSelf}}" class="profile-primary"><t-button theme="{{following ? 'default' : 'primary'}}" variant="{{following ? 'outline' : 'base'}}" shape="round" size="small" loading="{{followBusy}}" disabled="{{followBusy}}" bind:tap="toggleFollow">{{following ? (followedBy ? '互相关注' : '已关注') : (followedBy ? '回关' : '关注')}}</t-button></view>
-    <view wx:if="{{needsProfile}}" class="profile-setup-note"><text>保存主页资料，方便朋友认出你。</text><t-button theme="primary" variant="text" size="small" bind:tap="openMine">完善我的主页</t-button></view>
   </view>
   <view class="profile-stats">
     <button class="profile-stat" data-value="recipes" bindtap="changeContentTab"><text class="profile-stat-number">{{isSelf ? recipeCount : publishedCount === null ? '—' : publishedCount}}</text><text>菜谱</text></button>
     <button class="profile-stat" bindtap="openFollowers" disabled="{{!isSelf || !socialEnabled || loading || !!publicationError}}"><text class="profile-stat-number">{{loading || publicationError ? '—' : followerCount}}</text><text>粉丝</text></button>
     <button class="profile-stat" bindtap="openFollowing" disabled="{{!isSelf || !socialEnabled || loading || !!publicationError}}"><text class="profile-stat-number">{{loading || publicationError ? '—' : followingCount}}</text><text>关注</text></button>
   </view>
+  <button wx:if="{{isSelf}}" class="profile-allergies" bindtap="openAllergies" aria-label="记录宝宝过敏食物"><view><text class="profile-allergies-title">宝宝过敏食物</text><text class="profile-allergies-note">记录后自动跳过相关推荐</text></view><t-icon name="chevron-right" size="28rpx" /></button>
   <view class="profile-content-tabs" aria-label="主页内容">
     <button class="profile-content-tab {{contentTab === 'recipes' ? 'profile-content-tab-active' : ''}}" data-value="recipes" bindtap="changeContentTab" aria-selected="{{contentTab === 'recipes'}}">菜谱</button>
     <button wx:if="{{isSelf}}" class="profile-content-tab {{contentTab === 'favorites' ? 'profile-content-tab-active' : ''}}" data-value="favorites" bindtap="changeContentTab" aria-selected="{{contentTab === 'favorites'}}">收藏</button>

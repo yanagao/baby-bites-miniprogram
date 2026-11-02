@@ -4,6 +4,9 @@ const selectors = require('../../utils/selectors');
 const calendar = require('../../utils/calendar');
 
 Page({
+  onShareAppMessage() {
+    return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     warning: '', stats: {logCount: 0, triedCount: 0}, logs: [], recipes: [],
     filter: 'all', selectedDate: '', today: '', weekStart: '', days: [],

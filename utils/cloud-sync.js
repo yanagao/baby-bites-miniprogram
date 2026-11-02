@@ -3,8 +3,10 @@
 const config = require('../config/cloud');
 const store = require('./store');
 const {mergeSnapshots} = require('./sync-merge');
+const publicationSync = require('./publication-sync');
 const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+const FOREGROUND_CHECK_INTERVAL = 30 * 1000;
 const listeners = new Set();
 let initialized = false;
 let started = false;
@@ -14,8 +16,19 @@ let timer = null;
 let internalStoreChange = false;
 let disconnected = false;
 let fileSequence = 0;
+let observedOwner = store.getSyncInfo().owner;
+let ownerEpoch = 0;
+let lastSyncedEpoch = -1;
+store.subscribe(info => {
+  if (info.owner !== observedOwner) {
+    observedOwner = info.owner;
+    ownerEpoch++;
+    publish({identityCheckedAt: 0, identityInvalid: true});
+  }
+});
 let status = {state: configured() ? 'pending' : 'unconfigured',
-  message: configured() ? '等待同步' : '云同步尚未配置', lastSyncedAt: 0, owner: ''};
+  message: configured() ? '等待同步' : '云同步尚未配置', lastSyncedAt: 0, owner: '',
+  identityCheckedAt: 0, identityInvalid: false, revision: 0, publicationVersion: 0};
 
 function configured() { return typeof config.env === 'string' && /^[A-Za-z0-9_-]+$/.test(config.env); }
 function copy(value) { return JSON.parse(JSON.stringify(value)); }
@@ -29,9 +42,10 @@ function subscribe(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
-function fail(message) {
+function fail(message, invalidIdentity = false) {
   const error = new Error(message);
   error.userMessage = message;
+  if (invalidIdentity) error.invalidIdentity = true;
   throw error;
 }
 function call(target, method, options) {
@@ -82,16 +96,18 @@ function checkResult(result, expectedOwner) {
       INVALID_ENV: '云开发环境尚未配置完成。',
       INVALID_ACCOUNT: '云端账号数据暂时无法读取，本机数据已保留。',
       INVALID_FILE: '同步文件的账号归属不正确，本机数据已保留。',
-      INVALID_SNAPSHOT: '云端未接受这份同步数据，本机数据已保留。请检查菜谱和照片后重试。'
+      INVALID_SNAPSHOT: '云端未接受这份同步数据，本机数据已保留。请检查菜谱和照片后重试。',
+      CLIENT_UPDATE_REQUIRED: '请更新小程序后同步，宝宝过敏食物记录已保留。'
     };
-    fail(messages[result.error.code] || '云端同步暂时失败，本机数据已保留，请稍后重试。');
+    fail(messages[result.error.code] || '云端同步暂时失败，本机数据已保留，请稍后重试。',
+      result.error.code === 'UNAUTHENTICATED' || result.error.code === 'ACCOUNT_CHANGED');
   }
   if (!result || typeof result.owner !== 'string' || !/^[a-f0-9]{64}$/.test(result.owner) ||
     !Number.isSafeInteger(result.revision) || result.revision < 0 ||
     (result.revision === 0 ? result.fileID !== '' : !ownedFile(result.fileID, result.owner, 'snapshots'))) {
-    fail('未能确认云端账号与数据版本，本机数据已保留。');
+    fail('未能确认云端账号与数据版本，本机数据已保留。', true);
   }
-  if (expectedOwner && result.owner !== expectedOwner) fail('微信账号已切换，请重新同步当前账号。');
+  if (expectedOwner && result.owner !== expectedOwner) fail('微信账号已切换，请重新同步当前账号。', true);
   return result;
 }
 async function invoke(data, owner) {
@@ -214,16 +230,23 @@ function apply(snapshot, owner, sequence, revision) {
 async function synchronize() {
   publish({state: 'syncing', message: '正在同步当前微信账号的数据'});
   let remoteInfo = await invoke({action: 'identity'});
+  const identityCheckedAt = Date.now();
   const owner = remoteInfo.owner;
   internalStoreChange = true;
   try { store.bindAccount(owner); } finally { internalStoreChange = false; }
-  publish({owner, lastSyncedAt: status.owner === owner ? status.lastSyncedAt : 0});
+  publish({owner, identityCheckedAt, identityInvalid: false, revision: store.getSyncInfo().revision,
+    lastSyncedAt: status.owner === owner ? status.lastSyncedAt : 0});
   const uploadedPhotos = new Map();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     assertOwner(owner);
     const localInfo = store.getSyncInfo();
     if (remoteInfo.revision < localInfo.revision) fail('云端版本早于本机缓存，本机数据已保留，请稍后重试。');
     if (!remoteInfo.fileID && !localInfo.hasLocalData) return;
+    // An older parser may have discarded fields while saving this same revision.
+    // Only skip a snapshot fully applied by the current parser and persisted with
+    // its schema marker; upgrades must restore the complete remote data first.
+    if (remoteInfo.fileID && !localInfo.dirty && localInfo.hasLocalData && localInfo.snapshotCurrent &&
+      remoteInfo.revision === localInfo.revision) return;
     // Capture this sequence before any download or upload. applySyncedSnapshot
     // merges edits made during these awaits and leaves them pending for another pass.
     const local = normalizeSnapshot(store.getSyncSnapshot(), owner, true);
@@ -266,28 +289,65 @@ function initialize() {
   initialized = true;
 }
 function onFailure(error) {
+  if (error && (error.invalidIdentity || error.code === 'ACCOUNT_CHANGED')) {
+    publish({identityCheckedAt: 0, identityInvalid: true});
+  }
+  if (error && error.publicationPending) {
+    publish({state: 'pending', message: error.userMessage});
+    return;
+  }
   const networkError = disconnected || /network|timeout|timed out|offline|网络/i.test(error && (error.errMsg || error.message) || '');
   publish({state: networkError ? 'pending' : 'error', message: error && error.userMessage ||
     (networkError ? '等待联网同步，本机修改已保留。' : '同步暂未完成，本机数据已保留，请重试。')});
 }
-function syncNow() {
+function syncNow(options = {}) {
   if (!configured()) {
     publish({state: 'unconfigured', message: '云同步尚未配置'});
     return Promise.resolve(getStatus());
   }
+  const localInfo = store.getSyncInfo();
+  const age = Date.now() - status.identityCheckedAt;
+  if (options && options.ifNeeded === true && status.state === 'synced' &&
+    lastSyncedEpoch === ownerEpoch && localInfo.owner && status.owner === localInfo.owner &&
+    (!localInfo.hasLocalData || localInfo.snapshotCurrent) &&
+    !localInfo.dirty && !localInfo.blocked && !disconnected && !status.identityInvalid &&
+    age >= 0 && age < FOREGROUND_CHECK_INTERVAL) return Promise.resolve(getStatus());
   if (timer) { clearTimeout(timer); timer = null; }
-  if (inFlight) { queued = true; return inFlight; }
+  // Joining the current check does not request another one. Store changes still
+  // queue a pass, and edits made without start() are detected by the dirty check.
+  if (inFlight) return inFlight;
   if (disconnected) {
     publish({state: 'pending', message: '等待联网同步，本机修改已保留。'});
     return Promise.resolve(getStatus());
   }
   inFlight = Promise.resolve().then(async () => {
     initialize();
+    let publicationError = null;
     do {
       queued = false;
       await synchronize();
-      if (store.getSyncInfo().dirty) queued = true;
+      publish({revision: store.getSyncInfo().revision});
+      if (!publicationError && config.socialEnabled === true && !store.getSyncInfo().dirty && !disconnected) {
+        const owner = store.getSyncInfo().owner;
+        const epoch = ownerEpoch;
+        publish({message: '菜谱已保存，正在同步公开内容'});
+        try {
+          await publicationSync.syncPublished({owner, isCurrent: () =>
+            store.getSyncInfo().owner === owner && ownerEpoch === epoch,
+          onUpdated: () => publish({publicationVersion: status.publicationVersion + 1})});
+        } catch (error) {
+          if (!error || !error.publicationPending) throw error;
+          // Finish private edits queued during a failed public update, without
+          // retrying the same public failure in a loop. A later sync retries it.
+          publicationError = error;
+        }
+      }
+      // A change made before the captured snapshot may already be committed by
+      // this pass. Only edits still pending need another private check.
+      queued = store.getSyncInfo().dirty;
     } while (queued && !disconnected);
+    if (publicationError) throw publicationError;
+    lastSyncedEpoch = ownerEpoch;
     publish({state: store.getSyncInfo().dirty ? 'pending' : 'synced',
       message: store.getSyncInfo().dirty ? '本机修改等待同步' : '已同步当前微信账号', lastSyncedAt: Date.now()});
   }).catch(error => {
@@ -311,11 +371,11 @@ function start() {
     });
     if (typeof wx !== 'undefined' && typeof wx.onNetworkStatusChange === 'function') wx.onNetworkStatusChange(event => {
       disconnected = event.isConnected === false;
-      if (!disconnected) syncNow();
+      if (!disconnected) syncNow({ifNeeded: true});
       else if (!inFlight) publish({state: 'pending', message: '等待联网同步，本机修改已保留。'});
     });
   }
-  return syncNow();
+  return syncNow({ifNeeded: true});
 }
 
 module.exports = {start, syncNow, getStatus, subscribe};

@@ -16,6 +16,7 @@ const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const PHOTO_TTL = 300;
 const MAX_PAGE_BYTES = 800 * 1024;
 const DISCOVERY_SCAN_SIZE = 60;
+const DISCOVERY_CONCURRENCY = 5;
 const CODE_MAX_BYTES = 512 * 1024;
 const CODE_ENVIRONMENTS = ['develop', 'trial', 'release'];
 const SORT_KEY_PATTERN = /^\d{13}-[a-f0-9]{64}$/;
@@ -214,9 +215,11 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     return result;
   }
 
-  async function renderPage(records, env) {
-    const authorCache = new Map();
-    await Promise.all(Array.from(new Set(records.map(item => item.profileId)), async id => {
+  async function renderPage(records, env, knownAuthors = []) {
+    // Reuse validated authors only inside this request; account and publication
+    // permissions are still read afresh on the next request.
+    const authorCache = new Map(knownAuthors);
+    await Promise.all(Array.from(new Set(records.map(item => item.profileId))).filter(id => !authorCache.has(id)).map(async id => {
       authorCache.set(id, await profile(id));
     }));
     const results = await Promise.all(records.map(item => authorCache.get(item.profileId) ?
@@ -268,18 +271,22 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       const today = todayString(now());
 
       if (event.action === 'mine') {
-        const ownProfile = await profile(ownProfileId);
-        const published = ownProfile ? (await collection('recipes').where({profileId: ownProfileId, published: true})
-          .orderBy('_id', 'asc').limit(1000).get()).data : [];
+        const [ownProfile, follows] = await Promise.all([profile(ownProfileId), get('follows', owner)]);
+        const [publishedResult, publishedCount, followerCount] = ownProfile ? await Promise.all([
+          collection('recipes').where({profileId: ownProfileId, published: true})
+            .orderBy('_id', 'asc').field({_id: true, owner: true, profileId: true, sourceRecipeId: true,
+              sourceUpdatedAt: true, published: true}).limit(1000).get(),
+          count(collection('recipes').where({profileId: ownProfileId, published: true})),
+          count(followersQuery(ownProfileId))
+        ]) : [{data: []}, 0, 0];
+        const published = publishedResult.data;
         const ownPublished = published.filter(item => isPublished(item, ownProfile));
         return {
           profile: ownProfile ? publicProfile(ownProfile, today, true) : {id: ownProfileId, name: defaultProfileName(owner), bio: '', babyAgeMonths: null, babyBirthDate: null, exists: false},
           published: ownPublished.map(item => ({
             id: item._id, sourceRecipeId: item.sourceRecipeId, sourceUpdatedAt: item.sourceUpdatedAt
           })),
-          publishedCount: ownProfile ? await count(collection('recipes').where({profileId: ownProfileId, published: true})) : 0,
-          followingCount: followingIds(await get('follows', owner)).length,
-          followerCount: ownProfile ? await count(followersQuery(ownProfileId)) : 0
+          publishedCount, followingCount: followingIds(follows).length, followerCount
         };
       }
 
@@ -366,17 +373,28 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         return {profileId: author._id, envVersion: event.envVersion, codeURL: file.tempFileURL};
       }
 
-      if (event.action === 'publish') {
+      if (event.action === 'publish' || event.action === 'updatePublished') {
+        const automatic = event.action === 'updatePublished';
         const id = sourceId(event.sourceRecipeId);
         const publicId = recipeIdFor(owner, id);
+        const previous = await get('recipes', publicId);
+        // Background reconciliation is only allowed to update an existing public
+        // recipe. First publication still requires the explicit publish action.
+        if (automatic && (!previous || previous.published !== true)) return {updated: false};
         const author = await profile(ownProfileId);
         if (!author) reject('请先设置自己的公开主页名称。', 'PROFILE_REQUIRED');
-        const previous = await get('recipes', publicId);
+        if (automatic && !isPublished(previous, author)) reject('公开菜谱信息暂时无法读取。', 'INVALID_ACCOUNT');
         const generation = previous ? previous.generation : 0;
         if (!Number.isSafeInteger(generation) || generation < 0) reject('公开版本暂时无法读取。', 'INVALID_ACCOUNT');
         const {recipe, account} = await committedRecipe(owner, ENV, id);
+        const sourceUpdatedAt = recipe.updatedAt || recipe.createdAt || 0;
+        if (automatic && previous.sourceUpdatedAt === sourceUpdatedAt) return {updated: false};
+        const sourcePhotoHash = recipe.photo ? hash(recipe.photo) : '';
         let photoFileID = '';
-        if (recipe.photo) {
+        if (automatic && sourcePhotoHash && previous.sourcePhotoHash === sourcePhotoHash &&
+          socialPhoto(previous.photoFileID, ENV, ownProfileId, publicId)) {
+          photoFileID = previous.photoFileID;
+        } else if (recipe.photo) {
           const photo = await cloud.downloadFile({fileID: recipe.photo});
           if (photo.statusCode != null && photo.statusCode !== 200) reject('照片暂时无法读取。', 'STORAGE_FAILED');
           const extension = photoExtension(photo.fileContent);
@@ -390,13 +408,13 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const time = now();
         if (!Number.isSafeInteger(time) || time < 0 || time > 9999999999999) throw new Error('Invalid clock');
         const record = {
-          owner, profileId: ownProfileId, sourceRecipeId: id, sourceUpdatedAt: recipe.updatedAt || recipe.createdAt || 0,
+          owner, profileId: ownProfileId, sourceRecipeId: id, sourceUpdatedAt,
           name: recipe.name, category: recipe.category, minutes: recipe.minutes, texture: recipe.texture,
           ...(recipe.ageGroups === undefined ? {} : {ageGroups: recipe.ageGroups.slice()}),
           ingredients: recipe.ingredients.map(item => ({name: item.name, amount: item.amount})),
-          steps: recipe.steps.slice(), imageKey: getImageKey(recipe.id, recipe.imageKey), photoFileID,
-          published: true, publishedAt: time, updatedAt: time, generation: generation + 1,
-          sortKey: `${String(9999999999999 - time).padStart(13, '0')}-${publicId}`
+          steps: recipe.steps.slice(), imageKey: getImageKey(recipe.id, recipe.imageKey), photoFileID, sourcePhotoHash,
+          published: true, publishedAt: automatic ? previous.publishedAt : time, updatedAt: time, generation: generation + 1,
+          sortKey: automatic ? previous.sortKey : `${String(9999999999999 - time).padStart(13, '0')}-${publicId}`
         };
         if (recipe.source) {
           const original = await get('recipes', recipe.source.recipeId);
@@ -406,8 +424,9 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
             record.source = {profileId: originalAuthor._id, recipeId: original._id, authorName: originalAuthor.name};
           }
         }
-        await db.runTransaction(async transaction => {
+        const written = await db.runTransaction(async transaction => {
           const current = await get('recipes', publicId, transaction);
+          if (automatic && (!current || current.published !== true)) return false;
           if ((current ? current.generation : 0) !== generation) reject('公开状态刚有变化，请刷新后重试。', 'CONFLICT');
           const currentAccount = await get('accounts', owner, transaction);
           if (!currentAccount || currentAccount.revision !== account.revision || currentAccount.fileID !== account.fileID) {
@@ -415,10 +434,12 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           }
           if (!await profile(ownProfileId, transaction)) reject('请先设置自己的公开主页名称。', 'PROFILE_REQUIRED');
           await write('recipes', publicId, record, transaction);
+          return true;
         });
+        if (!written) return {updated: false};
         const rendered = await renderRecipe({_id: publicId, ...record}, ENV);
         if (!rendered) reject('公开状态刚有变化，请刷新后重试。', 'CONFLICT');
-        return {recipe: rendered};
+        return automatic ? {updated: true, recipe: rendered} : {recipe: rendered};
       }
 
       if (event.action === 'unpublish') {
@@ -439,16 +460,24 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         if (!isProfileId(event.profileId) || typeof event.following !== 'boolean') reject('请选择有效的主页。', 'INVALID_REQUEST');
         if (event.profileId === ownProfileId) reject('不能关注自己的主页。', 'INVALID_REQUEST');
         return await db.runTransaction(async transaction => {
-          if (event.following && !await profile(ownProfileId, transaction)) {
-            reject('请先设置自己的公开主页名称，再关注朋友。', 'PROFILE_REQUIRED');
-          }
           const ids = followingIds(await get('follows', owner, transaction));
           const author = await profile(event.profileId, transaction);
           if (event.following && !author) reject('这个主页暂时不可用。', 'NOT_FOUND');
           const reverse = await followedBy(author, ownProfileId, transaction);
           const exists = ids.includes(event.profileId);
+          if (event.following) {
+            if (!exists && ids.length >= MAX_FOLLOWS) reject('最多可关注 200 位朋友。', 'FOLLOW_LIMIT');
+            const ownRecord = await get('profiles', ownProfileId, transaction);
+            if (!ownRecord) {
+              // Following uses the same safe default name already shown in mine.
+              // Create it atomically with the relationship so followers can follow
+              // back, without copying private account or baby information.
+              await write('profiles', ownProfileId, {owner, name: defaultProfileName(owner), bio: '', updatedAt: now()}, transaction);
+            } else if (!await profile(ownProfileId, transaction)) {
+              reject('账号资料暂时无法读取，请稍后重试。', 'INVALID_ACCOUNT');
+            }
+          }
           if (exists === event.following) return {following: exists, followedBy: reverse};
-          if (event.following && ids.length >= MAX_FOLLOWS) reject('最多可关注 200 位朋友。', 'FOLLOW_LIMIT');
           const next = event.following ? ids.concat(event.profileId) : ids.filter(id => id !== event.profileId);
           await write('follows', owner, {profileIds: next, updatedAt: now()}, transaction);
           return {following: event.following, followedBy: reverse};
@@ -477,8 +506,8 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           if (!record || !/^[a-f0-9]{64}$/.test(record._id || '') || record._id === owner) return null;
           if (!followingIds(record).includes(ownProfileId)) return null;
           const author = await profile(profileIdFor(record._id));
-          // Older versions allowed following before saving a public name. Such
-          // accounts remain private until their owner explicitly creates one.
+          // Older unnamed accounts stay hidden until they save a profile or
+          // actively follow again, which creates their default profile.
           if (!author) return null;
           return {...publicProfile(author, today), following: ids.includes(author._id), followedBy: true};
         }))).filter(Boolean);
@@ -486,22 +515,38 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         return {profiles, nextOffset: records.length > PAGE_SIZE ? nextOffset : null};
       }
 
-      if (event.action === 'profile') {
+      if (event.action === 'profile' || event.action === 'profileSummary') {
         if (!isProfileId(event.profileId)) reject('主页链接不正确。', 'INVALID_REQUEST');
         const offset = pageOffset(event.offset);
         const author = await profile(event.profileId);
         if (!author) reject('这个主页暂时不可用。', 'NOT_FOUND');
-        const records = (await collection('recipes').where({profileId: author._id, published: true})
-          .orderBy('sortKey', 'asc').skip(offset).limit(PAGE_SIZE + 1).get()).data;
-        const page = await renderPage(records.slice(0, PAGE_SIZE), ENV);
-        const authorFollowing = followingIds(await get('follows', author.owner));
-        const ownFollowing = author.owner === owner ? authorFollowing : followingIds(await get('follows', owner));
+        if (event.action === 'profileSummary') {
+          const isSelf = author._id === ownProfileId;
+          const [authorFollows, ownFollows] = isSelf ? [null, null] : await Promise.all([
+            get('follows', author.owner), get('follows', owner)
+          ]);
+          return {profile: publicProfile(author, today, isSelf), isSelf,
+            following: !isSelf && followingIds(ownFollows).includes(author._id),
+            followedBy: !isSelf && followingIds(authorFollows).includes(ownProfileId)};
+        }
+        const [rendered, authorFollows, ownFollows, followerCount, publishedCount] = await Promise.all([
+          collection('recipes').where({profileId: author._id, published: true})
+            .orderBy('sortKey', 'asc').skip(offset).limit(PAGE_SIZE + 1).get().then(async ({data: records}) => ({
+              records, page: await renderPage(records.slice(0, PAGE_SIZE), ENV, [[author._id, author]])
+            })),
+          get('follows', author.owner),
+          author.owner === owner ? null : get('follows', owner),
+          count(followersQuery(author._id)),
+          count(collection('recipes').where({profileId: author._id, published: true}))
+        ]);
+        const {records, page} = rendered;
+        const authorFollowing = followingIds(authorFollows);
+        const ownFollowing = author.owner === owner ? authorFollowing : followingIds(ownFollows);
         return {profile: publicProfile(author, today, author._id === ownProfileId), isSelf: author._id === ownProfileId,
           following: author.owner !== owner && ownFollowing.includes(author._id),
           followedBy: author.owner !== owner && authorFollowing.includes(ownProfileId),
           followingCount: authorFollowing.length,
-          followerCount: await count(followersQuery(author._id)),
-          publishedCount: await count(collection('recipes').where({profileId: author._id, published: true})),
+          followerCount, publishedCount,
           recipes: page.recipes,
           nextOffset: records.length > page.consumed ? offset + page.consumed : null};
       }
@@ -554,23 +599,38 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const recipes = [];
         let consumed = 0;
         let bytes = 0;
-        for (const item of candidates) {
-          if (!SORT_KEY_PATTERN.test(item.sortKey || '') || item.sortKey.slice(14) !== item._id) {
-            throw new Error('Invalid public index');
-          }
-          const author = authors.get(item.profileId);
-          let result = null;
-          if (isPublished(item, author) && matchesSearch(item, author, search)) {
-            const latest = await get('recipes', item._id);
-            if (latest && latest.sortKey === item.sortKey && matchesSearch(latest, author, search)) {
-              result = await renderRecipe(latest, ENV, author);
+        // Fetch at most five candidates ahead. Consume completed results in
+        // index order so a byte-limited page never skips a prefetched recipe.
+        discovery: for (let start = 0; start < candidates.length; start += DISCOVERY_CONCURRENCY) {
+          const batch = await Promise.all(candidates.slice(start, start + DISCOVERY_CONCURRENCY).map(async item => {
+            try {
+              if (!SORT_KEY_PATTERN.test(item.sortKey || '') || item.sortKey.slice(14) !== item._id) {
+                throw new Error('Invalid public index');
+              }
+              const author = authors.get(item.profileId);
+              let result = null;
+              if (isPublished(item, author) && matchesSearch(item, author, search)) {
+                const latest = await get('recipes', item._id);
+                if (latest && latest.sortKey === item.sortKey && matchesSearch(latest, author, search)) {
+                  result = await renderRecipe(latest, ENV, author);
+                }
+              }
+              return {result};
+            } catch (error) {
+              // Errors from speculative rows belong to the page that consumes
+              // them, just like the previous sequential scan.
+              return {error};
             }
+          }));
+          for (const entry of batch) {
+            if (Object.hasOwn(entry, 'error')) throw entry.error;
+            const result = entry.result;
+            const size = result ? Buffer.byteLength(JSON.stringify(result), 'utf8') + 1 : 0;
+            if (recipes.length && bytes + size > MAX_PAGE_BYTES) break discovery;
+            consumed += 1;
+            if (result) { recipes.push(result); bytes += size; }
+            if (recipes.length >= PAGE_SIZE) break discovery;
           }
-          const size = result ? Buffer.byteLength(JSON.stringify(result), 'utf8') + 1 : 0;
-          if (recipes.length && bytes + size > MAX_PAGE_BYTES) break;
-          consumed += 1;
-          if (result) { recipes.push(result); bytes += size; }
-          if (recipes.length >= PAGE_SIZE) break;
         }
         return {recipes, nextCursor: records.length > consumed && consumed > 0 ?
           `v1.${hash(search)}.${records[consumed - 1].sortKey}` : null};

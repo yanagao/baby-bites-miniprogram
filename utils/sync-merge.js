@@ -46,6 +46,27 @@ function mergeItems(a, b, deleted) {
 
 function sorted(values) { return Array.from(values).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0); }
 
+function mergeAllergies(local, remote) {
+  const entry = data => data.allergies === undefined ? null :
+    {allergies: data.allergies, updatedAt: data.allergiesUpdatedAt || 0};
+  const a = entry(local), b = entry(remote);
+  let selected = !a ? b : !b ? a : a.updatedAt > b.updatedAt ? a : b;
+  if (a && b && a.updatedAt === b.updatedAt && stableJSON(a.allergies) !== stableJSON(b.allergies)) {
+    // Two devices can save different settings in the same millisecond. Keep
+    // every recorded food on a tie; only a strictly newer edit can remove one.
+    // Never truncate an oversized union: callers retain their original data
+    // when this throws, so the user can reconcile the records explicitly.
+    const allergies = [...new Set(a.allergies.concat(b.allergies))].sort();
+    if (allergies.length > 50) {
+      const error = Error('过敏食物合并后超过 50 项，请先整理记录后重试。');
+      error.userMessage = error.message;
+      throw error;
+    }
+    selected = {allergies, updatedAt: a.updatedAt};
+  }
+  return selected ? copy({allergies: selected.allergies, allergiesUpdatedAt: selected.updatedAt}) : {};
+}
+
 function mergeSnapshots(local, remote) {
   const deletedRecipes = mergeTombstones(local.deleted.recipes, remote.deleted.recipes);
   const deletedLogs = mergeTombstones(local.deleted.logs, remote.deleted.logs);
@@ -68,8 +89,9 @@ function mergeSnapshots(local, remote) {
     else if (remoteProfile.nickname === '宝宝' && localProfile.nickname !== '宝宝') profile = localProfile;
   }
   return copy({version: 1, data: {version: 1, nickname: profile.nickname,
-    profileUpdatedAt: profile.updatedAt, recipes: sorted(recipes.values()), logs: sorted(logs.values())},
+    profileUpdatedAt: profile.updatedAt, ...mergeAllergies(local.data, remote.data),
+    recipes: sorted(recipes.values()), logs: sorted(logs.values())},
   deleted: {recipes: sorted(deletedRecipes.values()), logs: sorted(deletedLogs.values())}});
 }
 
-module.exports = {mergeSnapshots};
+module.exports = {mergeSnapshots, mergeAllergies};

@@ -8,9 +8,7 @@
 .public-author > t-button {flex:none;}
 .public-relation-loading {font-size:var(--font-caption);color:#82969a;max-width:140rpx;line-height:var(--line-height-body);}
 .public-relation-error {font-size:var(--font-secondary);color:#b36f55;line-height:var(--line-height-body);margin:10rpx 0 18rpx;overflow-wrap:anywhere;}
-.public-profile-setup {display:flex;align-items:center;gap:10rpx;margin:14rpx 0 20rpx;padding:16rpx 18rpx;border-radius:16rpx;background:#fff1b8;font-size:var(--font-secondary);color:#607d83;line-height:var(--line-height-body);}
-.public-profile-setup > text {flex:1;min-width:0;}
-.public-profile-setup > t-button {flex:none;}
 .public-pressed {opacity:.7;}
 .copy-explanation {margin-top:26rpx;padding:18rpx;background:#eff8f8;border-radius:16rpx;font-size:var(--font-secondary);line-height:var(--line-height-body);color:#82969a;}
 .public-bottom {display:block;}
+.public-detail-end {height:calc(32rpx + env(safe-area-inset-bottom));}

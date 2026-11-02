@@ -25,6 +25,10 @@ function setup(options = {}) {
   const hooks = {};
   let syncOwner = OWNER;
   let syncState = 'synced';
+  let now = Date.now();
+  class ClockDate extends Date { static now() { return now; } }
+  const syncListeners = new Set();
+  let syncStatus = {owner: '', identityCheckedAt: 0, revision: 0, publicationVersion: 0};
   const dispatch = (args, action) => Promise.resolve().then(action).then(args.success, args.fail);
   const manager = {
     getFileInfo(args) { dispatch(args, async () => {
@@ -72,7 +76,7 @@ function setup(options = {}) {
   vm.runInNewContext(source('store.js'), {module: storeModule, require: requireStore, wx, console});
   const store = storeModule.exports;
   store.bindAccount(OWNER);
-  const sync = {async syncNow() {
+  const sync = {getStatus() { return copy(syncStatus); }, subscribe(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }, async syncNow() {
     calls.push({action: 'sync'});
     if (hooks.sync) await hooks.sync();
     store.bindAccount(syncOwner);
@@ -88,7 +92,7 @@ function setup(options = {}) {
     throw Error(name);
   }});
   const socialModule = {exports: {}};
-  vm.runInNewContext(source('social.js'), {module: socialModule, wx, console, ArrayBuffer, Uint8Array,
+  vm.runInNewContext(source('social.js'), {module: socialModule, wx, console, ArrayBuffer, Uint8Array, Date: ClockDate,
     require(name) {
       if (name === './store') return store;
       if (name === './cloud-sync') return sync;
@@ -100,8 +104,200 @@ function setup(options = {}) {
       throw Error(name);
     }});
   return {social: socialModule.exports, store, files, hooks, calls, storage, coverSources,
+    advance(milliseconds) { now += milliseconds; }, now() { return now; },
+    emitSync(value) { syncStatus = {...syncStatus, ...value}; syncListeners.forEach(listener => listener(copy(syncStatus))); },
     setSyncOwner(value) { syncOwner = value; }, setSyncState(value) { syncState = value; }};
 }
+
+test('concurrent and repeated social reads share identity and request work with independent caller data', async () => {
+  const app = setup();
+  app.hooks.request = args => args.data.action === 'mine' ? {profile: {name: '小厨房'}, published: []} : {profiles: []};
+  const [first, second] = await Promise.all([app.social.getMine(), app.social.getMine(), app.social.getFollowing()]);
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'mine', 'following']);
+  first.profile.name = '页面临时修改';
+  assert.equal(second.profile.name, '小厨房');
+  assert.equal((await app.social.getMine()).profile.name, '小厨房');
+  assert.equal(app.calls.length, 3);
+});
+
+test('read caches expire after 30 seconds and explicit refresh bypasses cached data', async () => {
+  const app = setup();
+  let count = 0;
+  app.hooks.request = () => ({count: ++count});
+  assert.equal((await app.social.getMine()).count, 1);
+  app.advance(29999);
+  assert.equal((await app.social.getMine()).count, 1);
+  assert.equal((await app.social.getMine({force: true})).count, 2);
+  app.advance(30001);
+  assert.equal((await app.social.getMine()).count, 3);
+  assert.equal(app.calls.filter(item => item.action === 'identity').length, 2);
+});
+
+test('cache keys separate list filters and cursors and never send force to the server', async () => {
+  const app = setup();
+  for (const input of [{search: '南瓜'}, {search: '土豆'}, {search: '南瓜', cursor: 'page2'}, {search: '南瓜'}, {search: '南瓜', force: true}]) {
+    await app.social.getDiscover(input);
+  }
+  assert.equal(app.calls.filter(item => item.action === 'discover').length, 4);
+  assert.equal(app.calls.some(item => Object.hasOwn(item, 'force')), false);
+  await app.social.getProfile(PROFILE_ID, 0);
+  await app.social.getProfile(PROFILE_ID, 20);
+  await app.social.getProfileSummary(PROFILE_ID);
+  await app.social.getProfileSummary(PROFILE_ID);
+  assert.equal(app.calls.filter(item => item.action === 'profile').length, 2);
+  assert.equal(app.calls.filter(item => item.action === 'profileSummary').length, 1);
+});
+
+test('public recipe details always recheck publication while concurrent detail reads are coalesced', async () => {
+  const app = setup();
+  await Promise.all([app.social.getRecipe(PUBLIC_ID), app.social.getRecipe(PUBLIC_ID)]);
+  assert.equal(app.calls.filter(item => item.action === 'recipe').length, 1);
+  app.hooks.request = () => ({error: {code: 'NOT_PUBLIC'}});
+  await assert.rejects(app.social.getRecipe(PUBLIC_ID), /取消公开/);
+  assert.equal(app.calls.filter(item => item.action === 'recipe').length, 2);
+});
+
+test('writes invalidate cached relationships and publication state even when their response fails', async () => {
+  const app = setup();
+  await app.social.getMine();
+  const before = app.social.getReadVersion();
+  await app.social.setFollowing(PROFILE_ID, true);
+  assert.ok(app.social.getReadVersion() > before);
+  await app.social.getMine();
+  app.hooks.request = args => args.data.action === 'unpublish' ? Promise.reject(Error('lost response after write')) : undefined;
+  await assert.rejects(app.social.unpublishRecipe('own'), /连接不上/);
+  await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 3);
+});
+
+test('a read finishing after a write cannot restore its older result', async () => {
+  const app = setup();
+  let release, started;
+  const pending = new Promise(resolve => { release = resolve; });
+  const received = new Promise(resolve => { started = resolve; });
+  let count = 0;
+  app.hooks.request = async args => {
+    if (args.data.action !== 'mine') return;
+    count += 1;
+    if (count === 1) { started(); await pending; return {published: [{id: PUBLIC_ID}]}; }
+    return {published: []};
+  };
+  const oldRead = app.social.getMine();
+  await received;
+  await app.social.unpublishRecipe('own');
+  release();
+  assert.deepEqual(copy((await oldRead).published), []);
+  assert.deepEqual(copy((await app.social.getMine()).published), []);
+  assert.equal(count, 2);
+});
+
+test('actual sync revisions and partial public updates invalidate reads but idle timestamps do not', async () => {
+  const app = setup();
+  await app.social.getMine();
+  app.emitSync({owner: OWNER, revision: app.store.getSyncInfo().revision, lastSyncedAt: app.now()});
+  const before = app.social.getReadVersion();
+  app.emitSync({lastSyncedAt: app.now() + 1});
+  await app.social.getMine();
+  assert.equal(app.social.getReadVersion(), before);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  app.emitSync({revision: app.store.getSyncInfo().revision + 1});
+  await app.social.getMine();
+  app.emitSync({state: 'pending', publicationVersion: 1});
+  await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 3);
+});
+
+test('a recent private identity check removes redundant social preflight without skipping server owner checks', async () => {
+  const app = setup();
+  app.emitSync({owner: OWNER, identityCheckedAt: app.now()});
+  await app.social.getMine();
+  assert.deepEqual(app.calls, [{action: 'mine', expectedOwner: OWNER}]);
+  app.advance(30000);
+  await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'identity').length, 1);
+});
+
+test('account changes clear cached data and identity including switching away and back', async () => {
+  const app = setup();
+  await app.social.getMine();
+  app.store.bindAccount(OTHER);
+  app.store.bindAccount(OWNER);
+  await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'identity').length, 2);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+});
+
+test('a private sync identity failure immediately clears social identity and cached reads', async () => {
+  const app = setup();
+  await app.social.getMine();
+  const version = app.social.getReadVersion();
+  app.emitSync({owner: OWNER, identityCheckedAt: 0, identityInvalid: true, state: 'error'});
+  assert.ok(app.social.getReadVersion() > version);
+  app.hooks.identity = () => ({error: {code: 'UNAUTHENTICATED'}});
+  await assert.rejects(app.social.getMine(), /确认当前微信账号/);
+  assert.equal(app.calls.filter(item => item.action === 'identity').length, 2);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  app.hooks.identity = null;
+  app.emitSync({owner: OWNER, identityCheckedAt: app.now(), identityInvalid: false, state: 'synced'});
+  assert.equal((await app.social.getMine()).ok, true);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+});
+
+test('failed reads are retryable and are never cached', async () => {
+  const app = setup();
+  app.hooks.request = () => Promise.reject(Error('offline'));
+  await assert.rejects(app.social.getMine(), /连接不上/);
+  app.hooks.request = () => ({ok: true});
+  assert.equal((await app.social.getMine()).ok, true);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+});
+
+test('a social identity rejection cannot reuse an older private identity check on retry', async () => {
+  const app = setup();
+  app.emitSync({owner: OWNER, identityCheckedAt: app.now()});
+  app.hooks.request = () => ({error: {code: 'ACCOUNT_CHANGED'}});
+  await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
+  app.hooks.identity = () => ({owner: OTHER});
+  await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
+  assert.deepEqual(app.calls.map(item => item.action), ['mine', 'identity']);
+});
+
+test('cached lists use newly available artwork and bound memory instead of retaining every search', async () => {
+  const app = setup();
+  app.hooks.request = () => ({recipes: [{...publicRecipe(), imageKey: 'dish:carrot-chicken'}]});
+  assert.equal((await app.social.getDiscover()).recipes[0].displayPhoto, undefined);
+  app.coverSources.set('dish:carrot-chicken', 'wxfile://usr/recipe-cover-cache/carrot-chicken.jpg');
+  assert.match((await app.social.getDiscover()).recipes[0].displayPhoto, /carrot-chicken/);
+  for (let i = 0; i < 40; i++) await app.social.getDiscover({search: '搜索' + i});
+  await app.social.getDiscover();
+  assert.equal(app.calls.filter(item => item.action === 'discover').length, 42);
+});
+
+test('following uses the verified account without reading, saving or requiring profile details', async () => {
+  const app = setup();
+  const before = copy(app.store.getState());
+  app.hooks.request = args => {
+    assert.equal(args.data.action, 'follow');
+    assert.equal(args.data.profileId, PROFILE_ID);
+    assert.equal(args.data.expectedOwner, OWNER);
+    return {following: args.data.following, followedBy: false};
+  };
+  assert.equal((await app.social.setFollowing(PROFILE_ID, true)).following, true);
+  assert.equal((await app.social.setFollowing(PROFILE_ID, false)).following, false);
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'follow', 'identity', 'follow']);
+  assert.deepEqual(copy(app.store.getState()), before);
+});
+
+test('legacy follow profile errors offer retry instead of asking for profile completion', async () => {
+  const app = setup();
+  app.hooks.request = () => ({error: {code: 'PROFILE_REQUIRED'}});
+  await assert.rejects(app.social.setFollowing(PROFILE_ID, true), error => {
+    assert.equal(error.code, 'PROFILE_REQUIRED');
+    assert.equal(error.message, '关注暂时未完成，请稍后重试。');
+    return true;
+  });
+  await assert.rejects(app.social.getShareCode(PROFILE_ID, 'trial'), /请先设置公开主页/);
+});
 
 test('saving public recipes retains explicit age groups but never infers them from a starter cover', async () => {
   for (const ageGroups of [undefined, [], ['18+', '9-11', '18+']]) {

@@ -3,6 +3,7 @@
 const {categories} = require('./categories');
 const {getCover} = require('./recipe-covers');
 const recipeAges = require('./recipe-ages');
+const {findRecipeAllergens} = require('./allergies');
 const textures = ['细腻泥糊', '软烂颗粒', '手指食物'];
 const ratings = {
   1: { name: '不太喜欢', icon: 'unhappy' },
@@ -59,9 +60,12 @@ function ratingOf(state, recipeId) {
 
 function displayPhoto(recipe) { return recipe.photo || recipe.photoURL || getCover(recipe); }
 
-function enrichWithRating(recipe, feedback) {
+function enrichWithRating(recipe, feedback, allergies) {
   const rating = feedback ? feedback.rating : 0;
+  const allergyMatches = findRecipeAllergens(recipe, allergies);
   return Object.assign({}, recipe, {
+    allergyMatches,
+    allergyWarning: allergyMatches.length ? '含已记录的过敏食物：' + allergyMatches.join('、') : '',
     rating,
     ratingDate: feedback ? feedback.date : '',
     ratingName: rating ? ratings[rating].name : '未记录喜好',
@@ -76,12 +80,12 @@ function enrichWithRating(recipe, feedback) {
 }
 
 function enrichRecipe(state, recipe) {
-  return recipe ? enrichWithRating(recipe, latestRatings(state).get(recipe.id)) : null;
+  return recipe ? enrichWithRating(recipe, latestRatings(state).get(recipe.id), state.allergies) : null;
 }
 
 function listRecipes(state, options) {
   const opts = Object.assign({ category: '全部', search: '', sort: 'recent', onlyFavorites: false,
-    texture: '全部口感' }, options || {});
+    texture: '全部口感', excludeAllergies: false }, options || {});
   const search = String(opts.search || '').trim().toLowerCase();
   const normalizedSearch = normalizeIngredient(search);
   const feedback = latestRatings(state);
@@ -91,7 +95,8 @@ function listRecipes(state, options) {
     (!opts.texture || opts.texture === '全部' || opts.texture === '全部口感' || recipe.texture === opts.texture) &&
     (!search || [recipe.name].concat(recipe.ingredients.map(item => item.name))
       .some(value => value.toLowerCase().includes(search) || normalizeIngredient(value).toLowerCase().includes(normalizedSearch)))
-  ).map(recipe => enrichWithRating(recipe, feedback.get(recipe.id)));
+  ).map(recipe => enrichWithRating(recipe, feedback.get(recipe.id), state.allergies))
+    .filter(recipe => !opts.excludeAllergies || !recipe.allergyMatches.length);
   list.sort((a, b) => {
     const recent = (b.createdAt || 0) - (a.createdAt || 0);
     if (opts.sort === 'quick') return a.minutes - b.minutes || recent;
@@ -105,11 +110,11 @@ function matchRecipes(state, ingredients, completeOnly) {
   const selected = new Set(Array.from(ingredients || []).map(normalizeIngredient).filter(Boolean));
   if (!selected.size) return [];
   const feedback = latestRatings(state);
-  return state.recipes.map(recipe => {
+  return state.recipes.filter(recipe => !findRecipeAllergens(recipe, state.allergies).length).map(recipe => {
     const missing = recipe.ingredients.filter(item => !selected.has(normalizeIngredient(item.name)));
     const totalCount = recipe.ingredients.length;
     const foundCount = totalCount - missing.length;
-    return Object.assign(enrichWithRating(recipe, feedback.get(recipe.id)), {
+    return Object.assign(enrichWithRating(recipe, feedback.get(recipe.id), state.allergies), {
       foundCount, totalCount, missingCount: missing.length, missingText: missing.map(item => item.name).join('、'), complete: !missing.length
     });
   }).filter(recipe => recipe.foundCount > 0 && (!completeOnly || recipe.complete))
@@ -122,7 +127,7 @@ function randomCandidates(state, options) {
     ? opts.categories.filter(value => value !== '全部' && categories.includes(value)) : null;
   const selectedAges = Array.isArray(opts.ageGroups)
     ? opts.ageGroups.filter(value => recipeAges.ageGroups.some(group => group.value === value)) : [];
-  return listRecipes(state, { category: selected ? '全部' : opts.category }).filter(recipe =>
+  return listRecipes(state, { category: selected ? '全部' : opts.category, excludeAllergies: true }).filter(recipe =>
     (!selected || !selected.length || selected.includes(recipe.category)) &&
     recipeAges.matchesAgeGroups(recipe, selectedAges) &&
     (!opts.skipDisliked || recipe.rating !== 1));

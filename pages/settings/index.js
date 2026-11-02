@@ -34,6 +34,9 @@ function exportError(error) {
 }
 
 Page({
+  onShareAppMessage() {
+    return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     counts: {}, warning: '', backupText: '', showPaste: false, busy: false, error: '',
     syncState: 'pending', syncTitle: '等待同步', syncMessage: '', syncTime: '', storageDescription: '',

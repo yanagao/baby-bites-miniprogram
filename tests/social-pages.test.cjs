@@ -51,7 +51,9 @@ test('own profile stays private until an explicit save and share links contain o
   assert.equal(saved, 0);
   assert.equal(fixture.page.data.isSelf, true);
   assert.equal(fixture.page.onShareAppMessage().path, '/pages/home/index');
-  assert.deepEqual(fixture.calls.share, ['hide']);
+  assert.equal(fixture.page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
+  assert.equal(fixture.calls.share.at(-1), 'show');
+  assert.ok(!fixture.calls.share.includes('hide'));
   fixture.page.setData({profile});
   const share = fixture.page.onShareAppMessage();
   assert.equal(share.path, '/pages/profile/index?id=' + profile.id);
@@ -71,13 +73,31 @@ test('a late profile response cannot replace a newer profile or an unloaded page
   assert.equal(unloaded.data.profile, null);
 });
 
-test('unavailable profiles cannot keep sharing a stale profile card', async () => {
-  const {page} = setup('profile', {getProfile: async () => { throw Error('主页暂时不可用'); }}, {id: profile.id});
+test('unavailable profiles offer the app card without sharing stale profile data or a screenshot', async () => {
+  const {page, calls} = setup('profile', {getProfile: async () => { throw Error('主页暂时不可用'); }}, {id: profile.id});
   page.setData({profile, recipes: [recipe]});
   await page.load();
   assert.equal(page.data.profile, null);
   assert.equal(page.data.recipes.length, 0);
   assert.equal(page.onShareAppMessage().path, '/pages/home/index');
+  assert.equal(page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
+  assert.equal(calls.share.at(-1), 'show');
+  assert.doesNotMatch(JSON.stringify(page.onShareAppMessage()), new RegExp(profile.name + '|' + profile.id));
+});
+
+test('loading and switched-account profiles keep a generic share card available without writes', async () => {
+  const gate = deferred();
+  const fixture = setup('profile', {getProfile: () => gate.promise}, {id: profile.id});
+  const work = fixture.page.load();
+  assert.equal(fixture.calls.share.at(-1), 'show');
+  assert.deepEqual(clone(fixture.page.onShareAppMessage()), {title: '小口袋 · 今天辅食吃什么',
+    path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'});
+  gate.resolve({profile, recipes: [], isSelf: false}); await work;
+  assert.equal(fixture.page.onShareAppMessage().path, '/pages/profile/index?id=' + profile.id);
+  fixture.changeOwner('owner-b');
+  assert.equal(fixture.calls.share.at(-1), 'show');
+  assert.equal(fixture.page.onShareAppMessage().path, '/pages/home/index');
+  assert.equal(fixture.page.onShareAppMessage().imageUrl, '/assets/cute/pocket-mascot.png');
 });
 
 test('profile save requires a nickname and never submits the baby nickname', async () => {
@@ -122,6 +142,7 @@ test('one-tap copy sends only the public ID, blocks duplicate taps and changes t
   const pending = deferred(); let imports = 0, incoming;
   const {page, calls} = setup('public-recipe', {
     getRecipe: async () => ({recipe, author: profile}), findImportedRecipe: () => null,
+    getProfileSummary: async () => ({profile, isSelf: false, following: false, followedBy: false}),
     addToCookbook(id) { imports++; incoming = id; return pending.promise; }
   }, {id: recipe.id});
   await page.load();
@@ -136,6 +157,7 @@ test('one-tap copy sends only the public ID, blocks duplicate taps and changes t
 test('a failed copy never claims that a recipe was added', async () => {
   const {page, calls} = setup('public-recipe', {
     getRecipe: async () => ({recipe, author: profile}), findImportedRecipe: () => null,
+    getProfileSummary: async () => ({profile, isSelf: false, following: false, followedBy: false}),
     addToCookbook: async () => { throw Error('作者已取消公开'); }
   }, {id: recipe.id});
   await page.load(); await page.add();
@@ -186,6 +208,7 @@ test('switching accounts blocks an existing imported-recipe link and one-tap cop
   let imports = 0;
   const fixture = setup('public-recipe', {
     getRecipe: async () => ({recipe, author: profile}), findImportedRecipe: () => ({id: 'account-a-copy'}),
+    getProfileSummary: async () => ({profile, isSelf: false, following: false, followedBy: false}),
     addToCookbook: async () => { imports++; }
   }, {id: recipe.id});
   await fixture.page.load();
@@ -202,7 +225,8 @@ test('pending save, follow and copy have no UI effects after page unload', async
       const fixture = setup(method === 'add' ? 'public-recipe' : 'profile', {
         saveProfile: () => pending.promise, setFollowing: () => pending.promise, addToCookbook: () => pending.promise
       }, {id: method === 'add' ? recipe.id : profile.id});
-      fixture.page.setData({name: '公开昵称', profile, recipe, isSelf: method === 'save'});
+      fixture.page.setData({name: '公开昵称', profile, recipe, isSelf: method === 'save',
+        ...(method === 'add' ? {loading: false, authorKnown: true, authorIsSelf: false} : {})});
       const task = fixture.page[method]();
       fixture.page.onUnload();
       const updates = fixture.calls.updates;

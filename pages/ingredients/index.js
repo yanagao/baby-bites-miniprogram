@@ -3,7 +3,10 @@ const selectors = require('../../utils/selectors');
 const ui = require('../../utils/ui');
 const commonIngredients = ['南瓜', '鸡蛋', '西兰花', '小米', '土豆', '豆腐', '胡萝卜', '番茄'];
 Page({
-  data: {warning: '', options: [], pantry: [], ingredient: '', search: '', showAllIngredients: false, ingredientCount: 0, matchCount: 0, matches: [], previewMatches: [], completeMatches: [], partialMatches: [], customPanels: []},
+  onShareAppMessage() {
+    return {title: '按食材找菜 · 小口袋', path: '/pages/ingredients/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
+  data: {hasAllergies: false, warning: '', options: [], pantry: [], ingredient: '', search: '', showAllIngredients: false, ingredientCount: 0, matchCount: 0, matches: [], previewMatches: [], completeMatches: [], partialMatches: [], customPanels: []},
   onShow() { this.refresh(); },
   refresh() {
     try {
@@ -12,8 +15,9 @@ Page({
       const search = selectors.normalizeIngredient(this.data.search);
       const visibleNames = search ? names.filter(name => name.includes(search)) : this.data.showAllIngredients ? names : commonIngredients;
       const options = visibleNames.map(name => ({label: name, value: name, icon: 'rectangle', selected: pantry.includes(name)}));
-      const matches = selectors.matchRecipes(store.getState(), pantry, false);
-      this.setData({pantry, options, ingredientCount: names.length,
+      const state = store.getState();
+      const matches = selectors.matchRecipes(state, pantry, false);
+      this.setData({hasAllergies: Boolean(state.allergies && state.allergies.length), pantry, options, ingredientCount: names.length,
         matchCount: matches.length, matches, previewMatches: matches.slice(0, 4),
         completeMatches: matches.filter(recipe => recipe.complete),
         partialMatches: matches.filter(recipe => !recipe.complete), warning: store.getWarning()});

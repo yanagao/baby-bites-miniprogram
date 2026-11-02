@@ -7,6 +7,9 @@ const portions = ['暂不记录', '吃了一点', '吃了约一半', '吃了大�
 const previousPortions = { '尝了几口': 1, '吃了一半': 2, '吃了大半': 3, '光盘啦': 4 };
 
 Page({
+  onShareAppMessage() {
+    return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
+  },
   data: {
     recipe: null, editing: false, missingMessage: '没有找到这道菜谱，可能已经被删除。',
     rating: 0,
