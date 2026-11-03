@@ -6,7 +6,7 @@
 
 上线须按 [family-database.json](./family-database.json) 创建三个 deny-all 集合及公开菜谱的家庭清单索引，并按 [反馈配置](../babyBitesSocial/feedback-database.json) 创建配套集合/索引，再部署 `babyBitesSync` 与 `babyBitesSocial`、上传新版客户端。新身份读取会查询成员映射，不能漏建集合后直接部署；配置清单不会自行应用。真实部署证据与多账号真机验收另记，不以本地源码或单元测试通过宣称已上线。
 
-2026-11-03 部署记录：已在既有环境创建上述 4 个 deny-all 集合与 4 个复合索引，并部署 Sync/Social；两支函数均 Active、30 秒超时，线上源码与本地全部 JS 的 SHA-256 一致。保持原存储规则及其他业务函数不变。证据见[部署核验](../../../output/family-sharing/device-2026-11-03/deployed/verification.json)。此记录不代表客户端正式发布或多账号真机验收。
+2026-11-03 部署记录：已在既有环境创建上述 4 个 deny-all 集合与 4 个复合索引，并部署 Sync/Social；两支函数均 Active、30 秒超时，线上源码与本地全部 JS 的 SHA-256 一致。保持原存储规则及其他业务函数不变。证据见[部署核验](../../../output/family-sharing/device-2026-11-03/deployed/verification.json)。同日 1.5.0 发布准备已按 Social → Sync 顺序更新截至 `003e39e` 的审查修复，下载核验全部 JS 与运行配置一致，真实身份、家庭状态及社交读取成功，见[1.5.0 部署核验](../../../output/release-1.5.0/verification.json)。客户端 1.5.0 已上传开发版本，尚未提审或正式发布；这些记录不代表多账号真机验收。
 
 - `identity({protocolVersion:2})` 返回 `{owner,scope,revision,fileID}`，scope 为 `{kind:'personal',id:owner}` 或 `{kind:'family',id,membershipId}`。家庭成员使用旧客户端读取或提交均返回 `CLIENT_UPDATE_REQUIRED`。
 - `familyState` 返回 `{owner,scope,family}`；family 包含 `id/name/isManager/memberId/membershipId/memberCount/members`，成员仅含 `{id,label,isManager,isSelf}`，不暴露成员微信 owner。

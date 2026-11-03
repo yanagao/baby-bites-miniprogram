@@ -1,8 +1,8 @@
 # 小口袋公开主页与关注
 
-## 家庭作用域与作者（2026-11-02，尚未部署）
+## 家庭作用域与作者（1.5.0 后端已部署）
 
-家庭协议由 `babyBitesSync` 管理，部署配置见 [family-database.json](../babyBitesSync/family-database.json)。两个独立部署的函数各包含相同的 `family.js`，测试校验其字节一致。当前改动尚未部署；需先建立家庭、成员映射、邀请三个 deny-all 集合和 `family_publication_inventory` 索引，再更新两函数与客户端，不放宽现有私人存储权限。
+家庭协议由 `babyBitesSync` 管理，部署配置见 [family-database.json](../babyBitesSync/family-database.json)。两个独立部署的函数各包含相同的 `family.js`，测试校验其字节一致。2026-11-03 已建立所需家庭、成员映射、邀请及反馈集合/索引，并按 Social → Sync 顺序部署截至 `003e39e` 的修复；两者均 Active、30 秒超时，下载源码及运行配置与本地一致，见[1.5.0 核验](../../../output/release-1.5.0/verification.json)。客户端 1.5.0 已上传开发版本，未提审或正式发布。首次部署仍须先建立 deny-all 集合与配套索引，不放宽现有私人存储权限。
 
 社交 owner 始终为个人微信身份。涉及私人快照的操作按可信成员映射解析当前 scope，从家庭 canonical 快照读取；请求入口接受的 scope 通过每次调用独立的参数传至后续读取（含保存回执），不能在请求中途改用刚加入的家庭或退出后的个人数据。公开前 token 同时绑定 scope/membershipId、revision/fileID、内容和原作者。事务内再次验证实际调用者仍为同一次加入的成员，旧 scope、移出后重加和迟到操作不能跨家庭提交。
 
