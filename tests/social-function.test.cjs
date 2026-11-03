@@ -1367,6 +1367,32 @@ test('explicit withdrawal removes a publication and later synchronization cannot
   assert.deepEqual(env.table('recipes').get(published.recipe.id), withdrawn);
 });
 
+test('restored recipes regain their share link after deletion while manual withdrawals stay hidden', async () => {
+  const env = fakeEnvironment(), input = snapshot(), handler = env.handler();
+  input.data.recipes.push({...input.data.recipes[0], id: 'manual'});
+  env.commit('alice', input);
+  assert.equal((await handler({action: 'syncPublications'})).updated, 2);
+  const publicId = source => recipeIdFor(ownerFor('alice'), source);
+  await handler({action: 'unpublish', sourceRecipeId: 'manual'});
+  const deleted = clone(input);
+  deleted.data.recipes = [];
+  deleted.data.logs = [];
+  env.commit('alice', deleted);
+  assert.equal((await handler({action: 'syncPublications'})).removed, 1);
+  assert.equal(env.table('recipes').get(publicId('recipe-1')).withdrawalReason, 'deleted');
+  assert.equal(env.table('recipes').get(publicId('manual')).withdrawalReason, 'manual');
+
+  const legacy = env.addPublished('alice', 'legacy');
+  Object.assign(env.table('recipes').get(legacy), {published: false, publicationPolicyVersion: 3});
+  input.data.recipes.push({...input.data.recipes[0], id: 'legacy'});
+  env.commit('alice', input);
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  const visitor = env.handler('visitor');
+  assert.equal((await visitor({action: 'recipe', recipeId: publicId('recipe-1')})).recipe.id, publicId('recipe-1'));
+  assert.equal((await visitor({action: 'recipe', recipeId: publicId('manual')})).error.code, 'NOT_FOUND');
+  assert.equal((await visitor({action: 'recipe', recipeId: legacy})).error.code, 'NOT_FOUND');
+});
+
 test('publish refuses a snapshot that changed while preparing publication', async () => {
   const env = fakeEnvironment();
   env.addProfile('alice');

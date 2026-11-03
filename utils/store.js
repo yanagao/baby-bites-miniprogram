@@ -404,7 +404,7 @@ function applySyncedSnapshot(snapshot, options) {
   if (options.revision < sync.revision) return false;
   const incoming = validateSnapshot(snapshot);
   const editedDuringSync = options.sequence !== sync.sequence;
-  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming) :
+  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming, scope && scope.kind === 'family') :
     {...incoming, data: {...incoming.data, ...mergeAllergies(state, incoming.data)}};
   const validated = validateData(merged.data);
   const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync,

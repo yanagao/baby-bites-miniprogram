@@ -18,6 +18,10 @@ function validSource(source) {
     typeof source.recipeId === 'string' && /^[a-f0-9]{64}$/.test(source.recipeId) && nonempty(source.authorName, 30));
 }
 
+const validAuthor = value => value === undefined || typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const validRecorder = value => value === undefined || (keys(value, ['memberId', 'label']) &&
+  typeof value.memberId === 'string' && /^[a-f0-9]{32}$/.test(value.memberId) && nonempty(value.label, 20));
+
 function reject(message, code = 'INVALID_SNAPSHOT') {
   const error = new Error(message);
   error.code = code;
@@ -63,7 +67,7 @@ function validDate(value, now) {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day && value <= today;
 }
 
-function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed}) {
+function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed, familyTombstones = false}) {
   if (!Buffer.isBuffer(content) || !content.length || content.length > MAX_SNAPSHOT_BYTES) {
     reject('同步文件为空或超过 5 MB。');
   }
@@ -103,7 +107,7 @@ function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed})
       !recipe.steps.every(step => nonempty(step, 2000)) ||
       !optionalString(recipe.note, 2000) || !optionalString(recipe.imageKey, 40) ||
       !optionalBoolean(recipe.favorite) || !optionalBoolean(recipe.isExample) ||
-      (recipe.createdBy !== undefined && (typeof recipe.createdBy !== 'string' || !/^[a-f0-9]{64}$/.test(recipe.createdBy))) ||
+      !validAuthor(recipe.createdBy) ||
       !validSource(recipe.source) ||
       !optionalTime(recipe.createdAt) || !optionalTime(recipe.updatedAt)) reject('菜谱信息不完整或超过限制。');
     if (recipe.photo !== '' && !(photoAllowed ? photoAllowed(recipe.photo) : ownedFile(recipe.photo, env, owner, 'photos'))) {
@@ -117,7 +121,7 @@ function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed})
   data.logs.forEach(log => {
     if (!keys(log, ['id', 'recipeId', 'rating', 'date', 'portion', 'note', 'createdAt', 'updatedAt', 'recordedBy']) ||
       !nonempty(log.id, 100) || logIds.has(log.id) || !recipeIds.has(log.recipeId) ||
-      (log.recordedBy !== undefined && (!keys(log.recordedBy, ['memberId', 'label']) || typeof log.recordedBy.memberId !== 'string' || !/^[a-f0-9]{32}$/.test(log.recordedBy.memberId) || !nonempty(log.recordedBy.label, 20))) ||
+      !validRecorder(log.recordedBy) ||
       ![1, 2, 3].includes(log.rating) || !validDate(log.date, now) ||
       !optionalString(log.portion, 40) || !optionalString(log.note, 500) ||
       !optionalTime(log.createdAt) || !optionalTime(log.updatedAt)) reject('用餐记录缺少有效菜谱、喜好或日期。');
@@ -127,8 +131,11 @@ function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed})
     const entries = snapshot.deleted[kind];
     if (!Array.isArray(entries) || entries.length > (kind === 'recipes' ? 10000 : 100000)) reject('删除记录超过同步限制。');
     const ids = new Set();
+    const fields = ['id', 'updatedAt'];
+    if (familyTombstones) fields.push(...(kind === 'recipes' ? ['createdBy', 'source'] : ['recordedBy']));
     entries.forEach(entry => {
-      if (!keys(entry, ['id', 'updatedAt']) || !nonempty(entry.id, 100) || ids.has(entry.id) || !timestamp(entry.updatedAt)) {
+      if (!keys(entry, fields) || !nonempty(entry.id, 100) || ids.has(entry.id) || !timestamp(entry.updatedAt) ||
+        !validAuthor(entry.createdBy) || !validSource(entry.source) || !validRecorder(entry.recordedBy)) {
         reject('删除记录格式不正确。');
       }
       ids.add(entry.id);

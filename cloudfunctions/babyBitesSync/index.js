@@ -73,7 +73,7 @@ function createHandler({cloud, now = Date.now, random}) {
       const exposedCodes = new Set(['UNAUTHENTICATED', 'INVALID_ENV', 'INVALID_REQUEST', 'INVALID_FILE',
         'INVALID_SNAPSHOT', 'INVALID_ACCOUNT', 'STORAGE_FAILED', 'CLIENT_UPDATE_REQUIRED', 'ACCOUNT_CHANGED',
         'FAMILY_CHANGED', 'INVALID_FAMILY', 'FAMILY_CONFLICT', 'FAMILY_REQUIRED', 'FAMILY_FORBIDDEN', 'FAMILY_TRANSFER_REQUIRED',
-        'FAMILY_MEMBER_LIMIT', 'ALREADY_IN_FAMILY', 'INVITE_INVALID', 'SYNC_REQUIRED']);
+        'FAMILY_MEMBER_LIMIT', 'ALREADY_IN_FAMILY', 'INVITE_INVALID', 'SYNC_REQUIRED', 'PUBLICATION_PENDING']);
       if (exposedCodes.has(error && error.code)) return {error: {code: error.code, message: error.message}};
       // Do not return upstream diagnostics containing another resource's identifiers.
       return {error: {code: 'SYNC_FAILED', message: '云端同步暂时失败，请稍后重试。'}};

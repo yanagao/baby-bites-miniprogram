@@ -6,10 +6,10 @@ const PERSONAL = {kind: 'personal', id: OWNER}, FAMILY = {kind: 'family', id: 'c
 const clone = value => JSON.parse(JSON.stringify(value));
 const deferred = () => {let resolve; const promise = new Promise(done => {resolve = done;}); return {resolve, promise};};
 function setup() {
-  let owner = OWNER, scope = PERSONAL, serverScope = PERSONAL, locks = 0, dirty = false, sequence = 1;
+  let owner = OWNER, scope = PERSONAL, serverScope = PERSONAL, locks = 0, dirty = false, sequence = 1, revision = 3;
   const listeners = new Set(), calls = [], syncCalls = [], hooks = {};
   const key = () => owner + ':' + scope.kind + ':' + scope.id + (scope.membershipId ? ':' + scope.membershipId : '');
-  const getInfo = () => ({owner, scope: clone(scope), scopeKey: key(), revision: 3, sequence, dirty, blocked: false});
+  const getInfo = () => ({owner, scope: clone(scope), scopeKey: key(), revision, sequence, dirty, blocked: false});
   const notify = () => listeners.forEach(fn => fn(getInfo()));
   const setScope = value => {scope = clone(value); notify();};
   const store = {getSyncInfo: getInfo, subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);},
@@ -33,6 +33,7 @@ function setup() {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../utils/family.js'), 'utf8'), {module: mod, wx,
     require(name) {if (name === './store') return store; if (name === './cloud-sync') return cloudSync; if (name === '../config/cloud') return {env: 'test', functionName: 'babyBitesSync'}; throw Error(name);}});
   return {api: mod.exports, calls, syncCalls, hooks, setScope, getInfo, locks: () => locks,
+    setRevision(value) {revision = value; notify();},
     setDirty(value = true) {dirty = value; sequence++; notify();},
     setServerScope(value) {serverScope = clone(value);}, setOwner(value) {owner = value; scope = {kind: 'personal', id: value}; serverScope = scope; notify();}};
 }
@@ -87,6 +88,19 @@ test('a lost create response retries the exact request and original scope even a
   await assert.rejects(app.api.create({name: '小米家', label: '妈妈'}), error => error.code === 'NETWORK');
   await app.api.create({name: '小米家', label: '妈妈'});
   assert.equal(app.calls[0].requestId, app.calls[1].requestId); assert.deepEqual(app.calls[1].expectedScope, PERSONAL);
+});
+test('retrying family creation after a confirmed revision conflict uses the newly synced revision', async () => {
+  for (const code of ['SYNC_REQUIRED', 'FAMILY_CONFLICT']) {
+    const app = setup(), input = {name: '小米家', label: '妈妈'};
+    app.hooks.request = () => ({error: {code}});
+    await assert.rejects(app.api.create(input), error => error.code === code);
+    app.hooks.sync = () => {app.setRevision(4);};
+    delete app.hooks.request;
+    const result = await app.api.create(input);
+    assert.equal(result.scope.kind, 'family');
+    assert.deepEqual(app.calls.map(call => call.baseRevision), [3, 4]);
+    assert.notEqual(app.calls[0].requestId, app.calls[1].requestId);
+  }
 });
 test('a management result performs a fresh check when it first joins a pre-transition foreground sync', async () => {
   const app = setup(); let reads = 0;

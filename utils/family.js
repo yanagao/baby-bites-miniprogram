@@ -4,6 +4,10 @@ const store = require('./store');
 const cloudSync = require('./cloud-sync');
 const TTL = 30000;
 const transitions = new Map();
+// These errors are returned before family creation commits. Network errors
+// and generic backend failures can also occur after a successful commit.
+const createRejections = new Set(['SYNC_REQUIRED', 'FAMILY_CONFLICT', 'FAMILY_CHANGED', 'ALREADY_IN_FAMILY',
+  'INVALID_REQUEST', 'INVALID_SNAPSHOT', 'INVALID_FILE', 'CLIENT_UPDATE_REQUIRED']);
 let cached = null, flight = null, epoch = 0;
 let observedKey = store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '';
 store.subscribe(info => {
@@ -102,7 +106,10 @@ async function mutate(action, input = {}, transition = false) {
       transitions.set(key, attempt);
     }
     try {
-      const result = await request(action, {...input, ...(attempt || {})}, before, transition);
+      const result = await request(action, {...input, ...(attempt || {})}, before, transition).catch(error => {
+        if (action === 'familyCreate' && createRejections.has(error.code)) transitions.delete(key);
+        throw error;
+      });
       cached = null;
       // The backend has committed the transition. Only a new trusted identity
       // read selects the local scope; never merge data from the previous one.

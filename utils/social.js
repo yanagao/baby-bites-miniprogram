@@ -496,7 +496,7 @@ async function copyPhoto(url, owner) {
 async function importRecipe(id) {
   const owner = await ready();
   const existing = findImportedRecipe(id);
-  if (existing) { queueSaveReceipt(owner, id, existing.id); return {recipeId: existing.id, added: false}; }
+  if (existing) return {recipeId: existing.id, added: false};
   const response = await request('recipe', {recipeId: id}, owner);
   const recipe = response.recipe;
   if (!object(recipe) || recipe.id !== id || !profileId(recipe.profileId)) fail('这道菜谱的信息不完整，请重新打开。');
@@ -508,7 +508,7 @@ async function importRecipe(id) {
     assertOwner(owner);
     const result = store.addPublicRecipe(Object.assign({}, recipe, {photo}, ageGroups === undefined ? {} : {ageGroups}), owner.id);
     keepPhoto = result.added;
-    queueSaveReceipt(owner, id, result.recipeId);
+    if (result.added) queueSaveReceipt(owner, id, result.recipeId);
     return result;
   } finally {
     if (!keepPhoto) await removeLocal(photo);

@@ -70,6 +70,9 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
       if (!local || !local.source || local.source.recipeId !== recipe._id || local.source.profileId !== recipe.profileId || await isBuiltin(local)) {
         reject('请先将这道菜谱保存并完成同步。', 'FEEDBACK_NOT_SAVED');
       }
+      // Everyone in the family can read the copy. Only its server-stamped
+      // creator can use it as proof of their own save.
+      if (account.__scope.kind === 'family' && local.createdBy !== owner) return {recorded: false};
       const id = hash(`recipe-save:${owner}:${recipe._id}`);
       const recorded = await db.runTransaction(async transaction => {
         if (session.assertScope) await session.assertScope(transaction);

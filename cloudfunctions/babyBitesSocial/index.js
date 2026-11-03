@@ -50,6 +50,15 @@ function sourceId(value) {
   return value;
 }
 
+function canAutoPublish(record) {
+  if (!record) return true;
+  if (record.published !== false) return false;
+  if (record.withdrawalReason) return record.withdrawalReason === 'deleted';
+  // A policy-3 tombstone without a reason could be a manual withdrawal. Only
+  // the older opt-in policy allowed migration of unmarked, unpublished rows.
+  return (record.publicationPolicyVersion || 0) < 3;
+}
+
 const isBabyAgeMonths = value => Number.isInteger(value) && value >= 0 && value <= 120;
 const legacyBabyAge = record => record && isBabyAgeMonths(record.babyAgeMonths) ? record.babyAgeMonths : null;
 // Preserve a stored calendar date through unrelated writes, including a request
@@ -405,8 +414,10 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     await write('profiles', ownProfileId, {owner, name: defaultProfileName(owner), bio: '', updatedAt: now()}, transaction);
   }
 
-  async function retirePublication({owner, account, previous, builtin}) {
-    if (!previous || previous.published !== true) return false;
+  async function retirePublication({owner, account, previous, builtin, reason}) {
+    const needsRetirement = record => record && (record.published === true ||
+      reason === 'manual' && record.published === false && record.withdrawalReason !== 'manual');
+    if (!needsRetirement(previous)) return false;
     if ((previous.publicationScope || 'personal') !== scopeKey(account && account.__scope)) return false;
     if (previous.owner !== owner || previous.profileId !== profileIdFor(owner) ||
       recipeIdFor(owner, previous.sourceRecipeId) !== previous._id) reject('菜谱索引暂时无法读取。', 'INVALID_ACCOUNT');
@@ -414,11 +425,11 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     if (!Number.isSafeInteger(generation) || generation < 0) reject('菜谱版本暂时无法读取。', 'INVALID_ACCOUNT');
     return db.runTransaction(async transaction => {
       const current = await get('recipes', previous._id, transaction);
-      if (!current || current.published !== true) return false;
+      if (!needsRetirement(current)) return false;
       if (current.generation !== generation) reject('菜谱刚有变化，请重新同步。', 'CONFLICT');
       await assertCommitted(transaction, owner, account);
       await write('recipes', previous._id, {owner, profileId: profileIdFor(owner),
-        sourceRecipeId: previous.sourceRecipeId, published: false, generation: generation + 1, updatedAt: now(),
+        sourceRecipeId: previous.sourceRecipeId, published: false, withdrawalReason: reason, generation: generation + 1, updatedAt: now(),
         publicationScope: current.publicationScope || 'personal', publicationPolicyVersion: current.publicationPolicyVersion || 0,
         ...(builtin ? {builtin: true} : {}), ...(current.source ? {source: current.source} : {})}, transaction);
       return true;
@@ -435,7 +446,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       account.__actor === owner && recipe.createdBy === owner && record && record.owner === owner && record.profileId === ownProfileId &&
       record.sourceRecipeId === id && (record.publicationScope || 'personal') === 'personal';
     if (migratePersonal && !canMigratePersonal(previous)) reject('菜谱关联已变化，请重新同步。', 'CONFLICT');
-    if (firstOnly && previous && (previous.published === true || previous.publicationPolicyVersion === PUBLICATION_POLICY_VERSION ||
+    if (firstOnly && previous && (!canAutoPublish(previous) ||
       (previous.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(previous))) return {updated: false};
     if (previous && (previous.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(previous)) {
       if (allowCreate) reject('这份公开菜谱属于另一个家庭，请返回原家庭查看。', 'CONFLICT');
@@ -494,7 +505,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       if (migratePersonal && !canMigratePersonal(current)) reject('菜谱关联已变化，请重新同步。', 'CONFLICT');
       // Automatic first publication must never revive a concurrent withdrawal
       // or take over a record already associated with another data scope.
-      if (firstOnly && current && (current.published === true || current.publicationPolicyVersion === PUBLICATION_POLICY_VERSION ||
+      if (firstOnly && current && (!canAutoPublish(current) ||
         (current.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(current))) return false;
       if (automatic && !allowCreate && (!current || current.published !== true)) return false;
       if ((current ? current.generation : 0) !== generation) reject('菜谱刚有变化，请重新同步。', 'CONFLICT');
@@ -698,7 +709,10 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
             reject('菜谱索引暂时无法读取。', 'INVALID_ACCOUNT');
           }
           const builtin = await isBuiltin(previous);
-          if (builtin || !eligible.has(previous.sourceRecipeId) || (scopeState.family && eligible.get(previous.sourceRecipeId).createdBy !== previous.owner)) work.push({previous, builtin});
+          if (builtin || !eligible.has(previous.sourceRecipeId) || (scopeState.family && eligible.get(previous.sourceRecipeId).createdBy !== previous.owner)) {
+            const reason = !builtin && !previous.source && !activeRecipe(snapshot, previous.sourceRecipeId) ? 'deleted' : 'ineligible';
+            work.push({previous, builtin, reason});
+          }
         }
         const authors = new Map();
         const authorFor = async id => { if (!authors.has(id)) authors.set(id, profile(profileIdFor(id))); return authors.get(id); };
@@ -714,18 +728,17 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
             // member's public identity. Existing shared recipes remain editable
             // by all current members through the update-only path above.
             const record = await get('recipes', recipeIdFor(owner, recipe.id));
-            if (!record || (record.published === false && record.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION &&
-              (record.publicationScope || 'personal') === scopeKey(account.__scope))) {
+            if (canAutoPublish(record) && (!record || (record.publicationScope || 'personal') === scopeKey(account.__scope))) {
               work.push({recipe, previous: record, publicationOwner: owner, firstOnly: true});
             } else if (scopeState.family && record.owner === owner && (record.publicationScope || 'personal') === 'personal' &&
-              (record.published === true || record.published === false && record.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION)) {
+              (record.published === true || canAutoPublish(record))) {
               work.push({recipe, previous: record, publicationOwner: owner, migratePersonal: true, firstOnly: record.published !== true});
             }
           }
         }
         for (const item of work.slice(0, PUBLICATION_BATCH_SIZE)) {
           if (!item.recipe) {
-            if (await retirePublication({owner: item.previous.owner, account, previous: item.previous, builtin: item.builtin})) progress.removed++;
+            if (await retirePublication({owner: item.previous.owner, account, previous: item.previous, builtin: item.builtin, reason: item.reason})) progress.removed++;
           } else {
             const publicationOwner = item.publicationOwner;
             const previous = await get('recipes', recipeIdFor(publicationOwner, item.recipe.id));
@@ -819,7 +832,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const recipe = activeRecipe(snapshot, sourceRecipeId);
         const previous = await get('recipes', recipeIdFor(owner, sourceRecipeId));
         if (previous && (previous.publicationScope || 'personal') !== scopeKey(account && account.__scope)) reject('当前家庭中没有这份分享。', 'NOT_FOUND');
-        await retirePublication({owner, account, previous, builtin: await isBuiltin(recipe || previous)});
+        await retirePublication({owner, account, previous, builtin: await isBuiltin(recipe || previous), reason: 'manual'});
         return {ok: true};
       }
 

@@ -732,6 +732,16 @@ test('duplicate add taps share one request and create an independent attributed 
   assert.equal(app.social.findImportedRecipe(PUBLIC_ID).name, '我改过的南瓜饭');
 });
 
+test('opening an already saved family copy does not queue another save receipt', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope});
+  app.store.addPublicRecipe(publicRecipe(), OWNER);
+  const result = await app.social.addToCookbook(PUBLIC_ID);
+  await flushTasks();
+  assert.equal(result.added, false);
+  assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
+});
+
 function readyUserRecipe(app) {
   const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '不分享的小心得'});
   app.hooks.sync = () => {

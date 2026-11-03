@@ -49,6 +49,19 @@ function accountCache(data = empty(), schemaVersion) {
     ...(schemaVersion === undefined ? {} : {snapshotSchemaVersion: schemaVersion})}};
 }
 
+test('a newer local family edit cannot put an unverifiable cached author or recorder back into a migrated snapshot', () => {
+  const data = dataWith([oneRecipe('old', 10)]);
+  data.logs = [{id: 'meal', recipeId: 'old', rating: 3, date: '2026-01-01', createdAt: 1, updatedAt: 10}];
+  const remote = snapshot(data), local = snapshot(data);
+  Object.assign(local.data.recipes[0], {createdBy: B, name: '新的家常做法', updatedAt: 20});
+  Object.assign(local.data.logs[0], {recordedBy: {memberId: 'b'.repeat(32), label: '爸爸'}, note: '吃了两口', updatedAt: 20});
+  const merged = mergeSnapshots(local, remote, true);
+  assert.equal(merged.data.recipes[0].createdBy, undefined);
+  assert.equal(merged.data.recipes[0].name, '新的家常做法');
+  assert.equal(merged.data.logs[0].recordedBy, undefined);
+  assert.equal(merged.data.logs[0].note, '吃了两口');
+});
+
 test('reading, binding and ordinary edits do not certify legacy snapshot caches', () => {
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, false);

@@ -108,6 +108,17 @@ function familyFile(fileID, scope, kind) {
   return !!match && match[1] === config.env && scope && scope.kind === 'family' && match[3] === scope.id && match[4] === kind &&
     (kind === 'snapshots' ? /\.json$/.test(match[5]) : /\.(?:jpg|png|webp)$/.test(match[5]));
 }
+function reconcileFamilyPhotos(snapshot, remote, scope) {
+  const currentPhotos = new Map(remote.data.recipes.map(recipe => [recipe.id, recipe.photo]));
+  const referenced = new Set(currentPhotos.values());
+  for (const recipe of snapshot.data.recipes) {
+    // A family ID comes from an earlier cloud snapshot. A freshly selected
+    // photo is still a local file or the uploader's own staging file.
+    if (!familyFile(recipe.photo, scope, 'photos')) continue;
+    if (currentPhotos.has(recipe.id)) recipe.photo = currentPhotos.get(recipe.id);
+    else if (!referenced.has(recipe.photo)) recipe.photo = '';
+  }
+}
 function checkResult(result, expectedOwner, expectedScope) {
   if (result && result.error) {
     const messages = {
@@ -308,7 +319,8 @@ async function synchronize() {
       assertOwner(owner);
       require('./family-photos').install(remoteInfo.photoURLs, synchronizingScopeKey);
     } else remote = remoteInfo.fileID ? await downloadSnapshot(remoteInfo.fileID, owner) : emptySnapshot();
-    const snapshot = mergeSnapshots(local, remote);
+    const snapshot = mergeSnapshots(local, remote, scope.kind === 'family');
+    if (scope.kind === 'family') reconcileFamilyPhotos(snapshot, remote, scope);
     await uploadPhotos(snapshot, owner, uploadedPhotos);
     assertOwner(owner);
     if (remoteInfo.fileID && stableJSON(snapshot) === stableJSON(mergeSnapshots(remote, remote))) {

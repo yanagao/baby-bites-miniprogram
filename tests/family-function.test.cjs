@@ -59,6 +59,69 @@ test('empty personal accounts can create a family without accepting a client sna
   const env=environment(),result=await env.call('alice','familyCreate',personal('alice'),{name:'我们的家',roleLabel:'妈妈',requestId:'empty-family',baseRevision:0,snapshot:snapshot()});
   assert.ok(result.family);const read=await env.read('alice',result.scope);assert.equal(read.snapshot.data.recipes.length,0);assert.equal(read.snapshot.data.logs.length,0);
 });
+test('creating a family from a personal backup never credits or publishes as an invited member', async () => {
+  const env = environment(), data = snapshot();
+  data.data.recipes[0].createdBy = ownerFor('bob');
+  data.data.logs[0].recordedBy = {memberId: 'b'.repeat(32), label: '爸爸'};
+  const alice = await env.create('alice', data), bob = await env.join();
+  const {snapshot: shared} = await env.read('alice', alice.scope);
+  assert.equal(shared.data.recipes[0].createdBy, ownerFor('alice'));
+  assert.equal(shared.data.logs[0].recordedBy, undefined);
+  assert.deepEqual(await env.socialCall('bob', 'syncPublications', bob.scope), {updated: 0, removed: 0, hasMore: false});
+  assert.equal(env.tables.get(COLLECTIONS.recipes).size, 0);
+});
+test('concurrent legacy family reads migrate a forged initial author once and only sign the corrected large snapshot', async () => {
+  const env = environment(), data = snapshot();
+  data.data.recipes = Array.from({length: 300}, (_, index) => ({...recipe('r' + (index + 1)), note: '饭'.repeat(700)}));
+  const alice = await env.create('alice', data), bob = await env.join();
+  const family = env.tables.get(COLLECTIONS.families).get(alice.scope.id), original = family.fileID;
+  delete family.attributionV1Revision;
+  const legacy = JSON.parse(env.files.get(original));
+  legacy.data.recipes[0].createdBy = ownerFor('bob');
+  legacy.data.logs[0].recordedBy = {memberId: bob.family.memberId, label: '爸爸'};
+  env.files.set(original, Buffer.from(JSON.stringify(legacy)));
+  const [one, two] = await Promise.all([env.read('alice', alice.scope), env.read('bob', bob.scope)]);
+  assert.ok(one.snapshotURL, JSON.stringify(one.error));
+  assert.equal(one.revision, 2);
+  assert.equal(two.fileID, one.fileID);
+  assert.notEqual(one.fileID, original);
+  assert.equal(two.snapshotURL, 'https://signed.test/' + encodeURIComponent(one.fileID));
+  assert.equal(env.calls.signed.includes(original), false);
+  assert.equal(env.tables.get(COLLECTIONS.families).get(alice.scope.id).originalAttributionFileID, original);
+  assert.equal(JSON.parse(env.files.get(original)).data.recipes[0].createdBy, ownerFor('bob'));
+  const corrected = JSON.parse(env.files.get(one.fileID));
+  assert.equal(corrected.data.recipes[0].createdBy, ownerFor('alice'));
+  assert.equal(corrected.data.logs[0].recordedBy, undefined);
+  assert.equal((await env.api('bob')({action: 'identity', protocolVersion: 2})).revision, 2);
+});
+test('an old writer carrying a stale provenance revision cannot authorize a forged publication in a mixed family', async () => {
+  const env = environment(), alice = await env.create(), bob = await env.join();
+  const family = env.tables.get(COLLECTIONS.families).get(alice.scope.id), old = JSON.parse(env.files.get(family.fileID));
+  family.revision = 3;
+  // An old instance could copy the V1 field into a later revision without
+  // validating its snapshot. Only a marker equal to that revision is trusted.
+  family.attributionV1Revision = 2;
+  const owner = ownerFor('bob');
+  old.data.recipes.push(...['corroborated', 'unverified', 'circular'].map(id => ({...recipe(id), createdBy: owner})));
+  env.files.set(family.fileID, Buffer.from(JSON.stringify(old)));
+  for (const [sourceRecipeId, publishedAt] of [['corroborated', family.createdAt - 1], ['circular', family.createdAt + 1]]) {
+    const id = recipeIdFor(owner, sourceRecipeId);
+    env.tables.get(COLLECTIONS.recipes).set(id, {_id: id, owner, profileId: profileIdFor(owner), sourceRecipeId,
+      publicationScope: 'family:' + family._id, publishedAt});
+  }
+  const denied = await env.socialCall('bob', 'previewPublication', bob.scope, {sourceRecipeId: 'unverified'});
+  assert.equal(denied.error.code, 'RECIPE_AUTHOR_REQUIRED');
+  const read = await env.read('bob', bob.scope);
+  assert.deepEqual(read.snapshot.data.recipes.map(item => [item.id, item.createdBy]), [
+    ['r1', ownerFor('alice')], ['corroborated', owner], ['unverified', undefined], ['circular', undefined]]);
+  assert.equal(read.revision, 4);
+  old.data.recipes[2].name = '仍可编辑和同步';
+  const saved = await env.commit('bob', bob.scope, read.revision, old);
+  assert.ok(saved.snapshot, JSON.stringify(saved));
+  assert.equal(saved.snapshot.data.recipes[2].name, '仍可编辑和同步');
+  assert.equal(saved.snapshot.data.recipes[2].createdBy, undefined);
+  assert.equal(env.tables.get(COLLECTIONS.families).get(alice.scope.id).attributionV1Revision, saved.revision);
+});
 test('birthdays prefer existing private data and only migrate a valid own public birthday when absent',async()=>{
   for(const existing of [undefined,null,'2025-01-01']){const env=environment(),data=snapshot();env.tables.get(COLLECTIONS.profiles).set(profileIdFor(ownerFor('alice')),{_id:profileIdFor(ownerFor('alice')),owner:ownerFor('alice'),name:'妈妈',babyBirthDate:'2024-01-01'});
     if(existing!==undefined)Object.assign(data.data,{babyBirthDate:existing,babyBirthDateUpdatedAt:NOW-2});const created=await env.create('alice',data),read=await env.read('alice',created.scope);assert.equal(read.snapshot.data.babyBirthDate,existing===undefined?'2024-01-01':existing);assert.equal(env.tables.get(COLLECTIONS.profiles).get(profileIdFor(ownerFor('alice'))).babyBirthDate,'2024-01-01');}
@@ -95,6 +158,70 @@ test('last member leaves to the original personal index without copying shared d
   const env=environment(),a=await env.create(),before=clone(env.tables.get(COLLECTIONS.accounts).get(ownerFor('alice'))),read=await env.read('alice',a.scope);read.snapshot.data.nickname='家庭里改名';read.snapshot.data.profileUpdatedAt++;
   assert.ok(!(await env.commit('alice',a.scope,read.revision,read.snapshot)).error);const left=await env.call('alice','familyLeave',a.scope);assert.equal(left.family,null);assert.deepEqual(env.tables.get(COLLECTIONS.accounts).get(ownerFor('alice')),before);assert.equal((await env.read('alice',a.scope)).error.code,'FAMILY_CHANGED');
 });
+test('last member can retry a failed public deletion before closing the family', async () => {
+  const env = environment(), source = snapshot(), photo = file(`users/${ownerFor('alice')}/photos/dinner.jpg`);
+  source.data.recipes[0].photo = photo;
+  env.files.set(photo, JPG);
+  const {scope} = await env.create('alice', source);
+  const {recipe: published} = await env.socialCall('alice', 'publish', scope, {sourceRecipeId: 'r1'});
+  assert.ok(published.photoURL);
+  const saved = await env.read('alice', scope);
+  saved.snapshot.data.recipes = [];
+  saved.snapshot.data.logs = [];
+  saved.snapshot.deleted.recipes.push({id: 'r1', updatedAt: NOW + 1});
+  assert.ok(!(await env.commit('alice', scope, saved.revision, saved.snapshot)).error);
+  env.hooks.write = (name) => { if (name === COLLECTIONS.recipes) throw Error('temporary failure'); };
+  assert.ok((await env.socialCall('alice', 'syncPublications', scope)).error);
+  assert.equal((await env.call('alice', 'familyLeave', scope)).error.code, 'PUBLICATION_PENDING');
+  assert.equal((await env.call('alice', 'familyState', scope)).family.memberCount, 1);
+
+  delete env.hooks.write;
+  assert.deepEqual(await env.socialCall('alice', 'syncPublications', scope), {updated: 0, removed: 1, hasMore: false});
+  assert.equal((await env.call('alice', 'familyLeave', scope)).family, null);
+  assert.equal((await env.social('visitor')({action: 'recipe', recipeId: published.id})).error.code, 'NOT_FOUND');
+  assert.equal(env.tables.get(COLLECTIONS.recipes).get(published.id).photoFileID, undefined);
+});
+test('a member who becomes the last member during leave must first check public removals', async () => {
+  const env = environment(), a = await env.create(), b = await env.join();
+  await env.socialCall('alice', 'publish', a.scope, {sourceRecipeId: 'r1'});
+  const saved = await env.read('alice', a.scope);
+  saved.snapshot.deleted.recipes.push({id: 'r1', updatedAt: NOW + 1});
+  assert.ok(!(await env.commit('alice', a.scope, saved.revision, saved.snapshot)).error);
+  const [bob, alice] = await Promise.all([
+    env.call('bob', 'familyLeave', b.scope), env.call('alice', 'familyLeave', a.scope)
+  ]);
+  assert.equal(bob.family, null);
+  assert.equal(alice.error.code, 'FAMILY_CONFLICT');
+  assert.equal((await env.call('alice', 'familyLeave', a.scope)).error.code, 'PUBLICATION_PENDING');
+});
+test('a deletion committed during the final publication check prevents family closure', async () => {
+  const env = environment(), {scope} = await env.create();
+  await env.socialCall('alice', 'publish', scope, {sourceRecipeId: 'r1'});
+  const saved = await env.read('alice', scope);
+  env.hooks.download = async id => {
+    if (id !== saved.fileID) return;
+    delete env.hooks.download;
+    saved.snapshot.deleted.recipes.push({id: 'r1', updatedAt: NOW + 1});
+    assert.ok(!(await env.commit('alice', scope, saved.revision, saved.snapshot)).error);
+  };
+  assert.equal((await env.call('alice', 'familyLeave', scope)).error.code, 'FAMILY_CONFLICT');
+  assert.equal((await env.call('alice', 'familyLeave', scope)).error.code, 'PUBLICATION_PENDING');
+});
+test('the final family publication check includes deletions after a full inventory page', async () => {
+  const env = environment(), data = snapshot(), owner = ownerFor('alice');
+  const inventory = Array.from({length: 1001}, (_, index) => {
+    const sourceRecipeId = 'dish-' + index;
+    return {_id: recipeIdFor(owner, sourceRecipeId), sourceRecipeId, owner, published: true};
+  }).sort((a, b) => a._id < b._id ? -1 : 1);
+  data.data.recipes = inventory.slice(0, 1000).map(row => recipe(row.sourceRecipeId));
+  data.data.logs = [];
+  const {scope} = await env.create('alice', data);
+  const table = env.tables.get(COLLECTIONS.recipes);
+  for (const row of inventory) table.set(row._id, {...row, publicationScope: 'family:' + scope.id});
+  assert.equal((await env.call('alice', 'familyLeave', scope)).error.code, 'PUBLICATION_PENDING');
+  table.get(inventory[1000]._id).published = false;
+  assert.equal((await env.call('alice', 'familyLeave', scope)).family, null);
+});
 test('old clients cannot read or overwrite an active family',async()=>{
   const env=environment();await env.create();assert.equal((await env.api()({action:'identity'})).error.code,'CLIENT_UPDATE_REQUIRED');assert.equal((await env.api()({action:'commit',baseRevision:1,fileID:env.staging('alice',snapshot())})).error.code,'CLIENT_UPDATE_REQUIRED');
   assert.equal((await env.social()({action:'previewPublication',sourceRecipeId:'r1'})).error.code,'CLIENT_UPDATE_REQUIRED');
@@ -108,6 +235,76 @@ test('family commits stamp new authors and recorders without rewriting historica
 test('concurrent family commits use one revision and stale writers receive current scope without overwriting',async()=>{
   const env=environment(),a=await env.create(),b=await env.join(),read=await env.read('alice',a.scope),one=clone(read.snapshot),two=clone(read.snapshot);one.data.recipes[0].name='甲';two.data.recipes[0].name='乙';
   const results=await Promise.all([env.commit('alice',a.scope,read.revision,one),env.commit('bob',b.scope,read.revision,two)]);assert.equal(results.filter(x=>x.conflict).length,1);assert.equal(results.filter(x=>x.snapshot).length,1);assert.equal((await env.read('alice',a.scope)).revision,2);
+});
+test('a family backup restores the original author and recorder from canonical history even after an old client drops the metadata', async () => {
+  const env = environment(), alice = await env.create(), bob = await env.join();
+  let read = await env.read('bob', bob.scope);
+  read.snapshot.data.recipes.push(recipe('bob-recipe'));
+  read.snapshot.data.logs.push({...read.snapshot.data.logs[0], id: 'bob-log', recipeId: 'bob-recipe'});
+  const saved = await env.commit('bob', bob.scope, read.revision, read.snapshot);
+  const backup = clone(saved.snapshot.data);
+  const recorder = {memberId: bob.family.memberId, label: '爸爸'};
+  await env.call('bob', 'familyRole', bob.scope, {roleLabel: '家长'});
+  const removal = saved.snapshot;
+  removal.data.recipes.pop(); removal.data.logs.pop();
+  removal.deleted.recipes.push({id: 'bob-recipe', updatedAt: NOW + 1, createdBy: ownerFor('alice')});
+  removal.deleted.logs.push({id: 'bob-log', updatedAt: NOW + 1, recordedBy: {memberId: alice.family.memberId, label: '妈妈'}});
+  const removed = await env.commit('alice', alice.scope, saved.revision, removal);
+  assert.equal(removed.snapshot.deleted.recipes[0].createdBy, ownerFor('bob'));
+  assert.deepEqual(removed.snapshot.deleted.logs[0].recordedBy, recorder);
+  // Older clients do not store author data in deletion markers. They may also
+  // omit the old markers altogether; the server retains their history.
+  read = await env.read('alice', alice.scope);
+  read.snapshot.deleted = {recipes: [], logs: []};
+  read.snapshot.data.logs.push({...read.snapshot.data.logs[0], id: 'alice-log'});
+  const intermediate = await env.commit('alice', alice.scope, read.revision, read.snapshot);
+  assert.deepEqual(intermediate.snapshot.data.logs[1].recordedBy, {memberId: alice.family.memberId, label: '妈妈'});
+  const restore = intermediate.snapshot;
+  restore.data.recipes.push({...backup.recipes[1], updatedAt: NOW + 2});
+  restore.data.logs.push({...backup.logs[1], updatedAt: NOW + 2, recordedBy: {memberId: alice.family.memberId, label: '妈妈'}});
+  const restored = await env.commit('alice', alice.scope, intermediate.revision, restore);
+  assert.ok(restored.snapshot, JSON.stringify(restored));
+  assert.equal(restored.snapshot.data.recipes[1].createdBy, ownerFor('bob'));
+  assert.deepEqual(restored.snapshot.data.logs[2].recordedBy, recorder);
+});
+test('restoring historical deletions without canonical provenance keeps attribution unknown and syncs unrelated records', async () => {
+  const env = environment(), data = snapshot();
+  data.deleted = {recipes: [{id: 'old', updatedAt: NOW}], logs: [{id: 'old-log', updatedAt: NOW}]};
+  await env.create('alice', data);
+  const bob = await env.join(), read = await env.read('bob', bob.scope);
+  const claimed = {memberId: bob.family.memberId, label: '爸爸'};
+  read.snapshot.data.recipes.push({...recipe('old'), updatedAt: NOW + 1, createdBy: ownerFor('alice')});
+  read.snapshot.data.logs.push({...read.snapshot.data.logs[0], id: 'old-log', updatedAt: NOW + 1, recordedBy: claimed},
+    {...read.snapshot.data.logs[0], id: 'new-log'});
+  const restored = await env.commit('bob', bob.scope, read.revision, read.snapshot);
+  assert.ok(restored.snapshot, JSON.stringify(restored));
+  assert.equal(restored.snapshot.data.recipes[1].createdBy, undefined);
+  assert.equal(restored.snapshot.data.logs[1].recordedBy, undefined);
+  assert.deepEqual(restored.snapshot.data.logs[2].recordedBy, claimed);
+});
+test('a restored saved copy retains its source and only a fresh save of the same link credits the new actor', async () => {
+  const env = environment(), alice = await env.create(), bob = await env.join();
+  const source = {recipeId: 'a'.repeat(64), profileId: 'a'.repeat(32), authorName: '原作者'};
+  const id = 'shared-' + source.recipeId, copy = {...recipe(id), source};
+  let read = await env.read('alice', alice.scope);
+  read.snapshot.data.recipes.push(copy);
+  let saved = await env.commit('alice', alice.scope, read.revision, read.snapshot);
+  const forged = clone(saved.snapshot);
+  forged.data.recipes[1].source = {...source, recipeId: 'b'.repeat(64)};
+  saved = await env.commit('bob', bob.scope, saved.revision, forged);
+  assert.deepEqual(saved.snapshot.data.recipes[1].source, source);
+  saved.snapshot.data.recipes.pop();
+  saved = await env.commit('bob', bob.scope, saved.revision, saved.snapshot);
+  saved.snapshot.data.recipes.push({...copy, createdBy: ownerFor('alice'), updatedAt: NOW + 1,
+    source: {...source, profileId: 'c'.repeat(32)}});
+  saved = await env.commit('bob', bob.scope, saved.revision, saved.snapshot);
+  assert.deepEqual(saved.snapshot.data.recipes[1].source, source);
+  assert.equal(saved.snapshot.data.recipes[1].createdBy, ownerFor('alice'));
+  saved.snapshot.data.recipes.pop();
+  saved = await env.commit('bob', bob.scope, saved.revision, saved.snapshot);
+  saved.snapshot.data.recipes.push({...copy, updatedAt: NOW + 2});
+  saved = await env.commit('bob', bob.scope, saved.revision, saved.snapshot);
+  assert.equal(saved.snapshot.data.recipes[1].createdBy, ownerFor('bob'));
 });
 test('family photo authorization signs only exact current references and rejects private or other-family paths',async()=>{
   const env=environment(),a=await env.create(),b=await env.join(),read=await env.read('bob',b.scope),privatePhoto=file(`users/${ownerFor('alice')}/photos/private.jpg`);env.files.set(privatePhoto,JPG);read.snapshot.data.recipes[0].photo=privatePhoto;
@@ -211,7 +408,12 @@ test('stale family preview cannot publish after removal or use another membershi
 });
 test('family save receipts validate the shared committed copy while retaining personal actor identity',async()=>{
   const env=environment();await env.savePersonal('carol');const preview=await env.socialCall('carol','previewPublication',personal('carol'),{sourceRecipeId:'r1'});const published=await env.socialCall('carol','publish',personal('carol'),{sourceRecipeId:'r1',previewToken:preview.previewToken});const a=await env.create(),b=await env.join(),read=await env.read('bob',b.scope);read.snapshot.data.recipes.push({...recipe('copy'),source:{recipeId:published.recipe.id,profileId:published.recipe.profileId,authorName:'原作者'}});await env.commit('bob',b.scope,read.revision,read.snapshot);
-  assert.deepEqual(await env.socialCall('bob','recordSave',b.scope,{recipeId:published.recipe.id,localRecipeId:'copy'}),{recorded:true});assert.deepEqual(await env.socialCall('bob','recordSave',b.scope,{recipeId:published.recipe.id,localRecipeId:'copy'}),{recorded:false});assert.equal([...env.tables.get(COLLECTIONS.feedback).values()][0].owner,ownerFor('bob'));
+  const receipt = {recipeId: published.recipe.id, localRecipeId: 'copy'};
+  assert.deepEqual(await env.socialCall('alice', 'recordSave', a.scope, receipt), {recorded: false});
+  assert.equal(env.tables.get(COLLECTIONS.feedback).size, 0);
+  assert.deepEqual(await env.socialCall('bob', 'recordSave', b.scope, receipt), {recorded: true});
+  assert.deepEqual(await env.socialCall('bob', 'recordSave', b.scope, receipt), {recorded: false});
+  assert.deepEqual([...env.tables.get(COLLECTIONS.feedback).values()].map(row => row.owner), [ownerFor('bob')]);
 });
 test('another family member updates and removes an already shared recipe under its original author',async()=>{
   const env=environment(),a=await env.create(),b=await env.join();const preview=await env.socialCall('alice','previewPublication',a.scope,{sourceRecipeId:'r1'});const published=await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1',previewToken:preview.previewToken});
