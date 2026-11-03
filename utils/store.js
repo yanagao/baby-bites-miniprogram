@@ -272,7 +272,7 @@ function getSyncSnapshot() {
 }
 
 function pendingFamilyPhotoIds(afterSequence = 0) {
-  init();
+  if (!state) init();
   return new Set((sync.photoEdits || []).filter(edit => edit.sequence > afterSequence).map(edit => edit.id));
 }
 

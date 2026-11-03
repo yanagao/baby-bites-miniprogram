@@ -238,7 +238,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   const oldPhoto = familyFileID('photos', 'old.jpg'), newPhoto = familyFileID('photos', 'new.jpg');
   let shared = snapshot(state([
     recipe('replaced', {photo: oldPhoto}), recipe('removed', {photo: familyFileID('photos', 'removed.jpg')}),
-    recipe('still-using-old-photo', {photo: oldPhoto}), recipe('first-photo')
+    recipe('still-using-old-photo', {photo: oldPhoto}), recipe('first-photo'), recipe('reuse')
   ]));
   let revision = 1, attempts = 0;
   const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
@@ -264,6 +264,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   app.store.saveRecipe({...app.store.getRecipe('replaced'), name: '离线改过的粥'});
   app.store.toggleFavorite('removed');
   app.store.toggleFavorite('first-photo');
+  app.store.saveRecipe({...app.store.getRecipe('reuse'), photo: oldPhoto});
   const logId = app.store.addLog({recipeId: 'replaced', rating: 3});
   assert.equal((await app.sync.syncNow()).state, 'synced');
   assert.equal(attempts, 2);
@@ -275,6 +276,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   assert.equal(app.store.getRecipe('first-photo').favorite, true);
   assert.equal(app.store.getRecipe('first-photo').photo, newPhoto);
   assert.equal(shared.data.recipes.find(item => item.id === 'first-photo').photo, newPhoto);
+  assert.equal(app.store.getRecipe('reuse').photo, oldPhoto);
   assert.ok(shared.data.logs.some(item => item.id === logId));
 });
 
