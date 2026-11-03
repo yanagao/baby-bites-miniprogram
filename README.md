@@ -1,6 +1,8 @@
 # 小口袋 · 微信小程序
 
-版本 1.4.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+版本 1.5.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+
+**2026-11-03 开发版本 1.5.0 上传**：相较 1.4.0 新增家庭共享、菜谱自动公开与可选过敏筛选，沿用历史次版本递增方式，同步设置页与包元数据版本号。包含截至 `003e39e` 的全部审查修复；1306 项测试、21 页原生编译和包体预检通过。官方 CLI 已确认上传成功，总包 1,509,121 字节，主包 1,136,272 字节、资源分包 372,849 字节，见[上传记录](../output/release-1.5.0/upload.log)与[包体信息](../output/release-1.5.0/upload-info.json)。按兼容顺序更新 `babyBitesSocial`、`babyBitesSync`，两者均 Active、30 秒超时；下载回验的全部 11 个 JS 文件及 3 个运行配置与本地一致，原版源码已备份，见[部署核验](../output/release-1.5.0/verification.json)。真实开发者工具的 `identity`、`familyState`、`mine` 接口通过，见[接口检查](../output/release-1.5.0/live-api-check.json)。本次完成开发版本上传和后端部署，尚未提交审核或正式发布；微信公众平台页面访问被浏览器安全策略阻止，后台步骤需账号管理员继续操作。本次未做新版真机、多账号完整验收。
 
 **2026-11-02 开发版本上传**：基于已合并的 MR #3 同步产品版本号为 1.4.0，微信官方 CLI 已返回上传成功。官方上传包总计 1,411,312 字节，主包 1,038,463 字节，资源分包 372,849 字节，见[上传包体记录](../output/release-1.4.0/upload-info.json)。功能代码此前 1048 项测试通过，本次版本号变更通过 17 页、215 个 JS/WXS 脚本和原生 WXML/WXSS 编译及包体预检。此次完成开发版本上传，尚未提交审核或发布正式版；本轮完整真机验收仍未完成。
 
