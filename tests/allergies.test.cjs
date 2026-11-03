@@ -65,18 +65,18 @@ test('matching returns only recorded labels and does not mutate recipes or setti
   for (const empty of [undefined, []]) assert.deepEqual(findRecipeAllergens(dish, empty), []);
 });
 
-test('random and ingredient recommendations always exclude matching recipes even when dislikes are allowed', () => {
+test('random and ingredient recommendations exclude matching recipes only with explicit filtering enabled', () => {
   const state = {allergies: ['鸡蛋'], recipes: [recipe('egg', ['南瓜', '蛋黄']), recipe('pumpkin', ['南瓜'])], logs: []};
-  assert.deepEqual(selectors.randomCandidates(state, {skipDisliked: false}).map(item => item.id), ['pumpkin']);
-  assert.equal(selectors.randomRecipe(state, {skipDisliked: false}, () => 0).id, 'pumpkin');
-  assert.deepEqual(selectors.matchRecipes(state, ['南瓜'], false).map(item => item.id), ['pumpkin']);
-  assert.deepEqual(selectors.matchRecipes(state, ['南瓜', '蛋黄'], true).map(item => item.id), ['pumpkin']);
+  assert.deepEqual(selectors.randomCandidates(state, {skipDisliked: false, excludeAllergies: true}).map(item => item.id), ['pumpkin']);
+  assert.equal(selectors.randomRecipe(state, {skipDisliked: false, excludeAllergies: true}, () => 0).id, 'pumpkin');
+  assert.deepEqual(selectors.matchRecipes(state, ['南瓜'], false, {excludeAllergies: true}).map(item => item.id), ['pumpkin']);
+  assert.deepEqual(selectors.matchRecipes(state, ['南瓜', '蛋黄'], true, {excludeAllergies: true}).map(item => item.id), ['pumpkin']);
   state.allergies.push('南瓜');
-  assert.deepEqual(selectors.randomCandidates(state, {}), []);
-  assert.equal(selectors.randomRecipe(state, {}, () => 0), null);
-  assert.deepEqual(selectors.matchRecipes(state, ['南瓜'], false), []);
+  assert.deepEqual(selectors.randomCandidates(state, {excludeAllergies: true}), []);
+  assert.equal(selectors.randomRecipe(state, {excludeAllergies: true}, () => 0), null);
+  assert.deepEqual(selectors.matchRecipes(state, ['南瓜'], false, {excludeAllergies: true}), []);
   state.allergies = [];
-  assert.equal(selectors.randomCandidates(state, {}).length, 2);
+  assert.equal(selectors.randomCandidates(state, {excludeAllergies: true}).length, 2);
 });
 
 test('allergy exclusions compose with age and category filters without removing management or history entries', () => {
@@ -85,7 +85,7 @@ test('allergy exclusions compose with age and category filters without removing 
     recipe('young', ['南瓜'], {ageGroups: ['6-8'], category: '蔬菜手抓'}),
     recipe('older', ['土豆'], {ageGroups: ['18+'], category: '蔬菜手抓'})
   ], logs: [{id: 'history', recipeId: 'egg', rating: 3, date: '2026-11-01', createdAt: 2}]};
-  assert.deepEqual(selectors.randomCandidates(state, {categories: ['蔬菜手抓'], ageGroups: ['6-8']}).map(item => item.id), ['young']);
+  assert.deepEqual(selectors.randomCandidates(state, {categories: ['蔬菜手抓'], ageGroups: ['6-8'], excludeAllergies: true}).map(item => item.id), ['young']);
   assert.equal(selectors.listRecipes(state).length, 3);
   assert.equal(selectors.listRecipes(state, {onlyFavorites: true})[0].id, 'egg');
   assert.equal(selectors.listRecipes(state, {excludeAllergies: true}).length, 2);
@@ -98,10 +98,20 @@ test('allergy exclusions compose with age and category filters without removing 
 test('starter recipes use existing ingredient names for eggs, wheat, soy and fish without rewriting the catalog', () => {
   const before = JSON.stringify(seed);
   const state = {allergies: ['鸡蛋', '小麦', '大豆', '鱼'], recipes: seed, logs: []};
-  const candidates = selectors.randomCandidates(state, {skipDisliked: false});
+  const candidates = selectors.randomCandidates(state, {skipDisliked: false, excludeAllergies: true});
   assert.ok(candidates.length > 0 && candidates.length < seed.length);
   assert.ok(candidates.some(item => item.id === 'pumpkin-millet'));
   assert.ok(!candidates.some(item => ['tomato-beef-noodle', 'salmon-rice', 'banana-oat-pancake'].includes(item.id)));
   assert.ok(candidates.every(item => !findRecipeAllergens(item, state.allergies).length));
   assert.equal(JSON.stringify(seed), before);
+});
+
+
+test('recording allergies alone does not filter random or ingredient recommendations', () => {
+  const state = {allergies: ['鸡蛋'], recipes: [recipe('egg', ['南瓜', '蛋黄']), recipe('pumpkin', ['南瓜'])], logs: []};
+  assert.equal(selectors.randomCandidates(state, {skipDisliked: false}).length, 2);
+  assert.equal(selectors.randomCandidates(state, {excludeAllergies: false}).length, 2);
+  assert.equal(selectors.matchRecipes(state, ['南瓜'], false).length, 2);
+  assert.equal(selectors.matchRecipes(state, ['南瓜', '蛋黄'], true).length, 2);
+  assert.match(selectors.enrichRecipe(state, state.recipes[0]).allergyWarning, /鸡蛋/);
 });

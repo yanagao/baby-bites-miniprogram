@@ -121,7 +121,7 @@ test('invalid inputs are rejected without changing existing state', () => {
   assert.equal(app.writes(), 0);
 });
 
-test('saving an edited example preserves creation time and becomes a personal recipe', () => {
+test('saving an edited example preserves creation time and its built-in origin', () => {
   const {store} = setup();
   const original = store.getState().recipes[0];
   assert.equal(original.isExample, true);
@@ -130,8 +130,17 @@ test('saving an edited example preserves creation time and becomes a personal re
   const saved = store.getRecipe(original.id);
   assert.equal(saved.createdAt, original.createdAt);
   assert.ok(saved.updatedAt > original.updatedAt);
-  assert.equal(saved.isExample, false);
+  assert.equal(saved.isExample, true);
   assert.equal(saved.photo, '');
+});
+
+test('imported examples keep their origin when editing even with a nonstandard ID', () => {
+  const initial = {version: 1, nickname: '宝宝', profileUpdatedAt: 0,
+    recipes: [recipe({id: 'imported-example', isExample: true, createdAt: 1, updatedAt: 1})], logs: []};
+  const {store} = setup(initial);
+  store.saveRecipe({...store.getRecipe('imported-example'), name: '修改后的内置菜谱', isExample: false});
+  assert.equal(store.getRecipe('imported-example').isExample, true);
+  assert.equal(store.getRecipe('imported-example').name, '修改后的内置菜谱');
 });
 
 test('feedback rejects impossible/future dates and invalid ratings', () => {

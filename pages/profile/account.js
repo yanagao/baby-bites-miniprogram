@@ -1,11 +1,13 @@
 const store = require('../../utils/store');
-const MESSAGE = '微信账号已切换，请重新加载后再操作';
+const MESSAGE = '微信账号已切换，或家庭已变化，请重新加载后再操作';
 function check(page) {
   const session = page.accountSession;
   if (!session || session.disposed || session.changed) return false;
-  const owner = store.getSyncInfo().owner || '';
-  if (!session.owner) { session.owner = owner; return true; }
-  if (owner === session.owner) return true;
+  const info = store.getSyncInfo();
+  const owner = info.owner || '';
+  const scope = info.scopeKey || owner;
+  if (!session.owner) { session.owner = owner; session.scope = scope; return true; }
+  if (owner === session.owner && scope === session.scope) return true;
   invalidate(page);
   return false;
 }
@@ -17,8 +19,8 @@ function invalidate(page) {
   if (typeof page.disposeLocalContent === 'function') page.disposeLocalContent();
   const cleared = {profile: null, recipe: null, author: null, recipes: [], profiles: [], importedId: '', editing: false, name: '', bio: '', loading: false, loadingMore: false, saving: false, adding: false, followBusy: false, followBusyId: '', following: false, followedBy: false, followingCount: 0, followerCount: 0, publishedCount: 0, nextCursor: null, nextOffset: null};
   Object.assign(cleared, {logs: [], isSelf: false, authorKnown: false, authorIsSelf: false, recipeCount: 0, favoriteCount: 0, logCount: 0,
-    publicCount: 0, privateCount: 0, publicationReady: false, publicationLoading: false,
-    publicationError: '', contentTab: 'recipes', visibility: 'all', babyAgeMonths: null, babyAgeLabel: '',
+    publicationReady: false, publicationLoading: false,
+    publicationError: '', contentTab: 'recipes', babyAgeMonths: null, babyAgeLabel: '',
     babyBirthDate: null, birthdayDirty: false, birthdayAgeLabel: '', birthDateToday: '',
     babyNickname: '', babyNicknameBase: '', babyNicknameDirty: false, babyNicknameError: '',
     profileSaveError: '', profileModerating: false, avatarPath: '/assets/cute/pocket-mascot.png'});
@@ -31,13 +33,14 @@ function invalidate(page) {
   else if (wx.hideShareMenu) wx.hideShareMenu({menus: ['shareAppMessage']});
 }
 function bind(page) {
-  page.accountSession = {owner: store.getSyncInfo().owner || '', changed: false, disposed: false};
+  page.accountSession = {owner: store.getSyncInfo().owner || '', scope: store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '', changed: false, disposed: false};
   page.accountSession.unsubscribe = store.subscribe(() => check(page));
   if (typeof page.onShareAppMessage === 'function' && wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
 }
 function reload(page, options) {
   if (!page.accountSession || page.accountSession.disposed) return;
   page.accountSession.owner = store.getSyncInfo().owner || '';
+  page.accountSession.scope = store.getSyncInfo().scopeKey || page.accountSession.owner;
   page.accountSession.changed = false;
   return page.load(options);
 }

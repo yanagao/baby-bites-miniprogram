@@ -1,5 +1,7 @@
 'use strict';
 
+const familyPhotos = require('./family-photos');
+
 const {categories} = require('./categories');
 const {getCover} = require('./recipe-covers');
 const recipeAges = require('./recipe-ages');
@@ -58,7 +60,7 @@ function ratingOf(state, recipeId) {
   return latest ? latest.rating : 0;
 }
 
-function displayPhoto(recipe) { return recipe.photo || recipe.photoURL || getCover(recipe); }
+function displayPhoto(recipe) { return familyPhotos.photoURL(recipe.photo || '') || recipe.photoURL || getCover(recipe); }
 
 function enrichWithRating(recipe, feedback, allergies) {
   const rating = feedback ? feedback.rating : 0;
@@ -71,7 +73,7 @@ function enrichWithRating(recipe, feedback, allergies) {
     ratingName: rating ? ratings[rating].name : '未记录喜好',
     ratingIcon: rating ? ratings[rating].icon : 'heart',
     ingredientText: recipe.ingredients.map(item => item.name).join(' · '),
-    photoSrc: recipe.photo || '',
+    photoSrc: familyPhotos.photoURL(recipe.photo || ''),
     displayPhoto: displayPhoto(recipe),
     ageLabel: recipeAges.ageLabel(recipe),
     placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey)
@@ -106,11 +108,11 @@ function listRecipes(state, options) {
   return list;
 }
 
-function matchRecipes(state, ingredients, completeOnly) {
+function matchRecipes(state, ingredients, completeOnly, options = {}) {
   const selected = new Set(Array.from(ingredients || []).map(normalizeIngredient).filter(Boolean));
   if (!selected.size) return [];
   const feedback = latestRatings(state);
-  return state.recipes.filter(recipe => !findRecipeAllergens(recipe, state.allergies).length).map(recipe => {
+  return state.recipes.filter(recipe => !options.excludeAllergies || !findRecipeAllergens(recipe, state.allergies).length).map(recipe => {
     const missing = recipe.ingredients.filter(item => !selected.has(normalizeIngredient(item.name)));
     const totalCount = recipe.ingredients.length;
     const foundCount = totalCount - missing.length;
@@ -127,7 +129,7 @@ function randomCandidates(state, options) {
     ? opts.categories.filter(value => value !== '全部' && categories.includes(value)) : null;
   const selectedAges = Array.isArray(opts.ageGroups)
     ? opts.ageGroups.filter(value => recipeAges.ageGroups.some(group => group.value === value)) : [];
-  return listRecipes(state, { category: selected ? '全部' : opts.category, excludeAllergies: true }).filter(recipe =>
+  return listRecipes(state, { category: selected ? '全部' : opts.category, excludeAllergies: opts.excludeAllergies === true }).filter(recipe =>
     (!selected || !selected.length || selected.includes(recipe.category)) &&
     recipeAges.matchesAgeGroups(recipe, selectedAges) &&
     (!opts.skipDisliked || recipe.rating !== 1));
@@ -162,7 +164,7 @@ function listLogs(state, filter) {
       const recipe = recipes.get(log.recipeId);
       return Object.assign({}, log, {
         recipeName: recipe.name, ratingName: ratings[log.rating].name,
-        ratingIcon: ratings[log.rating].icon, photoSrc: recipe.photo || '',
+        ratingIcon: ratings[log.rating].icon, photoSrc: familyPhotos.photoURL(recipe.photo || ''),
     displayPhoto: displayPhoto(recipe),
         placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey) ? dishIcons[recipe.imageKey] : 'bowl'
       });

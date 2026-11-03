@@ -36,9 +36,13 @@ function setup(options = {}) {
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/editor/index.js'), 'utf8'), {
     wx, Page(value) { definition = value; }, require(dep) {
+      if (dep.endsWith('/family-photos')) return {photoURL: value => value || ''};
       if (dep.endsWith('/store')) return store;
+      if (dep.endsWith('/social')) return {getMine: async () => ({published: []})};
+      if (dep.endsWith('/form-session/controller')) return require('../components/form-session/controller');
       if (dep.endsWith('/selectors')) return selectors;
       if (dep.endsWith('/recipe-ages')) return recipeAges;
+      if (dep.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
       if (dep.endsWith('/ui')) return {back() { calls.backs++; }, error(value) { calls.errors.push(value.message); }};
       throw Error(dep);
     }

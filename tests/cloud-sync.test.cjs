@@ -11,6 +11,8 @@ const backend = require('../cloudfunctions/babyBitesSync/validate');
 const OWNER = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
 const ENV = 'baby-bites-test';
+const FAMILY_SCOPE = {kind: 'family', id: 'f'.repeat(64), membershipId: 'c'.repeat(32)};
+const familyFileID = (kind, name, id = FAMILY_SCOPE.id) => `cloud://${ENV}.mock-bucket/families/${id}/${kind}/${name}`;
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const fileID = (owner, kind, name, env = ENV) => `cloud://${env}.mock-bucket/users/${owner}/${kind}/${name}`;
 const code = filename => fs.readFileSync(path.resolve(__dirname, '../utils/', filename), 'utf8');
@@ -48,7 +50,7 @@ function setup(options = {}) {
   const storage = new Map(Array.from(options.storage || [], ([key, value]) => [key, copy(value)]));
   if (options.initial != null) storage.set('baby-bites-v1', copy(options.initial));
   const hooks = {};
-  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], unlink: [], read: [], social: []};
+  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], urlDownload: [], unlink: [], read: [], social: [], requests: []};
   let currentOwner = OWNER;
   let networkListener;
   let timerId = 0;
@@ -94,12 +96,22 @@ function setup(options = {}) {
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
     getFileSystemManager() { return manager; },
     onNetworkStatusChange(listener) { networkListener = listener; },
+    downloadFile(args) { dispatch(args, async () => {
+      calls.urlDownload.push(args.url);
+      if (hooks.downloadURL) {const result = await hooks.downloadURL(args); if (result !== undefined) return result;}
+      if (!cloudFiles.has(args.url)) throw Error('Signed file missing');
+      const tempFilePath = 'wxfile://tmp-signed-' + calls.urlDownload.length;
+      localFiles.set(tempFilePath, cloudFiles.get(args.url));
+      return {tempFilePath, statusCode: 200};
+    }); },
     cloud: {
       init(args) { calls.init.push(args); },
       callFunction(args) { dispatch(args, async () => {
+        calls.requests.push(copy(args.data));
+        if (hooks.request) { const override = await hooks.request(args); if (override !== undefined) return {result: override}; }
         if (args.name === 'babyBitesSocial') {
           calls.social.push(copy(args.data));
-          return {result: hooks.social ? await hooks.social(args) : {profile: {exists: false}, published: []}};
+          return {result: hooks.social ? await hooks.social(args) : {updated: 0, removed: 0, hasMore: false}};
         }
         if (args.data.action === 'identity') {
           calls.identity += 1;
@@ -144,6 +156,11 @@ function setup(options = {}) {
   vm.runInNewContext(code('store.js'), {module: storeModule, require: requireStore, wx, console}, {filename: 'store.js'});
   const store = storeModule.exports;
   const config = {env: options.unconfigured ? '' : ENV, functionName: 'babyBitesSync', socialEnabled: options.socialEnabled === true};
+  const familyPhotosModule = {exports: {}};
+  vm.runInNewContext(code('family-photos.js'), {module: familyPhotosModule, wx,
+    Date: class extends Date { static now() { return now; } },
+    require(name) { if (name === './store') return store; if (name === '../config/cloud') return config; throw Error(name); }
+  });
   const publicationModule = {exports: {}};
   vm.runInNewContext(code('publication-sync.js'), {module: publicationModule, wx,
     require(name) { if (name === './store') return store; if (name === '../config/cloud') return config; throw Error(name); }
@@ -155,6 +172,7 @@ function setup(options = {}) {
       if (name === '../config/cloud') return config;
       if (name === './store') return store;
       if (name === './publication-sync') return publicationModule.exports;
+      if (name === './family-photos') return familyPhotosModule.exports;
       return requireStore(name);
     },
     setTimeout(callback) { timerId += 1; timers.set(timerId, callback); return timerId; },
@@ -162,13 +180,255 @@ function setup(options = {}) {
   };
   vm.runInNewContext(code('cloud-sync.js'), context, {filename: 'cloud-sync.js'});
   const sync = syncModule.exports;
-  return {wx, sync, store, calls, hooks, records, localFiles, cloudFiles, storage, putRemote, getRemote,
+  return {wx, sync, store, photos: familyPhotosModule.exports, calls, hooks, records, localFiles, cloudFiles, storage, putRemote, getRemote,
     setOwner(value) { currentOwner = value; },
     advanceTime(milliseconds) { now += milliseconds; },
     network(isConnected) { if (networkListener) networkListener({isConnected}); },
     runTimers() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     timerCount() { return timers.size; }};
 }
+
+test('family sync keeps the signed-in actor and never merges the previous personal baby into the shared one', async () => {
+  const app = setup(); app.putRemote(OWNER, snapshot(state([recipe('personal')], {nickname: '个人宝宝'})), 1);
+  await app.sync.syncNow();
+  const familyPhoto = familyFileID('photos', 'shared.jpg');
+  const shared = snapshot(state([recipe('family', {photo: familyPhoto, createdBy: OTHER})], {nickname: '家庭宝宝', babyBirthDate: '2024-01-01', babyBirthDateUpdatedAt: 2}));
+  const remote = {owner: OWNER, scope: FAMILY_SCOPE, revision: 1, fileID: familyFileID('snapshots', 'shared.json')};
+  app.hooks.request = args => args.data.action === 'identity' ? remote : args.data.action === 'familyRead' ?
+    {...remote, snapshot: shared, photoURLs: {[familyPhoto]: 'https://example.test/family-photo.jpg'}} : undefined;
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced'); assert.equal(app.store.getSyncInfo().owner, OWNER);
+  assert.equal(app.store.getSyncInfo().scope.kind, 'family'); assert.equal(app.store.getState().nickname, '家庭宝宝');
+  assert.deepEqual(copy(app.store.getState().recipes.map(item => item.id)), ['family']);
+  assert.equal(app.photos.photoURL(familyPhoto), 'https://example.test/family-photo.jpg');
+  assert.ok(app.calls.requests.every(item => item.protocolVersion === 2));
+  app.hooks.request = undefined; await app.sync.syncNow();
+  assert.equal(app.store.getSyncInfo().scope.kind, 'personal'); assert.equal(app.store.getState().nickname, '个人宝宝');
+  assert.equal(app.photos.photoURL(familyPhoto), '');
+});
+
+test('family commit uploads only caller-owned staging files and applies server-stamped canonical content', async () => {
+  const app = setup({files: {'wxfile://usr/new.jpg': PNG}});
+  let shared = snapshot(state([recipe('family')])), revision = 1;
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', 'family-' + revision + '.json')});
+  app.hooks.request = args => {
+    if (args.data.action === 'identity') return identity();
+    if (args.data.action === 'familyRead') return {...identity(), snapshot: shared, photoURLs: {}};
+    if (args.data.action === 'commit') {
+      assert.deepEqual(copy(args.data.expectedScope), FAMILY_SCOPE);
+      assert.match(args.data.fileID, new RegExp('/users/' + OWNER + '/snapshots/'));
+      const submitted = JSON.parse(app.cloudFiles.get(args.data.fileID).toString());
+      const created = submitted.data.recipes.find(item => item.id !== 'family');
+      assert.match(created.photo, new RegExp('/users/' + OWNER + '/photos/'));
+      created.photo = familyFileID('photos', 'canonical.png'); created.createdBy = OWNER;
+      shared = submitted; revision++;
+      return {...identity(), snapshot: shared, photoURLs: {[created.photo]: 'https://example.test/canonical.png'}};
+    }
+  };
+  await app.sync.syncNow();
+  const id = app.store.saveRecipe(recipe('', {photo: 'wxfile://usr/new.jpg'}));
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced'); assert.equal(app.store.getRecipe(id).createdBy, OWNER);
+  assert.equal(app.store.getRecipe(id).photo, familyFileID('photos', 'canonical.png'));
+  assert.equal(app.store.getSyncInfo().dirty, false);
+});
+
+test('offline family edits and meal logs survive a concurrent photo replacement or removal', async () => {
+  const app = setup();
+  const oldPhoto = familyFileID('photos', 'old.jpg'), newPhoto = familyFileID('photos', 'new.jpg');
+  let shared = snapshot(state([
+    recipe('replaced', {photo: oldPhoto}), recipe('removed', {photo: familyFileID('photos', 'removed.jpg')}),
+    recipe('still-using-old-photo', {photo: oldPhoto}), recipe('first-photo'), recipe('reuse')
+  ]));
+  let revision = 1, attempts = 0;
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
+  app.hooks.request = ({data}) => {
+    if (data.action === 'identity') return identity();
+    if (data.action === 'familyRead') return {...identity(), snapshot: copy(shared)};
+    if (data.action === 'commit') {
+      attempts++;
+      if (attempts === 1) {
+        Object.assign(shared.data.recipes[0], {photo: newPhoto, updatedAt: 2});
+        Object.assign(shared.data.recipes[1], {photo: '', updatedAt: 2});
+        Object.assign(shared.data.recipes[3], {photo: newPhoto, updatedAt: 2});
+        revision++;
+        return {...identity(), conflict: true};
+      }
+      const allowed = new Set(shared.data.recipes.map(item => item.photo));
+      shared = backend.validateSnapshot(app.cloudFiles.get(data.fileID), {owner: OWNER, env: ENV, photoAllowed: id => allowed.has(id)});
+      revision++;
+      return {...identity(), snapshot: copy(shared)};
+    }
+  };
+  await app.sync.syncNow();
+  app.store.saveRecipe({...app.store.getRecipe('replaced'), name: '离线改过的粥'});
+  app.store.toggleFavorite('removed');
+  app.store.toggleFavorite('first-photo');
+  app.store.saveRecipe({...app.store.getRecipe('reuse'), photo: oldPhoto});
+  const logId = app.store.addLog({recipeId: 'replaced', rating: 3});
+  assert.equal((await app.sync.syncNow()).state, 'synced');
+  assert.equal(attempts, 2);
+  assert.equal(app.store.getRecipe('replaced').name, '离线改过的粥');
+  assert.equal(app.store.getRecipe('replaced').photo, newPhoto);
+  assert.equal(app.store.getRecipe('removed').favorite, true);
+  assert.equal(app.store.getRecipe('removed').photo, '');
+  assert.equal(app.store.getRecipe('still-using-old-photo').photo, oldPhoto);
+  assert.equal(app.store.getRecipe('first-photo').favorite, true);
+  assert.equal(app.store.getRecipe('first-photo').photo, newPhoto);
+  assert.equal(shared.data.recipes.find(item => item.id === 'first-photo').photo, newPhoto);
+  assert.equal(app.store.getRecipe('reuse').photo, oldPhoto);
+  assert.ok(shared.data.logs.some(item => item.id === logId));
+});
+
+test('explicit family photo removals survive restart and in-flight edits, and stop applying after acknowledgement', async () => {
+  const oldPhoto = familyFileID('photos', 'old.jpg'), newPhoto = familyFileID('photos', 'new.jpg');
+  let app = setup(), revision = 1, commits = 0;
+  let shared = snapshot(state([recipe('clear', {photo: oldPhoto}), recipe('clear-later', {photo: newPhoto})]));
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
+  const handle = ({data}) => {
+    if (data.action === 'identity') return identity();
+    if (data.action === 'familyRead') return {...identity(), snapshot: copy(shared)};
+    if (data.action === 'commit') {
+      shared = JSON.parse(app.cloudFiles.get(data.fileID));
+      revision++;
+      if (++commits === 1) app.store.saveRecipe({...app.store.getRecipe('clear-later'), photo: ''});
+      return {...identity(), snapshot: copy(shared)};
+    }
+  };
+  app.hooks.request = handle;
+  await app.sync.syncNow();
+  app.store.saveRecipe({...app.store.getRecipe('clear'), photo: ''});
+  const remoteEdit = app.store.getRecipe('clear').updatedAt + 100;
+  Object.assign(shared.data.recipes[0], {name: '家人刚改的名字', updatedAt: remoteEdit});
+  revision++;
+
+  app = setup({storage: app.storage});
+  app.hooks.request = handle;
+  assert.equal((await app.sync.syncNow()).state, 'synced');
+  assert.equal(commits, 2);
+  assert.equal(app.store.getRecipe('clear').name, '家人刚改的名字');
+  assert.ok(app.store.getRecipe('clear').updatedAt > remoteEdit);
+  assert.deepEqual(shared.data.recipes.map(item => item.photo), ['', '']);
+
+  app.store.toggleFavorite('clear');
+  shared.data.recipes[0].photo = newPhoto;
+  revision++;
+  assert.equal((await app.sync.syncNow()).state, 'synced');
+  assert.equal(app.store.getRecipe('clear').photo, newPhoto);
+  assert.equal(app.store.getRecipe('clear').favorite, true);
+});
+
+test('late family reads cannot apply after membership changes even for the same actor', async () => {
+  const app = setup(), gate = deferred();
+  const remote = {owner: OWNER, scope: FAMILY_SCOPE, revision: 1, fileID: familyFileID('snapshots', 'shared.json')};
+  app.hooks.request = async args => {
+    if (args.data.action === 'identity') return remote;
+    if (args.data.action === 'familyRead') { await gate.promise; return {...remote, snapshot: snapshot(state([recipe('old-family')])), photoURLs: {}}; }
+  };
+  const work = app.sync.syncNow();
+  while (!app.calls.requests.some(item => item.action === 'familyRead')) await new Promise(resolve => setImmediate(resolve));
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); gate.resolve(); await work;
+  assert.equal(app.store.getSyncInfo().scope.kind, 'personal');
+  assert.equal(app.store.getRecipe('old-family'), null); assert.notEqual(app.sync.getStatus().state, 'synced');
+});
+
+test('family synchronization rejects a foreign-family photo before storing or uploading it', async () => {
+  const app = setup(); const remote = {owner: OWNER, scope: FAMILY_SCOPE, revision: 1, fileID: familyFileID('snapshots', 'shared.json')};
+  app.hooks.request = args => args.data.action === 'identity' ? remote : {...remote,
+    snapshot: snapshot(state([recipe('bad', {photo: familyFileID('photos', 'not-ours.png', 'e'.repeat(64))})])), photoURLs: {}};
+  await app.sync.syncNow(); assert.equal(app.sync.getStatus().state, 'error');
+  assert.equal(app.store.getRecipe('bad'), null); assert.equal(app.calls.upload.length, 0);
+});
+
+test('large family snapshots download through signed URLs and canonical commit responses apply without a second read', async () => {
+  const app = setup(); let revision = 1;
+  let shared = snapshot(state(Array.from({length: 14}, (_, i) => recipe('large-' + i, {steps: Array(30).fill('米'.repeat(1000))}))));
+  assert.ok(Buffer.byteLength(JSON.stringify(shared)) > 1024 * 1024);
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', 'large-' + revision + '.json')});
+  const response = () => {
+    const snapshotURL = 'https://signed.example.test/snapshot-' + revision;
+    app.cloudFiles.set(snapshotURL, Buffer.from(JSON.stringify(shared)));
+    return {...identity(), snapshotURL, photoURLs: {}};
+  };
+  app.hooks.request = args => {
+    if (args.data.action === 'identity') return identity();
+    if (args.data.action === 'familyRead') return response();
+    if (args.data.action === 'commit') {
+      shared = JSON.parse(app.cloudFiles.get(args.data.fileID).toString()); revision++;
+      shared.data.recipes[0].createdBy = OWNER;
+      return response();
+    }
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced'); assert.equal(app.store.getState().recipes.length, 14);
+  app.store.setNickname('共享宝宝'); await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced'); assert.equal(app.store.getSyncInfo().revision, 2);
+  assert.equal(app.store.getRecipe('large-0').createdBy, OWNER);
+  assert.equal(app.calls.requests.filter(item => item.action === 'familyRead').length, 2);
+  assert.equal(app.calls.urlDownload.length, 3); assert.equal(app.calls.download.length, 0);
+  assert.equal([...app.localFiles.keys()].filter(name => name.includes('tmp-signed')).length, 0);
+  assert.equal(JSON.stringify([...app.storage.values()]).includes('signed.example.test'), false);
+});
+
+test('signed family snapshot transport rejects invalid URLs, oversized files, failed downloads and invalid content', async () => {
+  for (const mode of ['missing-url', 'http-url', 'oversized', 'bad-json', 'failed-status', 'foreign-photo']) {
+    const app = setup(), url = 'https://signed.example.test/data';
+    const remote = {owner: OWNER, scope: FAMILY_SCOPE, revision: 1, fileID: familyFileID('snapshots', 'large.json')};
+    const data = snapshot(state([recipe('untrusted', mode === 'foreign-photo' ? {photo: familyFileID('photos', 'other.png', 'e'.repeat(64))} : {})]));
+    const payload = mode === 'oversized' ? Buffer.alloc(5 * 1024 * 1024 + 1) : Buffer.from(mode === 'bad-json' ? 'not JSON' : JSON.stringify(data));
+    app.cloudFiles.set(url, payload);
+    app.hooks.request = args => args.data.action === 'identity' ? remote : {...remote,
+      ...(mode === 'missing-url' ? {} : {snapshotURL: mode === 'http-url' ? 'http://signed.example.test/data' : url}), photoURLs: {}};
+    if (mode === 'failed-status') app.hooks.downloadURL = () => {
+      app.localFiles.set('wxfile://failed-download', payload); return {tempFilePath: 'wxfile://failed-download', statusCode: 403};
+    };
+    await app.sync.syncNow();
+    assert.equal(app.sync.getStatus().state, 'error', mode); assert.equal(app.store.getRecipe('untrusted'), null, mode);
+    assert.equal(app.calls.upload.length, 0, mode); assert.equal(app.localFiles.size, 0, mode);
+  }
+});
+
+test('a signed family snapshot download is discarded and cleaned after membership ABA', async () => {
+  const app = setup(), gate = deferred(), url = 'https://signed.example.test/stale';
+  const remote = {owner: OWNER, scope: FAMILY_SCOPE, revision: 1, fileID: familyFileID('snapshots', 'stale.json')};
+  app.cloudFiles.set(url, Buffer.from(JSON.stringify(snapshot(state([recipe('stale')])))));
+  app.hooks.request = args => args.data.action === 'identity' ? remote : {...remote, snapshotURL: url, photoURLs: {}};
+  app.hooks.downloadURL = async () => {await gate.promise;};
+  const work = app.sync.syncNow();
+  while (!app.calls.urlDownload.length) await new Promise(resolve => setImmediate(resolve));
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, FAMILY_SCOPE);
+  gate.resolve(); await work;
+  assert.equal(app.store.getRecipe('stale'), null); assert.equal(app.sync.getStatus().state, 'error');
+  assert.equal(app.localFiles.size, 0); assert.equal(app.sync.getStatus().identityInvalid, true);
+});
+
+test('family photo reads are coalesced, bounded, cooled down after failure and explicitly retryable', async () => {
+  const app = setup(); app.store.bindAccount(OWNER); app.store.bindScope(OWNER, FAMILY_SCOPE);
+  const photos = Array.from({length: 23}, (_, i) => familyFileID('photos', 'photo-' + i + '.png'));
+  app.hooks.request = args => {
+    assert.equal(args.data.action, 'familyPhotos'); assert.ok(args.data.fileIDs.length <= 20);
+    return {owner: OWNER, scope: FAMILY_SCOPE, photoURLs: Object.fromEntries(args.data.fileIDs.map(id => [id, 'https://example.test/' + id.split('/').pop()]))};
+  };
+  photos.forEach(id => { assert.equal(app.photos.photoURL(id), ''); app.photos.photoURL(id); });
+  await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.calls.requests.length, 2); assert.match(app.photos.photoURL(photos[0]), /^https:/);
+  app.advanceTime(5 * 60 * 1000); app.hooks.request = () => ({error: {code: 'FAMILY_FORBIDDEN'}});
+  app.photos.photoURL(photos[0]); await new Promise(resolve => setImmediate(resolve));
+  const count = app.calls.requests.length;
+  for (let i = 0; i < 5; i++) app.photos.photoURL(photos[0]);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(app.calls.requests.length, count);
+  await assert.rejects(app.photos.ensure([photos[0]], {force: true})); assert.equal(app.calls.requests.length, count + 1);
+});
+
+test('family photo responses do not survive account or membership ABA switches', async () => {
+  const app = setup(), gate = deferred(), id = familyFileID('photos', 'old.png');
+  app.store.bindAccount(OWNER); app.store.bindScope(OWNER, FAMILY_SCOPE);
+  app.hooks.request = async () => { await gate.promise; return {owner: OWNER, scope: FAMILY_SCOPE, photoURLs: {[id]: 'https://example.test/old.png'}}; };
+  const work = app.photos.ensure([id]);
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, FAMILY_SCOPE);
+  gate.resolve(); assert.deepEqual(copy(await work), {});
+  assert.equal(app.photos.photoURL(id), '');
+});
 
 test('unconfigured start and syncNow never initialize cloud or bind local data', async () => {
   const app = setup({unconfigured: true, initial: state([recipe('local')])});
@@ -569,34 +829,43 @@ test('a commit response for a changed authenticated owner does not acknowledge l
   assert.ok(app.store.getRecipe('local'));
 });
 
-test('public updates wait for committed private data and retry even after private dirty state is cleared', async () => {
-  const app = setup({socialEnabled: true, initial: state([recipe('published'), recipe('private')])});
-  let publishedAt = 0, failUpdate = true;
+test('recipe reconciliation waits for committed account data and retries even after dirty state is cleared', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('existing'), recipe('new')])});
+  const synchronizedAt = new Map();
+  let failUpdate = true;
   app.hooks.social = args => {
     assert.equal(app.store.getSyncInfo().dirty, false);
     assert.equal(app.getRemote().data.recipes.length, 2);
-    assert.equal(args.data.expectedOwner, OWNER);
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
-    assert.equal(args.data.action, 'updatePublished');
-    assert.equal(args.data.sourceRecipeId, 'published');
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
     if (failUpdate) throw Error('offline');
-    publishedAt = app.getRemote().data.recipes.find(item => item.id === 'published').updatedAt;
-    return {updated: true};
+    let updated = 0;
+    for (const item of app.getRemote().data.recipes) {
+      if (synchronizedAt.get(item.id) !== item.updatedAt) {
+        synchronizedAt.set(item.id, item.updatedAt);
+        updated++;
+      }
+    }
+    return {updated, removed: 0, hasMore: false};
   };
   await app.sync.start();
-  assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
+  assert.match(app.sync.getStatus().publicationMessage, /记录已同步，公开菜谱暂未更新/);
   assert.equal(app.store.getSyncInfo().dirty, false);
   assert.equal(app.calls.commit, 1);
   assert.equal(app.timerCount(), 0, 'a failed public update does not spin retries');
   failUpdate = false;
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, false);
+  assert.equal(app.sync.getStatus().publicationErrorCode, '');
   assert.equal(app.calls.commit, 1, 'retry does not commit private data again');
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  assert.equal(app.calls.social.length, 2);
+  assert.equal(synchronizedAt.size, 2, 'both existing and newly added user recipes are reconciled');
+  const version = app.sync.getStatus().publicationVersion;
   await app.sync.syncNow();
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2, 'unchanged public data is skipped');
+  assert.equal(app.calls.social.length, 3, 'explicit synchronization checks the server for outstanding work');
+  assert.equal(app.sync.getStatus().publicationVersion, version, 'a no-op batch does not invalidate cached lists');
 });
 
 test('private save failure never runs public reconciliation and reconnect resumes deferred updates', async () => {
@@ -612,27 +881,27 @@ test('private save failure never runs public reconciliation and reconnect resume
   failed.network(true);
   await failed.sync.syncNow();
   assert.equal(failed.sync.getStatus().state, 'synced');
-  assert.ok(failed.calls.social.some(item => item.action === 'mine'));
+  assert.deepEqual(failed.calls.social, [{action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2}]);
 });
 
 test('editing again during public reconciliation synchronizes and reconciles the newer save', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   let publishedAt = 0, first = true;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: publishedAt}]};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
     publishedAt = app.getRemote().data.recipes[0].updatedAt;
+    const hasMore = first;
     if (first) {
       first = false;
       app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
     }
-    return {updated: true};
+    return {updated: 1, removed: 0, hasMore};
   };
   await app.sync.start();
   assert.equal(app.sync.getStatus().state, 'synced');
   assert.equal(app.getRemote().data.recipes[0].name, '第二次保存的菜名');
   assert.equal(app.calls.commit, 2);
-  assert.equal(app.calls.social.filter(item => item.action === 'updatePublished').length, 2);
+  assert.equal(app.calls.social.length, 2, 'a queued local edit is committed before the next batch');
   assert.equal(publishedAt, app.store.getRecipe('published').updatedAt);
 });
 
@@ -640,8 +909,7 @@ test('a failed public update still commits a private save queued while it was in
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   let updates = 0;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true},
-      published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
     updates++;
     if (updates === 1) app.store.saveRecipe({...app.store.getRecipe('published'), name: '第二次保存的菜名'});
     throw Error('temporary public update failure');
@@ -652,23 +920,25 @@ test('a failed public update still commits a private save queued while it was in
   assert.equal(app.store.getSyncInfo().dirty, false);
   assert.equal(app.calls.commit, 2);
   assert.equal(updates, 1, 'a failed publication must not retry itself while draining private changes');
-  assert.deepEqual(app.calls.social.map(item => item.action), ['mine', 'updatePublished']);
+  assert.deepEqual(app.calls.social.map(item => item.action), ['syncPublications']);
   assert.equal(app.timerCount(), 0);
-  assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /菜谱已保存，公开内容暂未同步/);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
+  assert.match(app.sync.getStatus().publicationMessage, /记录已同步，公开菜谱暂未更新/);
 });
 
-test('an A to B to A account switch during public lookup cannot publish the stale account request', async () => {
+test('an A to B to A account switch cannot accept a stale reconciliation response or continue its batches', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('published')])});
   app.hooks.social = args => {
-    assert.equal(args.data.action, 'mine');
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
     app.store.bindAccount(OTHER); app.store.bindAccount(OWNER);
-    return {profile: {exists: true}, published: [{id: 'c'.repeat(64), sourceRecipeId: 'published', sourceUpdatedAt: 0}]};
+    return {updated: 8, removed: 0, hasMore: true};
   };
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'error');
   assert.match(app.sync.getStatus().message, /账号已切换/);
   assert.equal(app.calls.social.length, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 0, 'the previous account session cannot update the active cache version');
 });
 
 test('unchanged account revisions skip downloads and store notifications but still check server identity', async () => {
@@ -834,7 +1104,7 @@ test('joining an in-flight sync without edits does not queue another identity or
   const entered = deferred(), release = deferred();
   app.hooks.social = async () => {
     entered.resolve(); await release.promise;
-    return {profile: {exists: false}, published: []};
+    return {updated: 0, removed: 0, hasMore: false};
   };
   const first = app.sync.start();
   await entered.promise;
@@ -932,28 +1202,32 @@ test('server account mismatches invalidate previously confirmed identity for all
   assert.equal(app.sync.getStatus().state, 'synced');
 });
 
-test('publication change versions report partial successes, retry pending work immediately and stay unchanged after no-op checks', async () => {
+test('publication failures preserve data readiness, throttle foreground checks and permit explicit retries', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('first'), recipe('second')])});
-  const publishedAt = {first: 0, second: 0};
+  const completed = new Set();
   let failSecond = true;
   app.hooks.social = args => {
-    if (args.data.action === 'mine') return {profile: {exists: true}, published: [
-      {id: 'c'.repeat(64), sourceRecipeId: 'first', sourceUpdatedAt: publishedAt.first},
-      {id: 'd'.repeat(64), sourceRecipeId: 'second', sourceUpdatedAt: publishedAt.second}
-    ]};
-    if (args.data.sourceRecipeId === 'second' && failSecond) throw Error('temporary failure');
-    publishedAt[args.data.sourceRecipeId] = 1;
-    return {updated: true};
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
+    let updated = 0;
+    if (!completed.has('first')) { completed.add('first'); updated++; }
+    if (failSecond) return {updated, removed: 0, hasMore: true, error: {code: 'STORAGE_FAILED'}};
+    if (!completed.has('second')) { completed.add('second'); updated++; }
+    return {updated, removed: 0, hasMore: false};
   };
   const versions = [];
   app.sync.subscribe(status => versions.push(status.publicationVersion));
   await app.sync.start();
-  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
   assert.equal(app.sync.getStatus().revision, 1);
   assert.equal(app.sync.getStatus().publicationVersion, 1);
   assert.ok(versions.includes(1));
+  assert.equal(app.calls.social.length, 1, 'a partial batch error does not retry itself');
+  assert.equal(app.timerCount(), 0);
   failSecond = false;
   await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.social.length, 1, 'foreground checks retain the cooldown after a public-only failure');
+  await app.sync.syncNow();
   assert.equal(app.calls.identity, 2);
   assert.equal(app.calls.commit, 1);
   assert.equal(app.calls.download.length, 0);
@@ -961,4 +1235,69 @@ test('publication change versions report partial successes, retry pending work i
   assert.equal(app.sync.getStatus().publicationVersion, 2);
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().publicationVersion, 2);
+});
+
+test('a large set of already-shared recipe updates drains bounded batches after a single account commit', async () => {
+  const recipes = Array.from({length: 9}, (_, index) => recipe('imported-' + index));
+  const app = setup({socialEnabled: true, initial: state(recipes)});
+  const completed = new Set();
+  app.hooks.social = args => {
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
+    assert.equal(app.store.getSyncInfo().dirty, false);
+    const pending = app.getRemote().data.recipes.filter(item => !completed.has(item.id));
+    const batch = pending.slice(0, 8);
+    batch.forEach(item => completed.add(item.id));
+    return {updated: batch.length, removed: 0, hasMore: pending.length > batch.length};
+  };
+  await app.sync.start();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(completed.size, recipes.length);
+  assert.equal(app.calls.social.length, 2);
+  assert.equal(app.calls.identity, 1, 'continuing a batch does not repeat account synchronization');
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
+  assert.equal(app.timerCount(), 0);
+});
+
+test('deletion reconciliation waits for the committed tombstone and invalidates lists for removed-only batches', async () => {
+  const app = setup({socialEnabled: true, initial: state([recipe('removed')])});
+  let exists = false;
+  app.hooks.social = args => {
+    assert.deepEqual(copy(args.data), {action: 'syncPublications', expectedOwner: OWNER, expectedScope: {kind: 'personal', id: OWNER}, protocolVersion: 2});
+    assert.equal(app.store.getSyncInfo().dirty, false);
+    const remote = app.getRemote();
+    if (remote.data.recipes.some(item => item.id === 'removed')) {
+      const updated = exists ? 0 : 1;
+      exists = true;
+      return {updated, removed: 0, hasMore: false};
+    }
+    assert.ok(remote.deleted.recipes.some(item => item.id === 'removed'));
+    const removed = exists ? 1 : 0;
+    exists = false;
+    return {updated: 0, removed, hasMore: false};
+  };
+  await app.sync.start();
+  assert.equal(exists, true);
+  assert.equal(app.sync.getStatus().publicationVersion, 1);
+  app.store.deleteRecipe('removed');
+  await app.sync.syncNow();
+  assert.equal(exists, false);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationVersion, 2);
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.calls.social.length, 2);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().publicationVersion, 2, 'retrying an acknowledged removal is a no-op');
+  assert.equal(app.calls.commit, 2);
+});
+
+test('public reconciliation identity rejection still invalidates the synchronized session', async () => {
+  for (const code of ['FAMILY_CHANGED', 'UNAUTHENTICATED']) {
+    const app = setup({socialEnabled: true, initial: state([recipe('published')])});
+    app.hooks.social = () => ({error: {code}});
+    await app.sync.syncNow();
+    assert.equal(app.sync.getStatus().state, 'error');
+    assert.equal(app.sync.getStatus().identityInvalid, true);
+    assert.equal(app.sync.getStatus().publicationPending, false);
+  }
 });

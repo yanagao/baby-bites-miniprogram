@@ -10,3 +10,5 @@
 .editor-age-chip.is-selected {border-color:#55bba4;background:#55bba4;color:#153f37;font-weight:500;}
 .editor-age-chip[disabled] {border-color:#d6eee6;background:#d6eee6;color:#72958b;}
 .editor-age-note {margin-top:16rpx;color:#82969a;font-size:var(--font-caption);line-height:var(--line-height-body);}
+
+.editor-sharing-note {margin-bottom:24rpx;padding:18rpx 24rpx;border-radius:16rpx;background:#eff8f8;color:#607d83;font-size:var(--font-caption);line-height:var(--line-height-body);}

@@ -27,10 +27,10 @@ const RECIPES = [
 function setup(options = {}) {
   let owner = options.owner === undefined ? OWNER : options.owner, day = CN_TODAY, definition;
   const listeners = new Set();
-  const state = {nickname: '私人称呼', recipes: clone(options.recipes || RECIPES), logs: clone(options.logs || [])};
+  const state = {nickname: '私人称呼', ...(options.babyBirthDate !== undefined ? {babyBirthDate: options.babyBirthDate} : {}), recipes: clone(options.recipes || RECIPES), logs: clone(options.logs || [])};
   const calls = {mine: 0, errors: [], toasts: [], writes: 0, updates: 0, routes: []};
   const store = {
-    getState: () => clone(state), getSyncInfo: () => ({owner}),
+    getAllergyFilterEnabled: () => false, getState: () => clone(state), getSyncInfo: () => ({owner, ...(options.scope ? {scope: options.scope, scopeKey: JSON.stringify(options.scope)} : {})}),
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); },
     toggleFavorite() { calls.writes++; throw Error('Default-age initialization must not save a favorite'); },
     setNickname() { calls.writes++; throw Error('Default-age initialization must not save private data'); }
@@ -228,5 +228,16 @@ test('malformed profile responses stay quiet and remain eligible for a fresh rea
       assert.deepEqual(f.calls.errors, []); assert.deepEqual(f.calls.toasts, []);
       await f.page.onShow(); assert.equal(f.calls.mine, 2); assert.deepEqual(selected(f.page), ['9-11']);
     });
+  }
+});
+
+test('family age default uses the shared private birthday without reading a public profile', async () => {
+  for (const birthday of ['2026-01-29', null]) {
+    const f = setup({scope: {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)}, babyBirthDate: birthday,
+      getMine: async () => { throw Error('Family birthday must not use the personal public profile'); }});
+    await f.page.onShow();
+    assert.deepEqual(selected(f.page), birthday ? ['9-11'] : []);
+    assert.equal(f.calls.mine, 0); assert.equal(f.calls.writes, 0);
+    assert.deepEqual(f.calls.errors, []);
   }
 });

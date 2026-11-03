@@ -30,6 +30,7 @@ Page({
   data: {...categoryFields([]), ...ageFields([]), skipDisliked: false, result: null, hasAllergies: false, candidateCount: 0, hasRecipes: false, accountError: '', filtersVisible: false, ageDefaultLoading: false, defaultAgeHint: ''},
   onLoad() {
     this._sessionOwner = store.getSyncInfo().owner;
+    this._sessionScope = store.getSyncInfo().scopeKey || this._sessionOwner;
     this._accountBound = Boolean(this._sessionOwner);
     this._accountLocked = false;
     this._unloaded = false;
@@ -46,11 +47,13 @@ Page({
   },
   accountOK(report) {
     if (this._unloaded) return false;
-    const current = store.getSyncInfo().owner;
-    if (!this._accountBound && current) { this._sessionOwner = current; this._accountBound = true; }
-    else if (this._accountBound && current !== this._sessionOwner) this._accountLocked = true;
+    const info = store.getSyncInfo();
+    const current = info.owner;
+    const scope = info.scopeKey || current;
+    if (!this._accountBound && current) { this._sessionOwner = current; this._sessionScope = scope; this._accountBound = true; }
+    else if (this._accountBound && (current !== this._sessionOwner || scope !== this._sessionScope)) this._accountLocked = true;
     if (!this._accountLocked) return true;
-    const message = '微信账号已切换，请返回后重新打开随机选餐。';
+    const message = '微信账号已切换，或家庭已变化，请返回后重新打开随机选餐。';
     if (!this.data.accountError) {
       this.lastId = null;
       this._ageDefaultRequest++;
@@ -68,7 +71,8 @@ Page({
     this._ageDefaultPending = true;
     this.setData({ageDefaultLoading: true});
     try {
-      const mine = await social.getMine();
+      const info = store.getSyncInfo();
+      const mine = info.scope && info.scope.kind === 'family' ? {profile: {exists: true, babyBirthDate: store.getState().babyBirthDate || null}} : await social.getMine();
       if (!this.accountOK(false) || request !== this._ageDefaultRequest || this._ageManuallySelected) return;
       if (!mine || !mine.profile || typeof mine.profile !== 'object' || Array.isArray(mine.profile) ||
         typeof mine.profile.exists !== 'boolean') {
@@ -101,11 +105,11 @@ Page({
       const pool = this.candidates(state);
       const current = this.data.result && pool.find(recipe => recipe.id === this.data.result.id);
       if (!current) this.draw();
-      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
+      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   toggleFilters() { if (this.accountOK(false)) this.setData({filtersVisible: !this.data.filtersVisible}); },
-  candidates(state) { return selectors.randomCandidates(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, skipDisliked: this.data.skipDisliked}); },
+  candidates(state) { return selectors.randomCandidates(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, excludeAllergies: store.getAllergyFilterEnabled(), skipDisliked: this.data.skipDisliked}); },
   toggleAgeGroup(event) {
     if (!this.accountOK(false)) return;
     const ageGroup = event.currentTarget.dataset.ageGroup;
@@ -147,9 +151,9 @@ Page({
     if (!this.accountOK(false)) return;
     try {
       const state = store.getState();
-      const result = selectors.randomRecipe(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, skipDisliked: this.data.skipDisliked, lastId: this.lastId});
+      const result = selectors.randomRecipe(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, excludeAllergies: store.getAllergyFilterEnabled(), skipDisliked: this.data.skipDisliked, lastId: this.lastId});
       this.lastId = result ? result.id : null;
-      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
+      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   favorite() {

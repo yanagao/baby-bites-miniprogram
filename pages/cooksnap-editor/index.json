@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "我做过这道菜",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-textarea": "/miniprogram_npm/tdesign-miniprogram/textarea/textarea",
+    "t-empty": "/miniprogram_npm/tdesign-miniprogram/empty/empty",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog"
+  }
+}

@@ -1,8 +1,12 @@
 <t-navbar z-index="100" title="宝宝过敏食物" placeholder left-arrow delta="{{0}}" bind:go-back="cancel" />
 <view wx:if="{{accountError}}" class="allergies-unavailable"><t-empty icon="info-circle" description="{{accountError}}"><t-button slot="action" theme="primary" bind:tap="cancel">返回</t-button></t-empty></view>
 <view wx:else class="allergies-page">
-  <view class="allergies-intro">保存后会自动跳过含这些食材的推荐菜谱。</view>
-  <view class="allergies-privacy">仅自己可见，随当前微信账号同步。</view>
+  <view class="allergies-intro">记录宝宝的过敏食物，也可以选择是否在推荐时跳过相关菜谱。</view>
+  <view class="allergies-privacy">{{familyActive ? '过敏记录在家庭内共享，家人各自选择是否筛选推荐。' : '过敏记录仅自己可见，随当前微信账号同步。'}}</view>
+  <view class="allergies-section">
+    <view class="allergies-filter"><text>推荐时跳过过敏食材</text><t-switch value="{{excludeAllergies}}" disabled="{{saving}}" bind:change="changeFilter" aria-label="推荐时跳过过敏食材" /></view>
+    <view class="allergies-note">默认关闭，开关立即生效，按已保存的过敏记录筛选。仅保存在此设备的当前账号和宝宝下。</view>
+  </view>
   <view class="allergies-section">
     <view class="allergies-heading">已记录 <text>{{allergies.length}} / 50</text></view>
     <view wx:if="{{allergies.length}}" class="allergies-chips"><button wx:for="{{allergies}}" wx:key="*this" class="allergies-chip allergies-selected" data-name="{{item}}" disabled="{{saving}}" bindtap="removeFood" aria-label="{{'移除' + item}}"><text>{{item}}</text><t-icon name="close" size="24rpx" /></button></view>

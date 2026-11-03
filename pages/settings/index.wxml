@@ -2,7 +2,7 @@
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="settings-page">
   <view class="settings-section">
-    <view class="settings-section-title">微信账号同步</view>
+    <view class="settings-section-title">{{familyActive ? '家庭共享同步' : '微信账号同步'}}</view>
     <view class="settings-card settings-sync-card">
       <view class="settings-sync-heading">
         <view class="settings-status-dot settings-status-dot--{{syncState}}" aria-hidden="true"></view>
@@ -16,8 +16,9 @@
     </view>
   </view>
 
+  <view class="settings-card settings-family-entry"><t-cell title="宝宝的家庭" description="{{familyActive ? '管理共享宝宝数据的家人' : '邀请爸爸妈妈和祖辈一起记录'}}" arrow bind:click="openFamily" /></view>
   <view class="settings-section">
-    <view class="settings-section-title">数据与备份</view>
+    <view class="settings-section-title">{{familyActive ? '家庭数据与备份' : '数据与备份'}}</view>
     <view class="settings-card settings-overview">
       <view class="settings-counts">
         <view class="settings-count">
@@ -33,19 +34,19 @@
     </view>
     <view class="settings-card settings-backup-actions">
       <t-cell-group>
-        <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导出备份文件" description="保存菜谱、照片和用餐记录" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="exportBackup" />
-        <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导入备份文件" description="从微信聊天选择 JSON 文件，最多 20 MB" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="chooseBackup" />
+        <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导出备份文件" description="保存菜谱、照片和用餐记录" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="exportBackup" />
+        <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导入备份文件" description="从微信聊天选择 JSON 文件，最多 20 MB" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="chooseBackup" />
       </t-cell-group>
     </view>
     <view class="settings-card settings-backup-more">
-      <t-collapse disabled="{{busy}}">
+      <t-collapse disabled="{{busy || scopeLocked}}">
         <t-collapse-panel value="backup-methods" header="其他备份方式">
-          <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="复制备份内容" description="复制为文字，方便自行保存" arrow="{{!busy}}" hover="{{!busy}}" bind:click="copyBackup" />
-          <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="粘贴备份内容" note="{{showPaste ? '收起' : ''}}" arrow="{{!busy}}" hover="{{!busy}}" bind:click="togglePaste" />
+          <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="复制备份内容" description="复制为文字，方便自行保存" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="copyBackup" />
+          <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="粘贴备份内容" note="{{showPaste ? '收起' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="togglePaste" />
           <view wx:if="{{showPaste}}" class="settings-paste">
-            <t-textarea label="备份内容" maxlength="-1" disabled="{{busy}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
+            <t-textarea label="备份内容" maxlength="-1" disabled="{{busy || scopeLocked}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
             <view class="settings-paste-action">
-              <t-button theme="primary" size="small" disabled="{{busy}}" loading="{{busy}}" bind:tap="confirmImport">合并导入</t-button>
+              <t-button theme="primary" size="small" disabled="{{busy || scopeLocked}}" loading="{{busy}}" bind:tap="confirmImport">合并导入</t-button>
             </view>
           </view>
           <view class="settings-backup-help">
@@ -61,8 +62,8 @@
   </view>
   <view class="settings-version">
     <text class="settings-version-name">小口袋</text>
-    <text class="settings-version-number">版本 1.3.0</text>
+    <text class="settings-version-number">版本 1.4.0</text>
   </view>
 </view>
-<t-dialog visible="{{importVisible}}" title="合并这份备份？" content="将菜谱和用餐记录合并到本机；相同内容保留较新的修改。" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
+<t-dialog visible="{{importVisible}}" title="合并这份备份？" content="{{importDescription}}" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />
 <t-dialog visible="{{exportVisible}}" title="备份已准备好" content="{{exportDescription}}" confirm-btn="{{exportConfirmButton}}" cancel-btn="取消" bind:confirm="confirmExportDialog" bind:cancel="cancelExportDialog" />

@@ -36,6 +36,8 @@ function setup() {
       if (name === './categories') return require('../utils/categories');
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
+      if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './baby-age') return require('../utils/baby-age');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -56,6 +58,9 @@ function setup() {
       wx, Page(value) { definition = value; },
       require(name) {
         if (name === '../../utils/store') return store;
+        if (name === '../../utils/social') return {getMine: async () => ({published: []})};
+        if (name === '../../utils/recipe-origin') return require('../utils/recipe-origin');
+        if (name === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (name === '../../utils/selectors') return selectors;
         if (name === '../../utils/ui') return {
           back() { assert.equal(returnWarning, false); calls.backs += 1; },

@@ -29,6 +29,7 @@ function loadPage(name) {
     wx: moduleStub('wx'), getApp: forbidden('getApp'), getCurrentPages: forbidden('getCurrentPages'),
     require(dependency) {
       if (dependency.endsWith('/selectors')) return selectors;
+      if (dependency.endsWith('/form-session/controller')) return require('../components/form-session/controller');
       if (dependency.endsWith('/recipe-ages')) return {ageGroups: selectors.ageGroups};
       if (dependency.endsWith('/cloud')) return {socialEnabled: true};
       return moduleStub(dependency);

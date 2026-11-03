@@ -1,0 +1,11 @@
+{
+  "navigationBarTitleText": "宝宝的家庭",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog"
+  }
+}

@@ -1,0 +1,2 @@
+<t-navbar title="菜谱分享" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="share-route-state"><text>{{error || '正在打开菜谱…'}}</text><t-button wx:if="{{error}}" theme="primary" variant="text" bind:tap="openRecipe">重试</t-button><t-button theme="default" variant="text" bind:tap="back">返回</t-button></view>

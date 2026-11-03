@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "收到的反馈",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon"
+  }
+}

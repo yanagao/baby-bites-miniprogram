@@ -9,6 +9,7 @@ const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
 const LEGACY = 'baby-bites-v1';
 const ACTIVE = 'baby-bites-active-owner';
+const ACTIVE_SCOPE = 'baby-bites-active-scope';
 const key = owner => 'baby-bites-account-' + owner;
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 
@@ -41,11 +42,25 @@ function oneRecipe(id, updatedAt, name = id) {
 }
 function empty() { return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []}; }
 function dataWith(recipes) { return Object.assign(empty(), {recipes}); }
+const FAMILY = {kind: 'family', id: 'f'.repeat(64), membershipId: 'c'.repeat(32)};
 function accountCache(data = empty(), schemaVersion) {
   return {version: 1, data: copy(data), __sync: {sequence: 0, revision: 3, dirty: false, hasLocalData: true,
     deleted: {recipes: [], logs: []}, migratedLegacy: false,
     ...(schemaVersion === undefined ? {} : {snapshotSchemaVersion: schemaVersion})}};
 }
+
+test('a newer local family edit cannot put an unverifiable cached author or recorder back into a migrated snapshot', () => {
+  const data = dataWith([oneRecipe('old', 10)]);
+  data.logs = [{id: 'meal', recipeId: 'old', rating: 3, date: '2026-01-01', createdAt: 1, updatedAt: 10}];
+  const remote = snapshot(data), local = snapshot(data);
+  Object.assign(local.data.recipes[0], {createdBy: B, name: '新的家常做法', updatedAt: 20});
+  Object.assign(local.data.logs[0], {recordedBy: {memberId: 'b'.repeat(32), label: '爸爸'}, note: '吃了两口', updatedAt: 20});
+  const merged = mergeSnapshots(local, remote, true);
+  assert.equal(merged.data.recipes[0].createdBy, undefined);
+  assert.equal(merged.data.recipes[0].name, '新的家常做法');
+  assert.equal(merged.data.logs[0].recordedBy, undefined);
+  assert.equal(merged.data.logs[0].note, '吃了两口');
+});
 
 test('reading, binding and ordinary edits do not certify legacy snapshot caches', () => {
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
@@ -64,12 +79,88 @@ test('reading, binding and ordinary edits do not certify legacy snapshot caches'
   assert.equal(legacy.saved[key(B)].__sync.snapshotSchemaVersion, 0);
 });
 
+test('family scope keeps actor identity while isolating the personal baby data and pending edits', () => {
+  const app = setup(); app.store.bindAccount(A); app.store.setNickname('个人宝宝');
+  const personal = app.store.getSyncSnapshot(), personalKey = app.store.getScopeKey();
+  app.store.bindScope(A, FAMILY);
+  assert.equal(app.store.getSyncInfo().owner, A); assert.equal(app.store.getSyncInfo().scope.kind, 'family');
+  assert.equal(app.store.getState().recipes.length, 0); assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.notEqual(app.store.getScopeKey(), personalKey);
+  app.store.setNickname('家庭宝宝'); const familyKey = app.store.getScopeKey();
+  app.store.bindScope(A, {kind: 'personal', id: A});
+  assert.deepEqual(app.store.getSyncSnapshot(), personal); assert.equal(app.store.getSyncInfo().dirty, true);
+  app.store.bindScope(A, FAMILY); assert.equal(app.store.getScopeKey(), familyKey); assert.equal(app.store.getState().nickname, '家庭宝宝');
+  assert.equal(app.reload().getState().nickname, '家庭宝宝'); assert.equal(app.reload().getSyncInfo().owner, A);
+});
+
+test('a new membership never reuses revoked family cache or uploads its old pending edits', () => {
+  const app = setup(); app.store.bindAccount(A); app.store.bindScope(A, FAMILY); app.store.setNickname('已退出家庭的草稿');
+  const oldKey = app.store.getScopeKey(); app.store.bindScope(A, {kind: 'personal', id: A});
+  app.store.bindScope(A, {...FAMILY, membershipId: 'd'.repeat(32)});
+  assert.notEqual(app.store.getScopeKey(), oldKey); assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.equal(app.store.getState().nickname, '宝宝');
+  assert.throws(() => app.store.applySyncedSnapshot(snapshot(empty()), {owner: A, scopeKey: oldKey, sequence: 0, revision: 10}), /家庭已切换/);
+});
+
+test('family cache is separated between two actors in the same family', () => {
+  const app = setup(); app.store.bindAccount(A); app.store.bindScope(A, FAMILY); app.store.setNickname('A 的离线草稿');
+  app.store.bindScope(B, {...FAMILY, membershipId: 'e'.repeat(32)});
+  assert.equal(app.store.getState().nickname, '宝宝'); assert.equal(app.store.getSyncInfo().owner, B);
+  app.store.bindScope(A, FAMILY); assert.equal(app.store.getState().nickname, 'A 的离线草稿');
+});
+
+test('failed family pointer writes preserve the old active data and a retry recovers the new cache', () => {
+  const app = setup(); app.store.bindAccount(A); app.store.setNickname('保留个人记录');
+  const before = app.store.getSyncSnapshot(); app.fail(ACTIVE_SCOPE);
+  assert.throws(() => app.store.bindScope(A, FAMILY), /未切换/);
+  assert.deepEqual(app.store.getSyncSnapshot(), before); assert.equal(app.store.getSyncInfo().scope.kind, 'personal');
+  app.fail(null); app.store.bindScope(A, FAMILY); assert.equal(app.store.getState().recipes.length, 0);
+});
+
+test('baby profile patches are atomic and retain birthday through a nickname-only edit and backup roundtrip', () => {
+  const app = setup(); app.store.bindAccount(A);
+  app.store.setBabyProfile({nickname: '小米', babyBirthDate: '2024-01-01'});
+  const savedDate = app.store.getState().babyBirthDateUpdatedAt;
+  app.store.setBabyProfile({nickname: '小豆'});
+  assert.equal(app.store.getState().babyBirthDate, '2024-01-01'); assert.equal(app.store.getState().babyBirthDateUpdatedAt, savedDate);
+  const before = app.store.getState();
+  assert.throws(() => app.store.setBabyProfile({nickname: '不应保存', babyBirthDate: '2099-99-99'}));
+  assert.deepEqual(app.store.getState(), before);
+  const imported = setup(); imported.store.importBackup(app.store.exportBackup());
+  assert.equal(imported.store.getState().babyBirthDate, '2024-01-01');
+  app.store.setBabyBirthDate(null); assert.equal(app.store.getState().babyBirthDate, null);
+});
+
+test('scope transition locks new local writes until released but allows verified sync data', () => {
+  const app = setup(); app.store.bindAccount(A); const release = app.store.beginScopeChange();
+  assert.throws(() => app.store.setNickname('过渡中的编辑'), /切换家庭/);
+  app.store.applySyncedSnapshot(snapshot(empty()), {owner: A, scopeKey: app.store.getScopeKey(), sequence: 0, revision: 1});
+  release(); release(); app.store.setNickname('完成后的编辑'); assert.equal(app.store.getState().nickname, '完成后的编辑');
+});
+
+test('family provenance and birthday survive concurrent content merge without exposing scope metadata in backups', () => {
+  const original = oneRecipe('recipe-family', 10), member = {memberId: 'c'.repeat(32), label: '爸爸'};
+  const local = snapshot({...dataWith([{...original, name: '修改后的做法', updatedAt: 12}]),
+    logs: [{id: 'log', recipeId: original.id, rating: 3, date: '2024-01-01', note: '本地修改', createdAt: 1, updatedAt: 12}],
+    babyBirthDate: '2024-01-01', babyBirthDateUpdatedAt: 10});
+  const remote = snapshot({...dataWith([{...original, createdBy: A}]),
+    logs: [{id: 'log', recipeId: original.id, rating: 2, date: '2024-01-01', note: '', createdAt: 1, recordedBy: member}],
+    babyBirthDate: null, babyBirthDateUpdatedAt: 15});
+  const merged = mergeSnapshots(local, remote);
+  assert.equal(merged.data.recipes[0].name, '修改后的做法'); assert.equal(merged.data.recipes[0].createdBy, A);
+  assert.equal(merged.data.logs[0].note, '本地修改'); assert.deepEqual(merged.data.logs[0].recordedBy, member);
+  assert.equal(merged.data.babyBirthDate, null);
+  const app = setup(); app.store.bindAccount(A); app.store.bindScope(A, FAMILY);
+  app.store.applySyncedSnapshot(merged, {owner: A, scopeKey: app.store.getScopeKey(), sequence: 0, revision: 1});
+  assert.doesNotMatch(app.store.exportBackup(), /membershipId|scopeKey|family-cache/);
+});
+
 test('only a successfully persisted complete snapshot certifies its account cache across restarts', () => {
   const data = {...empty(), allergies: ['鸡蛋'], allergiesUpdatedAt: 100};
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 1);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
   assert.deepEqual(app.reload().getState().allergies, ['鸡蛋']);
   const restarted = app.reload();
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
@@ -105,11 +196,11 @@ test('failed snapshot persistence keeps the unverified marker and data atomic un
   restarted.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
   assert.deepEqual(restarted.getState().allergies, ['牛奶']);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 1);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
 });
 
 test('missing, unknown and malformed parser versions remain readable but cannot certify completeness', () => {
-  for (const version of [undefined, 0, 2, '1', null, -1, true, {}]) {
+  for (const version of [undefined, 0, 1, 3, '2', null, -1, true, {}]) {
     const data = {...empty(), allergies: ['花生'], allergiesUpdatedAt: 100};
     const app = setup({[ACTIVE]: A, [key(A)]: accountCache(data, version)});
     assert.equal(app.store.getSyncInfo().blocked, false);
@@ -167,7 +258,7 @@ test('new-device examples are not included in upload and legacy migration preser
   assert.equal(app.saved[LEGACY].__syncMigratedTo, A);
   assert.equal(app.saved[ACTIVE], A);
   assert.equal(app.store.getSyncInfo().dirty, true);
-  assert.deepEqual(app.writes(), [key(A), LEGACY, ACTIVE]);
+  assert.deepEqual(app.writes(), [key(A), LEGACY, ACTIVE_SCOPE, ACTIVE]);
 });
 
 test('account caches remain isolated and migration cannot copy data to a second owner', () => {
@@ -190,7 +281,7 @@ test('account caches remain isolated and migration cannot copy data to a second 
 });
 
 test('partial migration failures do not switch memory, and retries recover safely', () => {
-  for (const failedKey of [key(A), LEGACY, ACTIVE]) {
+  for (const failedKey of [key(A), LEGACY, ACTIVE_SCOPE, ACTIVE]) {
     const original = baseline();
     original.nickname = '保留';
     const app = setup({[LEGACY]: original});

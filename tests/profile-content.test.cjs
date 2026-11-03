@@ -28,57 +28,23 @@ function state() {
 const published = [{id: 'public-one', sourceRecipeId: 'local-public', sourceUpdatedAt: 15}];
 const confirmed = {published, publicationReady: true};
 
-test('unconfirmed status keeps local recipes and favorites unknown and cannot imply privacy', () => {
-  const value = state();
-  for (const publicationReady of [undefined, false, 1, 'true']) {
-    const all = build(value, {published, publicationReady});
-    assert.equal(all.recipes.length, 3);
-    assert.ok(all.recipes.every(recipe => recipe.visibility === 'unknown' && recipe.publicChanged === false));
-    assert.ok(all.recipes.every(recipe => recipe.visibilityLabel === '公开状态待确认'));
-    assert.equal(all.publicCount, 0); assert.equal(all.privateCount, 0);
-    for (const visibility of ['public', 'private']) {
-      assert.deepEqual(build(value, {visibility, published, publicationReady}).recipes, []);
+test('the own cookbook includes built-ins and uploaded recipes regardless of historical visibility', () => {
+  const value = state(); const expected = selectors.listRecipes(value);
+  for (const visibility of ['all', 'public', 'private']) {
+    for (const published of [undefined, null, {}, [], [{id: 'invalid'}]]) {
+      const result = build(value, {visibility, published, publicationReady: true});
+      assert.deepEqual(result.recipes, expected);
+      assert.ok(result.recipes.every(recipe => !Object.hasOwn(recipe, 'visibility')));
+      assert.equal(Object.hasOwn(result, 'publicCount'), false);
     }
-    const favorites = build(value, {tab: 'favorites', published, publicationReady});
-    assert.equal(favorites.recipes.length, 2);
-    assert.ok(favorites.recipes.every(recipe => recipe.visibility === 'unknown'));
   }
-});
-
-test('confirmed publication maps only sourceRecipeId, never public IDs or imported attribution', () => {
-  const value = state();
-  const result = build(value, {...confirmed, published: published.concat([
-    {id: 'local-private', sourceRecipeId: 'no-longer-local', sourceUpdatedAt: 25}
-  ])});
-  assert.deepEqual(ids(result.recipes), ['local-copy', 'local-private', 'local-public']);
-  assert.equal(result.recipes.find(recipe => recipe.id === 'local-public').visibility, 'public');
-  assert.equal(result.recipes.find(recipe => recipe.id === 'local-private').visibility, 'private');
-  assert.equal(result.recipes.find(recipe => recipe.id === 'local-copy').visibility, 'private');
-  assert.equal(result.publicCount, 1); assert.equal(result.privateCount, 2);
-  assert.deepEqual(ids(build(value, {...confirmed, visibility: 'public'}).recipes), ['local-public']);
-  assert.deepEqual(ids(build(value, {...confirmed, visibility: 'private'}).recipes), ['local-copy', 'local-private']);
-});
-
-test('publication changes compare the local version with updatedAt, createdAt and zero fallbacks', () => {
-  const value = state();
-  const local = value.recipes[0];
-  const projected = () => build(value, confirmed).recipes.find(recipe => recipe.id === local.id);
-  assert.equal(projected().publicChanged, false);
-  local.updatedAt = 16;
-  assert.equal(projected().publicChanged, true);
-  local.updatedAt = 0; local.createdAt = 15;
-  assert.equal(projected().publicChanged, false);
-  delete local.updatedAt; delete local.createdAt;
-  assert.equal(build(value, {publicationReady: true, published: [{sourceRecipeId: local.id, sourceUpdatedAt: 0}]})
-    .recipes.find(recipe => recipe.id === local.id).publicChanged, false);
-  assert.ok(build(value, {publicationReady: true, published: []}).recipes.every(recipe => !recipe.publicChanged));
 });
 
 test('favorites and records have independent content while totals remain stable across tabs', () => {
   const value = state();
   const all = build(value, confirmed);
-  const totals = result => [result.recipeCount, result.favoriteCount, result.logCount, result.publicCount, result.privateCount];
-  assert.deepEqual(totals(all), [3, 2, 3, 1, 2]);
+  const totals = result => [result.recipeCount, result.favoriteCount, result.logCount];
+  assert.deepEqual(totals(all), [3, 2, 3]);
   for (const visibility of ['all', 'public', 'private']) {
     const favorites = build(value, {...confirmed, tab: 'favorites', visibility});
     assert.deepEqual(ids(favorites.recipes), ['local-private', 'local-public']);
@@ -107,24 +73,12 @@ test('recipe rows retain selector ordering, latest ratings, photos and ingredien
   assert.equal(rows.find(recipe => recipe.id === 'local-private').displayPhoto, '/local/private.jpg');
 });
 
-test('a missing or malformed publication list cannot mark recipes private even when ready is true', () => {
-  for (const invalid of [undefined, null, {}, [null], [{id: 'local-public'}], [{sourceRecipeId: ''}], [{sourceRecipeId: 1}]]) {
-    const result = build(state(), {publicationReady: true, published: invalid});
-    assert.ok(result.recipes.every(recipe => recipe.visibility === 'unknown'));
-    assert.equal(result.publicCount, 0); assert.equal(result.privateCount, 0);
-    assert.deepEqual(build(state(), {publicationReady: true, published: invalid, visibility: 'private'}).recipes, []);
-  }
-});
-
-test('empty confirmed lists mean private, while empty stores and invalid view choices have stable defaults', () => {
+test('empty stores and invalid content tabs retain stable defaults', () => {
   const value = state();
-  const emptyPublic = build(value, {publicationReady: true, published: []});
-  assert.ok(emptyPublic.recipes.every(recipe => recipe.visibility === 'private'));
-  assert.equal(emptyPublic.privateCount, 3);
   assert.deepEqual(build(value, {tab: 'invalid', visibility: 'invalid'}), build(value));
   for (const tab of ['recipes', 'favorites', 'records']) {
-    assert.deepEqual(build({recipes: [], logs: []}, {...confirmed, tab}), {
-      recipes: [], logs: [], recipeCount: 0, favoriteCount: 0, logCount: 0, publicCount: 0, privateCount: 0
+    assert.deepEqual(build({recipes: [], logs: []}, {tab}), {
+      recipes: [], logs: [], recipeCount: 0, favoriteCount: 0, logCount: 0
     });
   }
 });
@@ -141,6 +95,5 @@ test('projection never mutates input and keeps no publication state across calls
   build(value, {...options, tab: 'records'});
   assert.deepEqual({value, options}, before);
   const next = build(value, {published, publicationReady: false});
-  assert.ok(next.recipes.every(recipe => recipe.visibility === 'unknown'));
-  assert.equal(next.publicCount, 0); assert.equal(next.privateCount, 0);
+  assert.deepEqual(next.recipes, selectors.listRecipes(value));
 });

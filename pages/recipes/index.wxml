@@ -2,13 +2,12 @@
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="page-shell cookbook-page">
   <view class="cookbook-toolbar">
-    <view class="cookbook-collection-tabs"><t-tabs value="{{collection}}" space-evenly="{{false}}" swipeable="{{false}}" split="{{false}}" bind:change="changeCollection"><t-tab-panel value="all" label="全部" /><t-tab-panel wx:if="{{socialEnabled}}" value="public" label="公开" /><t-tab-panel wx:if="{{socialEnabled}}" value="private" label="私密" /><t-tab-panel value="favorites" label="收藏" /></t-tabs></view>
+    <view class="cookbook-collection-tabs"><t-tabs value="{{collection}}" space-evenly="{{false}}" swipeable="{{false}}" split="{{false}}" bind:change="changeCollection"><t-tab-panel value="all" label="全部" /><t-tab-panel value="favorites" label="收藏" /></t-tabs></view>
     <button class="cookbook-filter-button {{advancedFilterCount ? 'cookbook-filter-active' : ''}}" bindtap="openFilters" aria-label="搜索和筛选菜谱"><t-icon name="filter" size="32rpx" /><text wx:if="{{advancedFilterCount}}">{{advancedFilterCount}}</text></button>
   </view>
-  <view wx:if="{{socialEnabled && !publicationReady}}" class="cookbook-privacy-note"><text>{{publicationLoading ? '正在确认公开状态…' : publicationError || '公开状态尚未确认'}}</text><t-button wx:if="{{!publicationLoading}}" theme="primary" variant="text" size="small" bind:tap="refreshPublication">重试</t-button></view>
   <view wx:if="{{advancedFilterCount}}" class="cookbook-search-summary"><text>{{search ? '「' + search + '」 · ' : ''}}{{recipes.length}} 道{{onlyFavorites ? '收藏' : '食谱'}}</text><t-button theme="primary" variant="text" size="small" bind:tap="clearAdvancedFilters">清除筛选</t-button></view>
-  <view class="cookbook-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" show-visibility="{{socialEnabled}}" bind:open="openRecipe" /></view>
-  <t-empty wx:if="{{!recipes.length && (visibility === 'all' || publicationReady)}}" description="{{hasFilters ? '没有符合条件的菜谱，可以清除筛选后再试' : '还没有菜谱，添加一道做过的辅食吧'}}"><t-button wx:if="{{hasFilters}}" slot="action" theme="primary" bind:tap="resetFilters">清除筛选</t-button><t-button wx:else slot="action" theme="primary" bind:tap="addRecipe">添加菜谱</t-button></t-empty>
+  <view class="cookbook-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" bind:open="openRecipe" /></view>
+  <t-empty wx:if="{{!recipes.length}}" description="{{hasFilters ? '没有符合条件的菜谱，可以清除筛选后再试' : '还没有菜谱，添加一道做过的辅食吧'}}"><t-button wx:if="{{hasFilters}}" slot="action" theme="primary" bind:tap="resetFilters">清除筛选</t-button><t-button wx:else slot="action" theme="primary" bind:tap="addRecipe">添加菜谱</t-button></t-empty>
   <view wx:if="{{recipes.length}}" class="cookbook-add"><t-button theme="primary" variant="text" icon="add" shape="round" bind:tap="addRecipe">添加菜谱</t-button></view>
 </view>
 <t-popup visible="{{filtersVisible}}" placement="bottom" close-btn bind:visible-change="filterVisibilityChange">
@@ -20,6 +19,6 @@
       <view class="cookbook-filter-label">口感</view><view class="cookbook-filter-options"><button wx:for="{{textureOptions}}" wx:key="value" class="cookbook-filter-option {{texture === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="pickTexture">{{item.label}}</button></view>
       <view class="cookbook-filter-label">排序</view><view class="cookbook-filter-options"><button wx:for="{{sortOptions}}" wx:key="value" class="cookbook-filter-option {{sort === item.value ? 'selected' : ''}}" data-value="{{item.value}}" bindtap="pickSort">{{item.label}}</button></view>
     </scroll-view>
-    <view class="cookbook-filter-actions"><t-button theme="default" variant="outline" shape="round" bind:tap="clearAdvancedFilters">重置</t-button><t-button theme="primary" shape="round" block bind:tap="closeFilters">{{visibility !== 'all' && !publicationReady ? '完成筛选' : '查看 ' + recipes.length + ' 道食谱'}}</t-button></view>
+    <view class="cookbook-filter-actions"><t-button theme="default" variant="outline" shape="round" bind:tap="clearAdvancedFilters">重置</t-button><t-button theme="primary" shape="round" block bind:tap="closeFilters">{{'查看 ' + recipes.length + ' 道食谱'}}</t-button></view>
   </view>
 </t-popup>

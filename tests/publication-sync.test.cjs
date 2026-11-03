@@ -7,36 +7,24 @@ const path = require('node:path');
 const vm = require('node:vm');
 const OWNER = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
-const PROFILE_ID = 'c'.repeat(32);
-const PUBLIC_ID = 'd'.repeat(64);
-const SECOND_PUBLIC_ID = 'e'.repeat(64);
-const MESSAGE = '菜谱已保存，公开内容暂未同步，请联网后重试。';
+const MESSAGE = '记录已同步，公开菜谱暂未更新，请稍后重试。';
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const turn = () => new Promise(resolve => setImmediate(resolve));
+const result = (updated = 0, removed = 0, hasMore = false) => ({updated, removed, hasMore});
 function pending() {
   let resolve, reject;
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return {promise, resolve, reject};
 }
-const publication = (sourceRecipeId = 'one', sourceUpdatedAt = 1, id = PUBLIC_ID) => ({id, sourceRecipeId, sourceUpdatedAt});
-
 function setup(options = {}) {
-  let owner = options.owner === undefined ? OWNER : options.owner;
-  let current = true;
-  const calls = [];
-  const hooks = {};
-  const state = {recipes: copy(options.recipes || [
-    {id: 'one', name: '我的新菜名', updatedAt: 2, createdAt: 1, note: '私人心得', photo: 'wxfile://private-photo'},
-    {id: 'private', name: '未公开菜谱', updatedAt: 10, createdAt: 1}
-  ]), logs: [{id: 'meal', recipeId: 'one', note: '私人用餐记录'}], nickname: '宝宝私人称呼'};
-  const mine = {profile: {id: PROFILE_ID, exists: true}, published: copy(options.published || [publication()])};
-  const store = {getSyncInfo: () => ({owner}), getState: () => copy(state)};
+  let owner = OWNER, current = true, dirty = false, invalidations = 0;
+  const calls = [], hooks = {};
+  const state = {recipes: [{id: 'one', name: '用户菜谱', note: '私人心得', photo: 'wxfile://private-photo'},
+    {id: 'pumpkin-millet', isExample: true}], logs: [{note: '私人用餐记录'}], nickname: '宝宝私人称呼'};
+  const store = {getSyncInfo: () => ({owner, dirty}), getState: () => copy(state)};
   const wx = {cloud: {callFunction(args) {
     calls.push({name: args.name, config: copy(args.config), data: copy(args.data)});
-    Promise.resolve().then(() => {
-      if (hooks.request) return hooks.request(args.data, args);
-      return args.data.action === 'mine' ? copy(mine) : {updated: true};
-    }).then(result => args.success({result}), args.fail);
+    Promise.resolve().then(() => hooks.request ? hooks.request(args.data) : result()).then(value => args.success({result: value}), args.fail);
   }}};
   const module = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../utils/publication-sync.js'), 'utf8'), {
@@ -47,9 +35,10 @@ function setup(options = {}) {
       throw Error('Unexpected dependency: ' + name);
     }
   });
-  return {calls, hooks, state, mine,
-    run: () => module.exports.syncPublished({owner: OWNER, isCurrent: () => current}),
-    setOwner(value) { owner = value; }, setCurrent(value) { current = value; }};
+  return {calls, hooks, state,
+    run: () => module.exports.syncPublished({owner: OWNER, isCurrent: () => current, onUpdated: () => invalidations++}),
+    setOwner(value) { owner = value; }, setCurrent(value) { current = value; }, setDirty(value) { dirty = value; },
+    invalidations: () => invalidations};
 }
 
 function publicationFailure(error) {
@@ -64,119 +53,92 @@ function accountFailure(error) {
   return true;
 }
 
-test('publication sync is disabled without invoking social APIs or changing local data', async () => {
-  const app = setup({enabled: false});
-  const before = copy(app.state);
-  assert.deepEqual(copy(await app.run()), {updated: 0});
+test('disabled sharing does not invoke cloud APIs or change local data', async () => {
+  const app = setup({enabled: false}), before = copy(app.state);
+  assert.deepEqual(copy(await app.run()), {updated: 0, removed: 0});
   assert.deepEqual(app.calls, []);
   assert.deepEqual(app.state, before);
 });
 
-test('private recipes and missing local recipes are never published by reconciliation', async () => {
-  for (const published of [[], [publication('deleted')]]) {
-    const app = setup({published});
-    if (!published.length) app.mine.profile.exists = false;
-    const before = copy(app.state);
-    assert.deepEqual(copy(await app.run()), {updated: 0});
-    assert.deepEqual(app.calls.map(call => call.data.action), ['mine']);
-    assert.deepEqual(app.state, before);
-  }
-});
-
-test('reconciliation only updates changed published IDs, deduplicates them, and sends no private content', async () => {
-  const app = setup({recipes: [
-    {id: 'one', updatedAt: 2, createdAt: 1, name: '新标题', note: '私人心得', photo: 'wxfile://private-photo'},
-    {id: 'unchanged', updatedAt: 5, createdAt: 1},
-    {id: 'legacy', createdAt: 7},
-    {id: 'private', updatedAt: 10, name: '未公开菜谱'}
-  ], published: [publication(), publication(), publication('unchanged', 5, SECOND_PUBLIC_ID),
-    publication('legacy', 7, 'f'.repeat(64)), publication('deleted', 1, '1'.repeat(64))]});
-  const before = copy(app.state);
-  assert.deepEqual(copy(await app.run()), {updated: 1});
-  assert.deepEqual(app.calls.map(call => call.data), [
-    {action: 'mine', expectedOwner: OWNER},
-    {action: 'updatePublished', sourceRecipeId: 'one', expectedOwner: OWNER}
-  ]);
-  for (const call of app.calls) {
-    assert.equal(call.name, 'babyBitesSocial');
-    assert.deepEqual(call.config, {env: 'cloud1-publication-test'});
-  }
-  assert.doesNotMatch(JSON.stringify(app.calls), /新标题|私人心得|private-photo|未公开菜谱|私人用餐|宝宝私人/);
+test('reconciliation uses only the authenticated committed snapshot, never local recipe or baby content', async () => {
+  const app = setup(), before = copy(app.state);
+  app.hooks.request = () => result(2, 1);
+  assert.deepEqual(copy(await app.run()), {updated: 2, removed: 1});
+  assert.deepEqual(app.calls, [{name: 'babyBitesSocial', config: {env: 'cloud1-publication-test'},
+    data: {action: 'syncPublications', expectedOwner: OWNER}}]);
+  assert.doesNotMatch(JSON.stringify(app.calls), /用户菜谱|私人心得|private-photo|私人用餐|宝宝私人|pumpkin-millet/);
   assert.deepEqual(app.state, before);
+  assert.equal(app.invalidations(), 1);
 });
 
-test('unknown or malformed publication lists fail before any update request', async () => {
-  const invalid = [null, {}, {profile: {exists: true}}, {profile: null, published: []},
-    {profile: {}, published: []}, {profile: {exists: true}, published: null},
-    {profile: {exists: true}, published: [null]},
-    {profile: {exists: true}, published: [publication(), {...publication(), sourceRecipeId: ''}]},
-    {profile: {exists: true}, published: [publication('one', 1, 'invalid-public-id')]},
-    {profile: {exists: true}, published: [publication('one', 'unknown')]}
-  ];
-  for (const result of invalid) {
-    const app = setup(); app.hooks.request = () => result;
-    await assert.rejects(app.run(), publicationFailure);
-    assert.deepEqual(app.calls.map(call => call.data.action), ['mine']);
-  }
+test('empty or unchanged snapshots complete without invalidating read caches', async () => {
+  const app = setup();
+  assert.deepEqual(copy(await app.run()), {updated: 0, removed: 0});
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.invalidations(), 0);
 });
 
-test('updates run sequentially and a server-side withdrawal is a successful skip', async () => {
-  const app = setup({recipes: [{id: 'one', updatedAt: 2}, {id: 'two', updatedAt: 2}],
-    published: [publication(), publication('two', 1, SECOND_PUBLIC_ID)]});
-  const gate = pending();
-  app.hooks.request = data => data.action === 'mine' ? copy(app.mine)
-    : data.sourceRecipeId === 'one' ? gate.promise : {updated: true};
+test('bounded batches run sequentially and include completed deletions', async () => {
+  const app = setup(), gate = pending();
+  app.hooks.request = () => app.calls.length === 1 ? gate.promise : result(1, 2);
   const work = app.run(); await turn();
-  assert.deepEqual(app.calls.map(call => call.data.action), ['mine', 'updatePublished']);
-  gate.resolve({updated: false});
-  assert.deepEqual(copy(await work), {updated: 1});
-  assert.deepEqual(app.calls.filter(call => call.data.action === 'updatePublished').map(call => call.data.sourceRecipeId), ['one', 'two']);
+  assert.equal(app.calls.length, 1);
+  gate.resolve(result(8, 0, true));
+  assert.deepEqual(copy(await work), {updated: 9, removed: 2});
+  assert.equal(app.calls.length, 2);
+  assert.equal(app.invalidations(), 2);
 });
 
-test('each queued update checks the latest local recipe state before issuing a request', async () => {
-  const app = setup({recipes: [{id: 'one', updatedAt: 2}, {id: 'two', updatedAt: 2}],
-    published: [publication(), publication('two', 1, SECOND_PUBLIC_ID)]});
-  const gate = pending();
-  app.hooks.request = data => data.action === 'mine' ? copy(app.mine) : gate.promise;
+test('local edits pause further batches so their snapshot can be committed first', async () => {
+  const app = setup(), gate = pending();
+  app.hooks.request = () => gate.promise;
   const work = app.run(); await turn();
-  app.state.recipes.find(recipe => recipe.id === 'two').updatedAt = 1;
-  gate.resolve({updated: true});
-  assert.deepEqual(copy(await work), {updated: 1});
-  assert.deepEqual(app.calls.filter(call => call.data.action === 'updatePublished').map(call => call.data.sourceRecipeId), ['one']);
+  app.setDirty(true); gate.resolve(result(2, 0, true));
+  assert.deepEqual(copy(await work), {updated: 2, removed: 0});
+  assert.equal(app.calls.length, 1);
+  app.calls.length = 0;
+  assert.deepEqual(copy(await app.run()), {updated: 0, removed: 0});
+  assert.deepEqual(app.calls, []);
 });
 
-test('network or server update errors preserve a retryable public sync failure after private save', async () => {
-  for (const mode of ['network', 'server']) {
-    const app = setup(); let fail = true;
-    app.hooks.request = data => {
-      if (data.action === 'mine') return copy(app.mine);
-      if (fail && mode === 'network') throw Error('network timeout');
-      if (fail) return {error: {code: 'STORAGE_FAILED', message: 'private storage diagnostics'}};
-      return {updated: true};
-    };
-    const before = copy(app.state);
-    await assert.rejects(app.run(), error => {
-      publicationFailure(error);
-      if (mode === 'server') assert.equal(error.code, 'STORAGE_FAILED');
-      assert.doesNotMatch(error.message, /private storage/);
-      return true;
-    });
-    assert.deepEqual(app.state, before);
-    fail = false;
-    assert.deepEqual(copy(await app.run()), {updated: 1});
-    assert.deepEqual(app.calls.map(call => call.data.action), ['mine', 'updatePublished', 'mine', 'updatePublished']);
-  }
+test('partial server failure invalidates completed changes and retries without altering local data', async () => {
+  const app = setup(), before = copy(app.state);
+  app.hooks.request = () => ({...result(1, 1), error: {code: 'STORAGE_FAILED', message: 'private diagnostics'}});
+  await assert.rejects(app.run(), error => {
+    publicationFailure(error); assert.equal(error.code, 'STORAGE_FAILED');
+    assert.doesNotMatch(error.message, /private diagnostics/); return true;
+  });
+  assert.equal(app.invalidations(), 1);
+  assert.deepEqual(app.state, before);
+  app.hooks.request = () => result(1);
+  assert.deepEqual(copy(await app.run()), {updated: 1, removed: 0});
+  assert.equal(app.calls.length, 2);
 });
 
-test('malformed update responses are not mistaken for a completed public sync', async () => {
-  for (const result of [null, {}, {updated: 'yes'}, {updated: 1}]) {
-    const app = setup();
-    app.hooks.request = data => data.action === 'mine' ? copy(app.mine) : result;
+test('lost responses invalidate caches because the server may have completed a write', async () => {
+  const app = setup(); app.hooks.request = () => { throw Error('network timeout'); };
+  await assert.rejects(app.run(), error => publicationFailure(error) && error.code === 'NETWORK');
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.invalidations(), 1);
+});
+
+test('malformed counts and continuation responses cannot signal successful synchronization', async () => {
+  for (const value of [null, [], {}, {updated: true}, result(-1), result(1.5), result(9), result(1, -1),
+    {updated: 0, removed: 0}, {...result(), hasMore: 'yes'}, result(0, 0, true)]) {
+    const app = setup(); app.hooks.request = () => value;
     await assert.rejects(app.run(), publicationFailure);
+    assert.equal(app.calls.length, 1);
   }
 });
 
-test('an invalidated session or different current owner cannot begin reconciliation', async () => {
+test('continuous remote changes are bounded and leave remaining work retryable', async () => {
+  const app = setup(); app.hooks.request = () => result(1, 0, true);
+  await assert.rejects(app.run(), publicationFailure);
+  assert.equal(app.calls.length, 250);
+  assert.equal(app.invalidations(), 250);
+});
+
+test('invalidated sessions and different owners cannot begin reconciliation', async () => {
   for (const mode of ['owner', 'session']) {
     const app = setup();
     if (mode === 'owner') app.setOwner(OTHER); else app.setCurrent(false);
@@ -185,30 +147,30 @@ test('an invalidated session or different current owner cannot begin reconciliat
   }
 });
 
-test('owner changes while reading publication status cannot enqueue an update', async () => {
-  const app = setup(), gate = pending(); app.hooks.request = () => gate.promise;
-  const work = app.run(); await turn(); app.setOwner(OTHER);
-  gate.resolve(copy(app.mine));
-  await assert.rejects(work, accountFailure);
-  assert.deepEqual(app.calls.map(call => call.data.action), ['mine']);
-});
-
-test('a session invalidated during an update stops the remaining batch even after A to B to A', async () => {
-  const app = setup({recipes: [{id: 'one', updatedAt: 2}, {id: 'two', updatedAt: 2}],
-    published: [publication(), publication('two', 1, SECOND_PUBLIC_ID)]});
-  const gate = pending();
-  app.hooks.request = data => data.action === 'mine' ? copy(app.mine) : gate.promise;
-  const work = app.run(); await turn();
-  app.setOwner(OTHER); app.setCurrent(false); app.setOwner(OWNER);
-  gate.resolve({updated: true});
-  await assert.rejects(work, accountFailure);
-  assert.equal(app.calls.filter(call => call.data.action === 'updatePublished').length, 1);
-});
-
-test('server account mismatch is preserved instead of being reduced to a generic sync error', async () => {
-  for (const action of ['mine', 'updatePublished']) {
-    const app = setup();
-    app.hooks.request = data => data.action === action ? {error: {code: 'ACCOUNT_CHANGED'}} : copy(app.mine);
-    await assert.rejects(app.run(), accountFailure);
+test('account changes during a request discard its response and never invalidate the next account cache', async () => {
+  for (const aba of [false, true]) {
+    const app = setup(), gate = pending(); app.hooks.request = () => gate.promise;
+    const work = app.run(); await turn();
+    app.setOwner(OTHER);
+    if (aba) { app.setCurrent(false); app.setOwner(OWNER); }
+    gate.resolve(result(1, 0, true));
+    await assert.rejects(work, accountFailure);
+    assert.equal(app.calls.length, 1);
+    assert.equal(app.invalidations(), 0);
   }
+});
+
+test('server account mismatch is preserved instead of reduced to a retryable sync error', async () => {
+  const app = setup(); app.hooks.request = () => ({error: {code: 'ACCOUNT_CHANGED'}});
+  await assert.rejects(app.run(), accountFailure);
+  assert.equal(app.invalidations(), 0);
+});
+
+for (const code of ['FAMILY_CHANGED', 'UNAUTHENTICATED']) test('publication identity rejection remains fatal: ' + code, async () => {
+  const app = setup(); app.hooks.request = () => ({error: {code}});
+  await assert.rejects(app.run(), error => error.code === code && error.invalidIdentity && !error.publicationPending);
+});
+test('an outdated backend explains the service mismatch without blaming connectivity', async () => {
+  const app = setup(); app.hooks.request = () => ({error: {code: 'INVALID_REQUEST'}});
+  await assert.rejects(app.run(), error => error.publicationPending && /服务需要更新/.test(error.message) && !/联网/.test(error.message));
 });

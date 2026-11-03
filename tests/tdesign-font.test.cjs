@@ -247,7 +247,8 @@ function appHarness(loadIcons) {
     App(value) { app = value; }, Promise, getCurrentPages: () => [],
     console: {warn(value) { calls.warnings.push(value); }},
     require(name) {
-      if (name === './utils/store') return {init() { calls.init++; }, subscribe() { calls.subscriptions++; }};
+      if (name === './utils/family-photos') return {photoURL: value => value || '', subscribe: () => () => {}};
+      if (name === './utils/store') return {getSyncInfo: () => ({owner: ''}), init() { calls.init++; }, subscribe() { calls.subscriptions++; }};
       if (name === './utils/cloud-sync') return {
         start() { calls.starts++; }, getStatus: () => ({state: syncState}), syncNow() { calls.syncs++; }
       };

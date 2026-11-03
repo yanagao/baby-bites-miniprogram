@@ -16,7 +16,7 @@ function setup(social) {
   let owner = 'owner-a';
   const listeners = new Set();
   const calls = {routes: [], syncs: 0, updates: 0, refreshStops: 0};
-  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getAllergyFilterEnabled: () => false, getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {navigateTo(value) { calls.routes.push(value.url); }, hideShareMenu() {}, stopPullDownRefresh() { calls.refreshStops++; }};
   const accountModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/profile/account.js'), 'utf8'), {

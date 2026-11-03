@@ -1,0 +1,18 @@
+.cooksnap-editor-page {padding:20rpx 28rpx calc(40rpx + env(safe-area-inset-bottom));color:#345158;}
+.cooksnap-loading {padding:60rpx 0;text-align:center;font-size:var(--font-body);color:#82969a;}
+.cooksnap-recipe {padding:24rpx;border-radius:20rpx;background:#eff8f8;}
+.cooksnap-eyebrow {font-size:var(--font-caption);line-height:var(--line-height-body);color:#6e8589;overflow-wrap:anywhere;}
+.cooksnap-title {margin-top:8rpx;font-weight:600;font-size:var(--font-section-title);line-height:1.5;overflow-wrap:anywhere;}
+.cooksnap-intro {margin:24rpx 0;color:#6e8589;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.cooksnap-label {font-weight:600;font-size:var(--font-body);line-height:var(--line-height-body);margin-bottom:16rpx;}
+.cooksnap-photo-wrap {border:1rpx solid #e2edf0;border-radius:20rpx;overflow:hidden;}
+.cooksnap-editor-photo {display:block;width:100%;height:440rpx;background:#eff8f8;border-radius:18rpx;}
+.cooksnap-photo-actions {display:flex;justify-content:flex-end;gap:8rpx;padding:6rpx 12rpx;}
+.cooksnap-add-photo {--td-button-medium-height:160rpx;}
+.cooksnap-text-label {margin-top:28rpx;}
+.cooksnap-field-error {margin:12rpx 0;color:#b36f55;font-size:var(--font-secondary);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.cooksnap-disclosure {margin:20rpx 0 28rpx;color:#82969a;font-size:var(--font-caption);line-height:var(--line-height-body);}
+.cooksnap-success {padding-top:26rpx;}
+.cooksnap-shared-text {padding:20rpx 0;font-size:var(--font-body);line-height:var(--line-height-body);white-space:pre-wrap;overflow-wrap:anywhere;}
+.cooksnap-success-title {margin-top:14rpx;font-weight:600;font-size:var(--font-card-title);line-height:var(--line-height-body);}
+.cooksnap-done {display:block;margin-top:14rpx;}

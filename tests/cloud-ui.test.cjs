@@ -52,6 +52,7 @@ function setup(options = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'app.js'), 'utf8'), {
     App(value) { app = value; }, wx, console, getCurrentPages() { return currentPages; },
     require(name) {
+      if (name === './utils/family-photos') return {photoURL: value => value || '', subscribe: () => () => {}};
       if (name === './utils/store') return store;
       if (name === './utils/cloud-sync') return cloudSync;
       if (name === './assets/fonts/pocket-brush') return {};
@@ -67,11 +68,14 @@ function setup(options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
+        if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
+        if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;
         if (dependency === '../../config/cloud') return {socialEnabled: true};
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};
         if (dependency === '../../utils/selectors') return selectors;
+        if (dependency === '../../utils/recipe-origin') return require('../utils/recipe-origin');
         if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/tab-bar') return {syncTabBar() {}};
         if (dependency === '../../utils/backup') return backup;
@@ -395,7 +399,7 @@ test('a backup confirmation opened by A cannot import after switching to B', asy
   assert.deepEqual(copy(fixture.store.getState()), before);
   assert.match(page.data.error, /账号已切换/);
   assert.equal(page.data.busy, false);
-  assert.ok(page.data.backupText);
+  assert.equal(page.data.backupText, '');
 });
 
 test('settings passes a guard that rejects account switches during asynchronous backup decoding', async () => {

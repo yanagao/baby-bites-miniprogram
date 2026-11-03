@@ -16,7 +16,8 @@ function setup() {
   const storage = new Map();
   let failWrites = false;
   let returnWarning = false;
-  const calls = { writes: 0, saves: [], unlinks: [], back: 0, alerts: [], toasts: [], addLog: 0, updateLog: 0 };
+  const hooks = {};
+  const calls = { writes: 0, saves: [], unlinks: [], back: 0, alerts: [], toasts: [], addLog: 0, updateLog: 0, redirects: [], mine: [], timerDelays: [] };
   const wx = {
     getStorageSync(key) { return copy(storage.get(key)); },
     setStorageSync(key, value) {
@@ -28,6 +29,8 @@ function setup() {
     disableAlertBeforeUnload(options) { returnWarning = false; if (options.complete) options.complete(); },
     setNavigationBarTitle() {},
     showToast(options) { calls.toasts.push(options.title); },
+    redirectTo(options) { calls.redirects.push(options); },
+    cloud: {callFunction() { throw Error('Forms must save locally before background publication'); }},
     chooseMedia(options) {
       options.success({ tempFiles: [{ tempFilePath: 'wxfile://tmp/selected-photo.jpg', size: 4096 }] });
     },
@@ -51,6 +54,8 @@ function setup() {
       if (name === './categories') return require('../utils/categories');
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
+      if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './baby-age') return require('../utils/baby-age');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -65,8 +70,12 @@ function setup() {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
       wx, Page(value) { definition = value; },
       require(dependency) {
+        if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
+        if (dependency === '../../utils/social') return {getMine: async options => { calls.mine.push(options); return hooks.mine ? hooks.mine(options) : {published: []}; }};
+        if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/selectors') return selectors;
+        if (dependency === '../../utils/recipe-origin') return require('../utils/recipe-origin');
         if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/ui') return {
           back() {
@@ -93,7 +102,7 @@ function setup() {
     return page;
   }
   return {
-    store, calls, open,
+    store, calls, open, wx, hooks,
     returnWarning: () => returnWarning,
     failWrites() { failWrites = true; }, allowWrites() { failWrites = false; }
   };
@@ -279,6 +288,7 @@ test('canceling a changed recipe and choosing to continue keeps all edits withou
   assert.equal(app.returnWarning(), true);
   await page.save();
   assert.equal(newRecipe(app).note, '下次切得更细');
+  assert.equal(page.data.savedComplete, true);
   assert.equal(app.calls.back, 1);
   assert.equal(app.returnWarning(), false);
 });
@@ -332,6 +342,7 @@ test('failed storage keeps the full photo draft and retries without saving the p
   assert.deepEqual(copy(recipe.steps), ['南瓜切小块', '与小米一起煮熟']);
   assert.equal(app.store.getState().logs[0].rating, 3);
   assert.equal(app.calls.writes, 1);
+  assert.equal(page.data.savedComplete, true);
   assert.equal(app.calls.back, 1);
   page.onUnload();
   assert.deepEqual(app.calls.unlinks, [], 'the photo referenced by the saved recipe must survive page unload');
@@ -389,4 +400,136 @@ test('missing meal or recipe opens an explicit empty state and cannot write a ne
   assert.equal(app.calls.writes, 0);
   assert.equal(app.calls.addLog, 0);
   assert.equal(app.calls.updateLog, 0);
+});
+
+function ownRecipe(app, overrides = {}) {
+  return app.store.saveRecipe({...copy(seed[0]), id: undefined, isExample: false, ...overrides});
+}
+const SHARED_SOURCE = {profileId: 'c'.repeat(32), recipeId: 'd'.repeat(64), authorName: '其他家长'};
+
+test('saving a new recipe returns immediately without a sharing choice or remote status request', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page);
+  await page.save();
+  const saved = newRecipe(app), writes = app.calls.writes;
+  assert.equal(page.data.savedComplete, true); assert.equal(app.calls.back, 1);
+  assert.equal(app.returnWarning(), false); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
+  await page.save(); input(page, 'name', '不应再次保存');
+  assert.equal(app.calls.writes, writes); assert.equal(app.store.getRecipe(saved.id).name, saved.name);
+});
+
+test('editing own, built-in and attributed recipes returns without publishing from the form', async () => {
+  for (const kind of ['own', 'builtin', 'copy']) {
+    const app = setup(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
+    const page = app.open('editor', {id}); input(page, 'name', '调整后的做法'); await page.save();
+    assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
+    assert.equal(app.store.getRecipe(id).name, '调整后的做法');
+    if (kind === 'copy') assert.deepEqual(copy(app.store.getRecipe(id).source), SHARED_SOURCE);
+  }
+});
+
+test('a text-only draft keeps the family photo synced while the editor was open', async () => {
+  const app = setup(), owner = 'a'.repeat(64), familyId = 'f'.repeat(64);
+  app.store.bindAccount(owner);
+  app.store.bindScope(owner, {kind: 'family', id: familyId, membershipId: 'e'.repeat(32)});
+  const id = ownRecipe(app, {photo: ''}), editor = app.open('editor', {id});
+  const snapshot = app.store.getSyncSnapshot(), {sequence} = app.store.getSyncInfo();
+  const photo = 'cloud://test.bucket/families/' + familyId + '/photos/first.jpg';
+  snapshot.data.recipes.find(recipe => recipe.id === id).photo = photo;
+  app.store.applySyncedSnapshot(snapshot, {owner, revision: 1, sequence});
+  input(editor, 'name', '新菜名');
+  await editor.save();
+  assert.equal(app.store.getRecipe(id).photo, photo);
+  assert.equal(app.store.getRecipe(id).name, '新菜名');
+
+  const next = app.open('editor', {id});
+  next.clearPhoto();
+  await next.save();
+  assert.equal(app.store.getRecipe(id).photo, '');
+});
+
+test('a new recipe with a very-liked meal saves both once and returns', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page);
+  page.toggleRecordMeal(valueEvent(true)); page.rate(valueEvent(3)); await page.save();
+  assert.equal(app.store.getState().logs.length, 1); assert.equal(app.store.getState().logs[0].rating, 3);
+  assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []);
+  await page.save(); assert.equal(app.store.getState().logs.length, 1);
+});
+
+test('all meal ratings return after saving without a share prompt or remote request', async () => {
+  for (const rating of [1, 2, 3]) {
+    const app = setup(), id = ownRecipe(app), page = app.open('record-editor', {id});
+    page.rate(valueEvent(rating)); await page.save();
+    assert.equal(app.store.getState().logs[0].rating, rating); assert.equal(app.calls.back, 1);
+    assert.equal(page.data.savedComplete, true); assert.deepEqual(app.calls.mine, []); assert.deepEqual(app.calls.redirects, []);
+    const writes = app.calls.writes; page.save(); page.rate(valueEvent(1)); assert.equal(app.calls.writes, writes);
+  }
+});
+
+test('updating a meal to very liked edits the existing log and immediately returns', async () => {
+  const app = setup(), id = ownRecipe(app), logId = app.store.addLog({recipeId: id, rating: 2, date: '2020-01-01'});
+  const page = app.open('record-editor', {logId}); page.rate(valueEvent(3)); page.note(valueEvent('喜欢南瓜')); await page.save();
+  assert.equal(app.store.getState().logs.length, 1); assert.equal(app.store.getLog(logId).rating, 3);
+  assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
+});
+
+test('failed saves retain the draft and successful retries return exactly once', async () => {
+  for (const name of ['editor', 'record-editor']) {
+    const app = setup(), id = name === 'record-editor' ? ownRecipe(app) : null, page = app.open(name, id ? {id} : {});
+    if (id) page.rate(valueEvent(3)); else fillRecipe(page);
+    app.failWrites(); await page.save();
+    assert.equal(page.data.savedComplete, false); assert.equal(app.calls.back, 0);
+    app.allowWrites(); await page.save();
+    assert.equal(page.data.savedComplete, true); assert.equal(app.calls.back, 1);
+    const writes = app.calls.writes; await page.save(); assert.equal(app.calls.writes, writes);
+  }
+});
+
+test('recipe and record forms have no publication-choice UI or preview route', () => {
+  for (const name of ['editor', 'record-editor']) {
+    const page = fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8');
+    const template = fs.readFileSync(path.join(root, 'pages', name, 'index.wxml'), 'utf8');
+    assert.doesNotMatch(page + template, /share-prompt|share-preview|先留给自己|确认预览|previewPublication|publishRecipe/);
+  }
+});
+
+test('closing the editor during photo persistence prevents the save and removes its orphaned staged photo', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page); page.choosePhoto();
+  let finish;
+  app.wx.getFileSystemManager = () => ({saveFile(options) { finish = options.success; }, unlink(options) { app.calls.unlinks.push(options.filePath); }});
+  const save = page.save(); page.onUnload(); finish({savedFilePath: 'wxfile://usr/late-photo.jpg'}); await save;
+  assert.equal(app.calls.writes, 0);
+  assert.deepEqual(app.calls.unlinks, ['wxfile://usr/late-photo.jpg']);
+  assert.equal(page.data.savedComplete, false);
+  assert.deepEqual(app.calls.redirects, []);
+});
+
+test('same-account family changes clear editor drafts and an ABA return cannot save them', async () => {
+  for (const name of ['editor', 'record-editor']) {
+    const app = setup(), owner = 'a'.repeat(64);
+    app.store.bindAccount(owner);
+    const id = ownRecipe(app), page = app.open(name, {id});
+    if (name === 'editor') input(page, 'name', '待保存修改'); else page.rate(valueEvent(3));
+    app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+    if (name === 'editor') assert.equal(page.data.form.name, '');
+    app.store.bindScope(owner, {kind: 'personal', id: owner});
+    const before = copy(app.store.getState());
+    await page.save();
+    assert.deepEqual(copy(app.store.getState()), before);
+    assert.match(page.data.error, /家庭|账号/);
+    assert.equal(app.calls.back, 0);
+  }
+});
+
+test('editing another family member recipe preserves creator and returns without changing its creator', async () => {
+  const app = setup(), owner = 'a'.repeat(64), creator = 'b'.repeat(64);
+  app.store.bindAccount(owner);
+  app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  const id = app.store.saveRecipe({...seed[0], id: undefined, isExample: false, createdBy: creator});
+  const recipe = app.store.getRecipe(id);
+  const page = app.open('editor', {id: recipe.id});
+  input(page, 'name', '爸爸调整后的南瓜饭');
+  await page.save();
+  assert.equal(app.store.getRecipe(recipe.id).createdBy, creator);
+  assert.equal(app.store.getRecipe(recipe.id).name, '爸爸调整后的南瓜饭');
+  assert.equal(app.calls.mine.length, 0);
 });

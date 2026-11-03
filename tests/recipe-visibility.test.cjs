@@ -40,89 +40,33 @@ function cookbook(options = {}) {
   return {page, state, hooks, calls, listeners, changeOwner(value) {owner = value; listeners.forEach(listener => listener());}};
 }
 
-test('cookbook entry queries preselect favorites or visibility and preserve a literal search', async () => {
+test('cookbook entry selects favorites and maps old visibility links to the complete cookbook', () => {
   const favorite = cookbook({query: {collection: 'favorites', search: '南瓜'}});
-  assert.equal(favorite.page.data.collection, 'favorites');
-  assert.equal(favorite.page.data.onlyFavorites, true);
+  assert.equal(favorite.page.data.collection, 'favorites'); assert.equal(favorite.page.data.onlyFavorites, true);
   assert.equal(favorite.page.data.search, '南瓜');
-  const published = cookbook({query: {collection: 'public'}});
-  assert.equal(published.page.data.visibility, 'public');
-  assert.equal(published.page.data.recipes.length, 0, 'unknown visibility must not be guessed');
-  await published.page.refreshPublication();
-  assert.equal(published.page.data.recipes.length, 1);
-  const invalid = cookbook({query: {collection: 'unknown'}});
-  assert.equal(invalid.page.data.collection, 'all');
+  for (const collection of ['public', 'private', 'unknown']) {
+    const app = cookbook({query: {collection}});
+    assert.equal(app.page.data.collection, 'all'); assert.equal(app.page.data.recipes.length, 3);
+  }
 });
 
-test('publication visibility is unknown until confirmed and never inferred private from a failed request', async () => {
-  const app = cookbook();
-  assert.ok(app.page.data.recipes.every(recipe => recipe.visibility === 'unknown'));
-  app.hooks.mine = async () => {throw Error('网络暂时不可用');};
-  await app.page.refreshPublication();
-  assert.equal(app.page.data.publicationReady, false);
-  assert.ok(app.page.data.recipes.every(recipe => recipe.visibility === 'unknown'));
-  app.page.changeCollection(event('private'));
-  assert.equal(app.page.data.recipes.length, 0);
-  assert.match(app.page.data.publicationError, /网络/);
+test('cookbook browsing is local and needs no visibility or profile network request', async () => {
+  const app = cookbook(); app.hooks.mine = async () => {throw Error('offline');};
+  app.page.onShow(); app.page.refresh();
+  assert.equal(app.calls.mine, 0); assert.equal(app.page.data.recipes.length, 3);
+  assert.ok(app.page.data.recipes.every(recipe => !Object.hasOwn(recipe, 'visibility')));
+  app.page.changeCollection(event('private')); assert.equal(app.page.data.collection, 'all');
+  app.page.changeCollection(event('favorites')); assert.equal(app.page.data.recipes.length, 1);
+  app.page.resetFilters(); assert.equal(app.page.data.recipes.length, 3);
 });
 
-test('all, private, public and favorite views compose with filters without changing stored data', async () => {
-  const app = cookbook();
-  const before = clone(app.state);
-  await app.page.refreshPublication();
-  assert.equal(app.page.data.publicCount, 1);
-  assert.equal(app.page.data.privateCount, 2);
-  app.page.changeCollection(event('public'));
-  assert.deepEqual(app.page.data.recipes.map(recipe => recipe.id), [app.state.recipes[0].id]);
-  app.page.searchInput(event('不会匹配的搜索'));
-  assert.equal(app.page.data.recipes.length, 0);
-  app.page.searchInput(event(''));
-  app.page.changeCollection(event('private'));
-  assert.equal(app.page.data.recipes.length, 2);
-  assert.ok(app.page.data.recipes.every(recipe => recipe.visibility === 'private'));
-  app.page.changeCollection(event('favorites'));
-  assert.equal(app.page.data.recipes.length, 1);
-  assert.equal(app.page.data.recipes[0].visibility, 'public');
-  app.page.resetFilters();
-  assert.equal(app.page.data.collection, 'all');
-  assert.equal(app.page.data.recipes.length, 3);
-  assert.deepEqual(app.state, before);
-});
-
-test('account switches immediately drop publication metadata and reject older responses even after A to B to A', async () => {
-  const app = cookbook();
-  await app.page.refreshPublication();
-  const late = pending();
-  app.hooks.mine = () => late.promise;
-  const work = app.page.refreshPublication();
-  app.changeOwner('owner-b'); app.changeOwner('owner-a');
-  assert.equal(app.page.data.publicCount, 0);
-  assert.ok(app.page.data.recipes.every(recipe => recipe.visibility === 'unknown'));
-  late.resolve({published: [{id: 'old', sourceRecipeId: app.state.recipes[0].id, sourceUpdatedAt: 1}]});
-  await work;
-  assert.equal(app.page.data.publicationReady, false);
-  assert.match(app.page.data.publicationError, /账号已切换/);
-  delete app.hooks.mine;
-  await app.page.refreshPublication();
-  assert.equal(app.page.data.publicationReady, true);
-});
-
-test('first identity binding succeeds, private store updates cause no repeated social calls, and unload ignores results', async () => {
-  const app = cookbook({owner: ''});
-  app.hooks.mine = async () => {app.changeOwner('owner-a'); return {published: []};};
-  await app.page.refreshPublication();
-  assert.equal(app.page.data.publicationReady, true);
-  app.page.refresh();
-  app.state.recipes[0].favorite = false;
+test('local updates refresh immediately and the subscription stops after unload', () => {
+  const app = cookbook(); app.page.changeCollection(event('favorites'));
+  app.state.recipes[0].favorite = false; app.listeners.forEach(listener => listener());
+  assert.equal(app.page.data.recipes.length, 0); assert.equal(app.calls.mine, 0);
+  app.page.onUnload(); const updates = app.calls.updates;
   app.listeners.forEach(listener => listener());
-  assert.equal(app.calls.mine, 1);
-  const late = pending(); app.hooks.mine = () => late.promise;
-  const work = app.page.refreshPublication();
-  app.page.onUnload();
-  const count = app.calls.updates;
-  late.resolve({published: []}); await work;
-  assert.equal(app.calls.updates, count);
-  assert.equal(app.listeners.size, 0);
+  assert.equal(app.calls.updates, updates); assert.equal(app.listeners.size, 0);
 });
 
 function publicDetail() {

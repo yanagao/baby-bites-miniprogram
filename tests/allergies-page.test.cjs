@@ -11,12 +11,15 @@ const input = value => ({detail: {value}});
 const food = name => ({currentTarget: {dataset: {name}}});
 
 function setup(initial = {}) {
-  let owner = 'account-a', writeFailure = false, alerted = false;
+  let owner = 'account-a', scopeKey = 'personal-a', writeFailure = false, preferenceFailure = false, alerted = false;
+  const preferences = new Map();
   let state = copy(initial);
   const listeners = new Set();
-  const calls = {writes: [], backs: 0, toasts: [], changes: 0};
+  const calls = {preferenceWrites: [], writes: [], backs: 0, toasts: [], changes: 0};
   const store = {
-    getSyncInfo: () => ({owner}), getState: () => copy(state),
+    getSyncInfo: () => ({owner, scopeKey}),
+    getAllergyFilterEnabled: () => preferences.get(owner + ':' + scopeKey) === true,
+    setAllergyFilterEnabled(value) { if (preferenceFailure) throw Error('筛选偏好未保存'); calls.preferenceWrites.push(value); preferences.set(owner + ':' + scopeKey, value); listeners.forEach(fn => fn()); }, getState: () => copy(state),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     setAllergies(values) {
       calls.writes.push(copy(values));
@@ -44,6 +47,8 @@ function setup(initial = {}) {
   page.onLoad();
   return {page, calls, state: () => copy(state), alerted: () => alerted,
     failWrites(value = true) { writeFailure = value; },
+    failPreference(value = true) { preferenceFailure = value; },
+    changeScope(value) { scopeKey = value; listeners.forEach(fn => fn()); },
     changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); },
     sync(values) { state.allergies = copy(values); listeners.forEach(fn => fn()); },
     listenerCount: () => listeners.size};
@@ -188,4 +193,31 @@ test('the profile entry is self-only and respects account invalidation', () => {
   assert.match(template, /<button wx:if="\{\{isSelf\}\}" class="profile-allergies" bindtap="openAllergies"/);
   const config = JSON.parse(fs.readFileSync(path.join(root, 'app.json'), 'utf8'));
   assert.ok(config.pages.includes('pages/allergies/index'));
+});
+
+
+test('allergy filtering defaults off and explicit toggles persist immediately without saving the shared list', () => {
+  const h = setup({allergies: ['鸡蛋']}); assert.equal(h.page.data.excludeAllergies, false);
+  h.page.changeFilter(input(true)); assert.equal(h.page.data.excludeAllergies, true);
+  h.page.changeFilter(input(false)); assert.equal(h.page.data.excludeAllergies, false);
+  assert.deepEqual(h.calls.preferenceWrites, [true, false]); assert.deepEqual(h.calls.writes, []);
+  assert.deepEqual(h.state().allergies, ['鸡蛋']); assert.equal(h.alerted(), false); assert.equal(h.calls.backs, 0);
+});
+
+test('filter toggles preserve unsaved allergy edits and failed preference writes are retryable', () => {
+  const h = setup({allergies: ['鸡蛋']}); h.page.changeInput(input('芒果'));
+  h.failPreference(); h.page.changeFilter(input(true));
+  assert.equal(h.page.data.excludeAllergies, false); assert.equal(h.page.data.input, '芒果'); assert.match(h.page.data.error, /未保存/);
+  h.failPreference(false); h.page.changeFilter(input(true));
+  assert.equal(h.page.data.excludeAllergies, true); assert.equal(h.page.data.input, '芒果'); assert.equal(h.alerted(), true);
+  assert.deepEqual(h.calls.writes, []);
+});
+
+test('family and account switches block stale filter actions including ABA returns', () => {
+  for (const change of ['changeOwner', 'changeScope']) {
+    const h = setup({allergies: ['鸡蛋']}); h.page.changeFilter(input(true));
+    h[change]('other'); h[change](change === 'changeOwner' ? 'account-a' : 'personal-a');
+    h.page.changeFilter(input(false)); assert.deepEqual(h.calls.preferenceWrites, [true]);
+    assert.equal(h.page.data.excludeAllergies, false); assert.match(h.page.data.accountError, /切换|变化/);
+  }
 });

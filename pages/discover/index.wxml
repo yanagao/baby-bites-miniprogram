@@ -9,8 +9,8 @@
   <block wx:else>
     <view wx:if="{{!recipes.length}}" class="panel discover-state">
       <view class="discover-empty-title">{{nextCursor ? '这页暂无匹配菜谱' : skippedAllergyCount ? '已跳过含过敏食材的菜谱' : tab === 'following' ? '还没有关注的菜谱' : query ? '没有找到这道味道' : '小厨房还在准备中'}}</view>
-      <view class="muted">{{nextCursor ? '可以继续加载，看看后面的菜谱。' : skippedAllergyCount ? '当前已加载的菜谱均含已记录过敏食材，可稍后查看其他新菜。' : tab === 'following' ? '关注喜欢的作者，TA 公开的菜谱会出现在这里。' : query ? '换个菜名、食材或作者试试吧。' : '大家公开分享的菜谱会出现在这里。'}}</view>
-      <view wx:if="{{!nextCursor}}" class="discover-empty-action"><t-button wx:if="{{tab === 'following'}}" theme="primary" variant="outline" size="small" bind:tap="showLatest">去发现新菜谱</t-button><t-button wx:elif="{{query}}" theme="primary" variant="outline" size="small" bind:tap="clearSearch">看看全部公开菜谱</t-button></view>
+      <view class="muted">{{nextCursor ? '可以继续加载，看看后面的菜谱。' : skippedAllergyCount ? '当前已加载的菜谱均含已记录过敏食材，可稍后查看其他新菜。' : tab === 'following' ? '关注喜欢的作者，TA 上传的菜谱会出现在这里。' : query ? '换个菜名、食材或作者试试吧。' : '大家上传的菜谱会出现在这里。'}}</view>
+      <view wx:if="{{!nextCursor}}" class="discover-empty-action"><t-button wx:if="{{tab === 'following'}}" theme="primary" variant="outline" size="small" bind:tap="showLatest">去发现新菜谱</t-button><t-button wx:elif="{{query}}" theme="primary" variant="outline" size="small" bind:tap="clearSearch">看看全部菜谱</t-button></view>
     </view>
     <view class="discover-grid"><recipe-tile wx:for="{{recipes}}" wx:key="id" recipe="{{item}}" show-author bind:open="openRecipe" bind:author="openProfile" bind:photoerror="photoError" /></view>
     <view wx:if="{{nextCursor}}" class="discover-more"><view wx:if="{{loadMoreError}}" class="discover-page-error">{{loadMoreError}}</view><t-button theme="primary" variant="text" loading="{{loadingMore}}" disabled="{{loadingMore}}" bind:tap="loadMore">{{loadMoreError ? '重试加载' : '加载更多'}}</t-button></view>

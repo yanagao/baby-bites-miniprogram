@@ -2,62 +2,69 @@
 
 const config = require('../config/cloud');
 const store = require('./store');
-const PENDING_MESSAGE = '菜谱已保存，公开内容暂未同步，请联网后重试。';
+const PENDING_MESSAGE = '记录已同步，公开菜谱暂未更新，请稍后重试。';
+const MAX_BATCHES = 250;
 
 function fail(code) {
-  const error = Error(code === 'ACCOUNT_CHANGED' ? '微信账号已切换，请重新同步当前账号。' : PENDING_MESSAGE);
+  const identityMessages = {ACCOUNT_CHANGED: '微信账号已切换，请重新同步当前账号。',
+    FAMILY_CHANGED: '家庭已变化，请重新同步后重试。', UNAUTHENTICATED: '未能确认微信账号，请重新同步。'};
+  const error = Error(identityMessages[code] || (code === 'INVALID_REQUEST'
+    ? '记录已同步，公开菜谱服务需要更新，请稍后重试。' : PENDING_MESSAGE));
   error.code = code || 'PUBLICATION_SYNC_FAILED';
   error.userMessage = error.message;
-  error.publicationPending = code !== 'ACCOUNT_CHANGED';
+  error.invalidIdentity = Boolean(identityMessages[code]);
+  error.publicationPending = !error.invalidIdentity;
   throw error;
 }
 
 // Do not call social.js here: publishing there waits for private cloud sync.
-// This helper runs after that sync, and only asks the server to update existing
-// publications from its own committed snapshot. No recipe content is submitted.
+// This helper runs after that sync. The server automatically publishes the
+// actor's user-created recipes, updates existing publications and removes deleted
+// ones. Built-ins, copied sources and private baby records stay out of the feed.
 async function syncPublished({owner, isCurrent, onUpdated}) {
-  if (config.socialEnabled !== true) return {updated: 0};
+  if (config.socialEnabled !== true) return {updated: 0, removed: 0};
+  const scope = store.getSyncInfo().scope;
+  const scopeKey = store.getSyncInfo().scopeKey;
+  let updated = 0, removed = 0;
+  const invalidate = () => { if (typeof onUpdated === 'function') onUpdated(); };
   const check = () => {
-    if (!owner || store.getSyncInfo().owner !== owner || !isCurrent()) fail('ACCOUNT_CHANGED');
+    if (!owner || store.getSyncInfo().owner !== owner || store.getSyncInfo().scopeKey !== scopeKey || !isCurrent()) fail('ACCOUNT_CHANGED');
   };
-  async function request(action, data = {}) {
+  for (let batch = 0; batch < MAX_BATCHES; batch++) {
     check();
+    // Finish a new local edit first. cloud-sync will commit it and start another
+    // reconciliation pass, instead of continuing to share an older snapshot.
+    if (store.getSyncInfo().dirty) return {updated, removed};
     let response;
     try {
       response = await new Promise((resolve, reject) => wx.cloud.callFunction({
         name: 'babyBitesSocial', config: {env: config.env},
-        data: {...data, action, expectedOwner: owner}, success: resolve, fail: reject
+        data: {action: 'syncPublications', expectedOwner: owner, ...(scope ? {expectedScope: scope, protocolVersion: 2} : {})}, success: resolve, fail: reject
       }));
-    } catch (_) { check(); fail('NETWORK'); }
+    } catch (_) {
+      check();
+      // A lost response can follow a successful server write.
+      invalidate();
+      fail('NETWORK');
+    }
     check();
     const result = response && response.result;
     if (!result || typeof result !== 'object' || Array.isArray(result)) fail();
-    if (result.error) fail(result.error.code);
-    return result;
-  }
-  const mine = await request('mine');
-  if (!mine.profile || typeof mine.profile.exists !== 'boolean' || !Array.isArray(mine.published) ||
-    !mine.published.every(item => item && /^[a-f0-9]{64}$/.test(item.id || '') &&
-      typeof item.sourceRecipeId === 'string' && item.sourceRecipeId.trim() &&
-      Number.isSafeInteger(item.sourceUpdatedAt) && item.sourceUpdatedAt >= 0)) fail();
-  const visited = new Set();
-  let updated = 0;
-  for (const publication of mine.published) {
-    check();
-    const id = publication.sourceRecipeId;
-    if (visited.has(id)) continue;
-    visited.add(id);
-    const recipe = store.getState().recipes.find(item => item.id === id);
-    if (!recipe || publication.sourceUpdatedAt === (recipe.updatedAt || recipe.createdAt || 0)) continue;
-    const result = await request('updatePublished', {sourceRecipeId: id});
-    if (typeof result.updated !== 'boolean') fail();
-    if (result.updated) {
-      updated++;
-      // Report each completed update even if a later publication fails.
-      if (typeof onUpdated === 'function') onUpdated();
+    const countsValid = Number.isSafeInteger(result.updated) && result.updated >= 0 &&
+      Number.isSafeInteger(result.removed) && result.removed >= 0 && result.updated + result.removed <= 8;
+    if (countsValid && result.updated + result.removed) {
+      updated += result.updated;
+      removed += result.removed;
+      invalidate();
     }
+    if (result.error) fail(result.error.code);
+    if (!countsValid || typeof result.hasMore !== 'boolean') fail();
+    if (!result.hasMore) return {updated, removed};
+    if (!result.updated && !result.removed) fail();
   }
-  return {updated};
+  // Bound work even if other devices continuously change the snapshot. Completed
+  // batches remain saved and the next foreground/reconnect retries the rest.
+  fail();
 }
 
 module.exports = {syncPublished};

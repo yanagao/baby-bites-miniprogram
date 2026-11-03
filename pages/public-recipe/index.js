@@ -9,13 +9,19 @@ Page({
   data: {
     loading: true, error: '', recipe: null, author: null, adding: false, importedId: '', photoFailed: false,
     authorKnown: false, authorIsSelf: false, following: false, followedBy: false, relationReady: false, relationLoading: false,
-    relationError: '', followBusy: false, allergyWarning: ''
+    relationError: '', followBusy: false, allergyWarning: '',
+    feedbackLoading: false, feedbackError: '', feedbackReady: false, saveCount: 0, cooksnapCount: 0,
+    cooksnaps: [], feedbackOffset: null, feedbackMore: false, deletingCooksnap: ''
   },
   onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; account.bind(this); },
-  onShow() { if (!this.data.adding && !this.data.followBusy) return this.load(); },
+  onShow() { if (!this.data.adding && !this.data.followBusy && !this.data.deletingCooksnap) return this.load(); },
   onUnload() { this.request++; this.relationRequest++; account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
-  disposeLocalContent() { this.setData({allergyWarning: ''}); },
+  disposeLocalContent() {
+    this.feedbackRequest = (this.feedbackRequest || 0) + 1;
+    this.setData({allergyWarning: '', feedbackLoading: false, feedbackMore: false, feedbackReady: false,
+      feedbackError: '', saveCount: 0, cooksnapCount: 0, cooksnaps: [], feedbackOffset: null, deletingCooksnap: ''});
+  },
   refreshAllergies() {
     if (!account.check(this)) return;
     const allergies = store.getState().allergies || [];
@@ -23,22 +29,96 @@ Page({
     this.setData({allergyWarning: matched.length ? '含已记录的过敏食材：' + matched.join('、') + '，请勿给宝宝食用。' : ''});
   },
   async load(options) {
-    if (!account.check(this) || this.data.adding || this.data.followBusy) return;
+    if (!account.check(this) || this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
     const request = ++this.request;
     this.relationRequest++;
+    this.disposeLocalContent();
     this.setData({loading: true, error: '', photoFailed: false, authorKnown: false, authorIsSelf: false, following: false, followedBy: false,
       relationReady: false, relationLoading: false, relationError: '', allergyWarning: ''});
     if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
     try {
-      const result = await social.getRecipe(this.recipeId);
+      const result = await social.getRecipe(this.recipeId, options);
       if (!account.check(this) || request !== this.request) return;
       const imported = social.findImportedRecipe(this.recipeId);
       const author = result.author ? {...result.author, avatar: getProfileAvatar(result.author.id)} : result.author;
       this.setData({recipe: result.recipe, author, importedId: imported ? imported.id : '', loading: false});
       this.refreshAllergies();
       if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
-      await this.refreshAuthorRelationship(request, options);
-    } catch (error) { if (account.check(this) && request === this.request) this.setData({loading: false, recipe: null, author: null, importedId: '', error: error.message || '这道菜谱暂时无法查看，可能已取消公开'}); }
+      await Promise.all([this.refreshAuthorRelationship(request, options), this.loadFeedback(false, options)]);
+    } catch (error) { if (account.check(this) && request === this.request) this.setData({loading: false, recipe: null, author: null, importedId: '', error: error.message || '这道菜谱暂时无法查看，可能已被删除'}); }
+  },
+  async loadFeedback(more = false, options) {
+    if (!account.check(this) || !this.data.recipe || this.data.loading || this.data.error || this.data.deletingCooksnap ||
+      this.data.feedbackLoading || this.data.feedbackMore || (more && this.data.feedbackOffset === null)) return;
+    const request = this.request, feedbackRequest = (this.feedbackRequest || 0) + 1;
+    this.feedbackRequest = feedbackRequest;
+    const offset = more ? this.data.feedbackOffset : 0;
+    this.setData({feedbackLoading: !more, feedbackMore: more, feedbackError: ''});
+    try {
+      const result = await social.getRecipeFeedback(this.recipeId, offset, options);
+      if (!account.check(this) || request !== this.request || feedbackRequest !== this.feedbackRequest) return;
+      const items = result.cooksnaps.map(item => ({...item,
+        dateLabel: new Date(item.createdAt).toLocaleDateString('zh-CN'), photoFailed: false}));
+      const previous = more ? this.data.cooksnaps : [];
+      const ids = new Set(previous.map(item => item.id));
+      this.setData({feedbackReady: true, saveCount: result.saveCount, cooksnapCount: result.cooksnapCount,
+        cooksnaps: previous.concat(items.filter(item => !ids.has(item.id))), feedbackOffset: result.nextOffset});
+    } catch (error) {
+      if (!account.check(this) || request !== this.request || feedbackRequest !== this.feedbackRequest) return;
+      if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this);
+      else this.setData({feedbackError: error.message || '跟做反馈暂时无法读取，请重试。'});
+    } finally {
+      if (account.check(this) && request === this.request && feedbackRequest === this.feedbackRequest) {
+        this.setData({feedbackLoading: false, feedbackMore: false});
+      }
+    }
+  },
+  retryFeedback() { return this.loadFeedback(false, {force: true}); },
+  moreFeedback() { return this.loadFeedback(true); },
+  openCooksnap() {
+    if (!account.check(this) || !this.data.recipe || this.data.loading || this.data.error ||
+      !this.data.authorKnown || this.data.authorIsSelf || this._openingCooksnap) return;
+    this._openingCooksnap = true;
+    wx.navigateTo({url: '/pages/cooksnap-editor/index?id=' + encodeURIComponent(this.recipeId),
+      complete: () => { this._openingCooksnap = false; }});
+  },
+  previewCooksnap(event) {
+    if (!account.check(this) || this.data.loading || this.data.error) return;
+    const item = this.data.cooksnaps.find(item => item.id === event.currentTarget.dataset.id);
+    if (item && item.photoURL && !item.photoFailed) wx.previewImage({current: item.photoURL, urls: [item.photoURL]});
+  },
+  cooksnapPhotoError(event) {
+    if (!account.check(this)) return;
+    const id = event.currentTarget.dataset.id;
+    this.setData({cooksnaps: this.data.cooksnaps.map(item => item.id === id ? {...item, photoFailed: true} : item)});
+  },
+  deleteCooksnap(event) {
+    if (!account.check(this) || this.data.loading || this.data.error || this.data.deletingCooksnap) return;
+    const item = this.data.cooksnaps.find(item => item.id === event.currentTarget.dataset.id && item.isSelf);
+    if (!item) return;
+    const request = this.request;
+    // A page response requested before deletion must not restore the removed row.
+    this.feedbackRequest = (this.feedbackRequest || 0) + 1;
+    this.setData({deletingCooksnap: item.id, feedbackLoading: false, feedbackMore: false});
+    wx.showModal({title: '删除这条跟做？', content: '成品照和反馈会从菜谱与作者反馈中移除。',
+      confirmText: '删除', confirmColor: '#b36f55',
+      success: async result => {
+        if (!account.check(this) || request !== this.request) return;
+        if (!result.confirm) { this.setData({deletingCooksnap: ''}); return; }
+        try {
+          await social.deleteCooksnap(item.id);
+          if (!account.check(this) || request !== this.request) return;
+          this.setData({deletingCooksnap: '', feedbackReady: false, cooksnaps: this.data.cooksnaps.filter(value => value.id !== item.id)});
+          wx.showToast({title: '跟做已删除', icon: 'none'});
+          await this.loadFeedback(false, {force: true});
+        } catch (error) {
+          if (!account.check(this) || request !== this.request) return;
+          this.setData({deletingCooksnap: ''});
+          if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this); else ui.error(error);
+        }
+      },
+      fail: () => { if (account.check(this) && request === this.request) this.setData({deletingCooksnap: ''}); }
+    });
   },
   async refreshAuthorRelationship(pageRequest, options) {
     if (!account.check(this) || this.data.loading || this.data.error || this.data.followBusy || !this.data.author) return;

@@ -67,11 +67,48 @@ function mergeAllergies(local, remote) {
   return selected ? copy({allergies: selected.allergies, allergiesUpdatedAt: selected.updatedAt}) : {};
 }
 
-function mergeSnapshots(local, remote) {
+function keepRemoteAttribution(merged, remote, field, family) {
+  for (const item of remote) {
+    const current = merged.get(item.id);
+    if (!current || current[field] === item[field] || (!family && item[field] === undefined)) continue;
+    const updated = {...current};
+    if (item[field] === undefined) delete updated[field];
+    else updated[field] = item[field];
+    merged.set(item.id, updated);
+  }
+}
+
+function mergeFamilyPhotos(recipes, local, remote, editedPhotoIds) {
+  const edits = new Map(local.filter(recipe => editedPhotoIds.has(recipe.id)).map(recipe => [recipe.id, recipe.photo]));
+  const remoteRecipes = new Map(remote.map(recipe => [recipe.id, recipe]));
+  const referenced = new Set(remote.map(recipe => recipe.photo));
+  for (const recipe of recipes.values()) {
+    const current = remoteRecipes.get(recipe.id);
+    let photo = current ? current.photo : recipe.photo;
+    if (edits.has(recipe.id)) photo = edits.get(recipe.id);
+    // A restore can bring back a no-longer-readable family file. The cloud
+    // accepts only currently referenced family files or caller-owned uploads.
+    if (/^cloud:\/\/[^/]+\/families\//.test(photo) && !referenced.has(photo)) photo = current ? current.photo : '';
+    // Publishing compares the recipe timestamp. A photo edit merged into a
+    // newer remote title must still produce a new public revision.
+    const updatedAt = current && photo !== current.photo && timeOf(recipe) <= timeOf(current) ? timeOf(current) + 1 : recipe.updatedAt;
+    if (recipe.photo !== photo || recipe.updatedAt !== updatedAt) recipes.set(recipe.id, {...recipe, photo, updatedAt});
+  }
+}
+
+function mergeSnapshots(local, remote, family = false, editedPhotoIds) {
   const deletedRecipes = mergeTombstones(local.deleted.recipes, remote.deleted.recipes);
   const deletedLogs = mergeTombstones(local.deleted.logs, remote.deleted.logs);
   const recipes = mergeItems(local.data.recipes, remote.data.recipes, deletedRecipes);
   const logs = mergeItems(local.data.logs, remote.data.logs, deletedLogs);
+  // Upload acknowledgements may add authoritative provenance while another
+  // local edit is still pending. Keep that provenance even when content wins
+  // a same-timestamp merge on the client.
+  // On a family snapshot an absent field also carries information: the
+  // historical attribution cannot be verified. Drop any cached backup claim.
+  keepRemoteAttribution(recipes, remote.data.recipes, 'createdBy', family);
+  keepRemoteAttribution(logs, remote.data.logs, 'recordedBy', family);
+  if (family && editedPhotoIds) mergeFamilyPhotos(recipes, local.data.recipes, remote.data.recipes, editedPhotoIds);
   // A record cannot survive removal of the recipe it belongs to, even when the
   // record was added offline after the recipe was deleted on another device.
   logs.forEach((log, id) => {
@@ -88,8 +125,12 @@ function mergeSnapshots(local, remote) {
     if (localProfile.nickname === '宝宝' && remoteProfile.nickname !== '宝宝') profile = remoteProfile;
     else if (remoteProfile.nickname === '宝宝' && localProfile.nickname !== '宝宝') profile = localProfile;
   }
+  const birthday = data => data.babyBirthDate === undefined ? null :
+    {babyBirthDate: data.babyBirthDate, updatedAt: data.babyBirthDateUpdatedAt || 0};
+  const chosenBirthday = prefer(birthday(local.data), birthday(remote.data));
   return copy({version: 1, data: {version: 1, nickname: profile.nickname,
     profileUpdatedAt: profile.updatedAt, ...mergeAllergies(local.data, remote.data),
+    ...(chosenBirthday ? {babyBirthDate: chosenBirthday.babyBirthDate, babyBirthDateUpdatedAt: chosenBirthday.updatedAt} : {}),
     recipes: sorted(recipes.values()), logs: sorted(logs.values())},
   deleted: {recipes: sorted(deletedRecipes.values()), logs: sorted(deletedLogs.values())}});
 }

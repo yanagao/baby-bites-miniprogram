@@ -16,7 +16,7 @@ function setup(name, social, options = {}) {
   let owner = 'owner-a';
   const listeners = new Set();
   const calls = {errors: [], toasts: [], routes: [], updates: 0};
-  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getAllergyFilterEnabled: () => false, getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {
     showToast(value) { calls.toasts.push(value.title); },
     navigateTo(value) { calls.routes.push(value.url); }, switchTab(value) { calls.routes.push(value.url); },

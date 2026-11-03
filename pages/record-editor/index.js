@@ -2,15 +2,19 @@ const store = require('../../utils/store');
 const selectors = require('../../utils/selectors');
 const {today} = selectors;
 const ui = require('../../utils/ui');
+const {createFormSession} = require('../../components/form-session/controller');
+const formSession = createFormSession({store, wx});
 
 const portions = ['暂不记录', '吃了一点', '吃了约一半', '吃了大部分', '全部吃完'];
 const previousPortions = { '尝了几口': 1, '吃了一半': 2, '吃了大半': 3, '光盘啦': 4 };
 
 Page({
+  ...formSession.methods,
   onShareAppMessage() {
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   data: {
+    ...formSession.data,
     recipe: null, editing: false, missingMessage: '没有找到这道菜谱，可能已经被删除。',
     rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1, icon: 'unhappy' }, { label: '还不错', value: 2, icon: 'smile' }, { label: '很喜欢', value: 3, icon: 'happy' }],
@@ -22,9 +26,12 @@ Page({
     deleteConfirmButton: { content: '删除记录', theme: 'danger' }
   },
   onLoad(options) {
+    this.initDraftSession();
     this._draftOwner = store.getSyncInfo().owner;
+    this._draftScope = store.getSyncInfo().scopeKey || this._draftOwner;
     this._unsubscribeAccount = store.subscribe(info => {
-      if (!this._draftOwner && info.owner) this._draftOwner = info.owner;
+      this.draftSessionChanged(info);
+      if (!this._draftOwner && info.owner) { this._draftOwner = info.owner; this._draftScope = info.scopeKey || info.owner; }
     });
     const now = today();
     const minDate = String(Number(now.slice(0, 4)) - 10) + '-01-01';
@@ -59,11 +66,14 @@ Page({
     this.setData({recipe: selectors.enrichRecipe({recipes: recipe ? [recipe] : [], logs: []}, recipe)});
     this.initialDraft = this.draftSnapshot();
   },
-  onUnload() { if (this._unsubscribeAccount) this._unsubscribeAccount(); },
+  onUnload() { this.disposeDraftSession(); if (this._unsubscribeAccount) this._unsubscribeAccount(); },
+  clearDraftForScopeChange() { this.originalLog = null; this.recipeId = ''; this.setData({recipe: null, note: '', error: '家庭或账号已变化，请重新打开记录。', discardVisible: false, deleteVisible: false}); },
   assertDraftAccount() {
+    if (this._pageUnloaded) throw Error('页面已关闭，请重新打开后操作。');
+    if (this._draftLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
     const owner = store.getSyncInfo().owner;
-    if (this._draftOwner && this._draftOwner !== owner) throw Error('微信账号已切换，请重新打开用餐记录页后再操作。');
-    if (!this._draftOwner && owner) this._draftOwner = owner;
+    if (this._draftOwner && (this._draftOwner !== owner || this._draftScope !== (store.getSyncInfo().scopeKey || owner))) throw Error('微信账号已切换，或家庭已变化，请重新打开用餐记录页后再操作。');
+    if (!this._draftOwner && owner) { this._draftOwner = owner; this._draftScope = store.getSyncInfo().scopeKey || owner; }
   },
   draftSnapshot() {
     return JSON.stringify({ rating: this.data.rating, date: this.data.date, portionIndex: this.data.portionIndex, note: this.data.note });
@@ -79,22 +89,23 @@ Page({
     }
   },
   leave() {
+    if (this._pageUnloaded) return;
     this.alertEnabled = false;
     if (typeof wx.disableAlertBeforeUnload === 'function') wx.disableAlertBeforeUnload({ complete: () => ui.back() });
     else ui.back();
   },
   rate(event) {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     const rating = Number(event.detail.value);
     if (![1, 2, 3].includes(rating)) return;
     this.setData({ rating, ratingError: '', error: '' });
     this.updateUnsavedAlert();
   },
   openDate() {
-    if (!this.data.saving && !this.data.deleting && !this.data.deleteVisible) this.setData({ dateVisible: true, maxDate: today() });
+    if (!this.data.saving && !this.data.savedComplete && !this.data.deleting && !this.data.deleteVisible) this.setData({ dateVisible: true, maxDate: today() });
   },
   moveDate(event) {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     const delta = Number(event.currentTarget.dataset.delta);
     if (delta !== -1 && delta !== 1) return;
     const [year, month, day] = this.data.date.split('-').map(Number);
@@ -106,25 +117,25 @@ Page({
   tapRating(event) { this.rate({detail: {value: event.currentTarget.dataset.value}}); },
   tapPortion(event) { this.portion({detail: {value: event.currentTarget.dataset.value}}); },
   changeDate(event) {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     this.setData({ date: event.detail.value, dateVisible: false, dateError: '', error: '' });
     this.updateUnsavedAlert();
   },
   closeDate() { this.setData({ dateVisible: false }); },
   portion(event) {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     const portionIndex = Number(event.detail.value);
     if (!Number.isInteger(portionIndex) || portionIndex < 0 || portionIndex >= this.data.portions.length) return;
     this.setData({ portionIndex, error: '' });
     this.updateUnsavedAlert();
   },
   note(event) {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     this.setData({ note: event.detail.value, error: '' });
     this.updateUnsavedAlert();
   },
   save() {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible || !this.data.recipe) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible || !this.data.recipe) return;
     const date = this.data.date;
     const parts = typeof date === 'string' ? date.split('-').map(Number) : [];
     const parsed = new Date(parts[0], parts[1] - 1, parts[2]);
@@ -146,23 +157,23 @@ Page({
       else store.addLog(input);
       this.initialDraft = this.draftSnapshot();
       wx.showToast({ title: '记录已保存', icon: 'success' });
-      this.leave();
+      this.finishSaved();
     } catch (error) {
       this.setData({ error: error.message || '记录未保存，请重试' });
     } finally { this.setData({ saving: false }); }
   },
   back() {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     if (this.initialDraft !== undefined && this.draftSnapshot() !== this.initialDraft) this.setData({ discardVisible: true });
     else this.leave();
   },
   continueEditing() { this.setData({ discardVisible: false }); },
   discard() {
-    if (this.data.saving || this.data.deleting || this.data.deleteVisible) return;
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     this.setData({ discardVisible: false }); this.leave();
   },
   deleteLog() {
-    if (!this.data.editing || !this.logId || !this.data.recipe || this.data.saving || this.data.deleting || this.data.discardVisible) return;
+    if (!this.data.editing || !this.logId || !this.data.recipe || this.data.saving || this.data.savedComplete || this.data.deleting || this.data.discardVisible) return;
     const dirty = this.initialDraft !== undefined && this.draftSnapshot() !== this.initialDraft;
     this.setData({
       deleteVisible: true,
