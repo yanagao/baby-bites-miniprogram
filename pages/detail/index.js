@@ -83,7 +83,7 @@ Page({
       !this.data.deleteVisible && Boolean(this.data.recipe);
   },
   refresh() {
-    if (!this.accountOK(false)) return;
+    if (!this.accountOK(false) || this.data.deleting) return;
     try {
       const state = store.getState();
       const recipe = state.recipes.find(item => item.id === this.recipeId);
@@ -213,30 +213,31 @@ Page({
       this.setData({deleteVisible: false}); this.updateShareMenu(); this.refreshAfterSync();
     }
   },
-  async confirmDelete() {
+  confirmDelete() {
     if (!this.accountOK(true) || this.data.deleting || this.data.publicBusy || !this.data.deleteVisible) return;
     this._publicRequest = (this._publicRequest || 0) + 1;
-    this.setData({deleting: true, deleteVisible: false, shareRecipe: null, shareReady: false, shareLoading: false});
+    this.setData({deleting: true, deleteVisible: false, shareRecipe: null, shareReady: false, shareLoading: false, publicLoading: false});
     this.updateShareMenu();
-    let deleted = false;
     try {
       store.deleteRecipe(this.recipeId);
-      deleted = true;
-      this.setData({recipe: null, publicInfo: null, publicChanged: false, publicReady: true});
-      if (this.data.socialEnabled) {
-        const status = await cloudSync.syncNow();
-        if (!this.accountOK(false)) return;
-        if (!status || status.state !== 'synced') wx.showToast({title: '已删除，联网后同步', icon: 'none'});
-      }
-      if (this.accountOK(false)) ui.back();
     }
     catch (error) {
       if (this.accountOK(false)) {
-        if (deleted) { wx.showToast({title: '已删除，联网后同步', icon: 'none'}); ui.back(); }
-        else ui.error(error);
+        this.setData({deleting: false});
+        ui.error(error);
+        this.updateShareMenu();
+        this.refreshAfterSync();
       }
+      return;
     }
-    finally { if (this.accountOK(false)) { this.setData({deleting: false}); this.refreshAfterSync(); } }
+    // Keep the current view during the back animation. Store notifications and
+    // late share responses must not render a missing recipe before unload.
+    if (this.accountOK(false)) ui.back();
+    if (this.data.socialEnabled) {
+      // The tombstone is already persisted. Connectivity must not delay leaving;
+      // cloud-sync owns retry/status, without callbacks into this departing page.
+      Promise.resolve().then(() => cloudSync.syncNow()).catch(() => {});
+    }
   },
   back() { if (!this.data.publicBusy && !this.data.deleting) ui.back(); }
 });
