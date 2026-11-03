@@ -85,7 +85,11 @@ async function info(options = {}) {
 const newId = () => 'family-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2);
 let mutation = null;
 async function mutate(action, input = {}, transition = false) {
-  const initial = session(), signature = initial.owner + ':' + action + ':' + JSON.stringify(input);
+  const initial = session();
+  // An exit belongs to one membership, even if its response is lost. Do not
+  // reuse it after creating another family or rejoining the same family.
+  // Create/join keep their original retry key across the resulting scope change.
+  const signature = (action === 'familyLeave' ? initial.key : initial.owner) + ':' + action + ':' + JSON.stringify(input);
   if (mutation) {
     if (mutation.signature === signature) return mutation.work;
     fail('另一项家庭操作还未完成，请稍后重试。', 'FAMILY_BUSY');

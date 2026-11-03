@@ -89,6 +89,62 @@ test('a lost create response retries the exact request and original scope even a
   await app.api.create({name: '小米家', label: '妈妈'});
   assert.equal(app.calls[0].requestId, app.calls[1].requestId); assert.deepEqual(app.calls[1].expectedScope, PERSONAL);
 });
+test('leave retries are isolated from a completed exit by family and membership', async () => {
+  for (const entry of ['create', 'join']) {
+    const app = setup(), nextScope = {kind: 'family', id: entry === 'create' ? 'e'.repeat(64) : FAMILY.id,
+      membershipId: 'f'.repeat(32)};
+    app.setScope(FAMILY); app.setServerScope(FAMILY);
+    let nextAttempts = 0;
+    app.hooks.request = data => {
+      if (data.action === 'familyState') return {owner: OWNER, scope: PERSONAL, family: null};
+      if (data.action === 'familyCreate' || data.action === 'familyJoin') {
+        assert.deepEqual(data.expectedScope, PERSONAL);
+        app.setServerScope(nextScope);
+        return {owner: OWNER, scope: nextScope, family: {id: nextScope.id}};
+      }
+      if (data.action === 'familyLeave') {
+        if (app.getInfo().scope.membershipId === FAMILY.membershipId) {
+          app.setServerScope(PERSONAL);
+          throw Error('exit committed but response lost');
+        }
+        if (JSON.stringify(data.expectedScope) !== JSON.stringify(nextScope)) return {error: {code: 'FAMILY_CHANGED'}};
+        if (++nextAttempts === 1) throw Error('request did not reach server');
+        app.setServerScope(PERSONAL);
+        return {owner: OWNER, scope: PERSONAL, family: null};
+      }
+      throw Error('unexpected action');
+    };
+    await assert.rejects(app.api.leave(), error => error.code === 'NETWORK');
+    await app.api.info({force: true});
+    assert.deepEqual(app.getInfo().scope, PERSONAL, 'a trusted refresh confirms the old exit');
+    if (entry === 'create') await app.api.create({name: '新家庭', label: '妈妈'});
+    else await app.api.join({token: 'new-invitation', label: '妈妈'});
+    await assert.rejects(app.api.leave(), error => error.code === 'NETWORK');
+    await app.api.leave();
+    const exits = app.calls.filter(call => call.action === 'familyLeave');
+    assert.equal(exits.length, 3);
+    assert.deepEqual(exits.map(call => call.expectedScope), [FAMILY, nextScope, nextScope]);
+    assert.notEqual(exits[0].requestId, exits[1].requestId);
+    assert.deepEqual(exits[1], exits[2], 'an unknown result in the same membership reuses the exact attempt');
+    assert.deepEqual(app.getInfo().scope, PERSONAL);
+    assert.equal(app.locks(), 0);
+  }
+});
+test('an uncertain leave cannot retarget a new membership discovered during retry preflight', async () => {
+  const app = setup(), nextScope = {...FAMILY, membershipId: 'f'.repeat(32)};
+  app.setScope(FAMILY); app.setServerScope(FAMILY);
+  app.hooks.request = () => {throw Error('response lost');};
+  await assert.rejects(app.api.leave(), error => error.code === 'NETWORK');
+  app.setServerScope(nextScope);
+  app.hooks.request = data => {
+    assert.deepEqual(data.expectedScope, FAMILY, 'only the originally confirmed exit may be retried');
+    return {error: {code: 'FAMILY_CHANGED'}};
+  };
+  await assert.rejects(app.api.leave(), error => error.code === 'FAMILY_CHANGED');
+  assert.deepEqual(app.getInfo().scope, nextScope);
+  assert.deepEqual(app.calls[0], app.calls[1]);
+  assert.equal(app.locks(), 0);
+});
 test('retrying family creation after a confirmed revision conflict uses the newly synced revision', async () => {
   for (const code of ['SYNC_REQUIRED', 'FAMILY_CONFLICT']) {
     const app = setup(), input = {name: '小米家', label: '妈妈'};
