@@ -16,8 +16,8 @@ Page({
       const visibleNames = search ? names.filter(name => name.includes(search)) : this.data.showAllIngredients ? names : commonIngredients;
       const options = visibleNames.map(name => ({label: name, value: name, icon: 'rectangle', selected: pantry.includes(name)}));
       const state = store.getState();
-      const matches = selectors.matchRecipes(state, pantry, false);
-      this.setData({hasAllergies: Boolean(state.allergies && state.allergies.length), pantry, options, ingredientCount: names.length,
+      const matches = selectors.matchRecipes(state, pantry, false, {excludeAllergies: store.getAllergyFilterEnabled()});
+      this.setData({hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length), pantry, options, ingredientCount: names.length,
         matchCount: matches.length, matches, previewMatches: matches.slice(0, 4),
         completeMatches: matches.filter(recipe => recipe.complete),
         partialMatches: matches.filter(recipe => !recipe.complete), warning: store.getWarning()});

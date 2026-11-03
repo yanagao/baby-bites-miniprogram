@@ -6,9 +6,9 @@
 
 社交 owner 始终为个人微信身份。涉及私人快照的操作按可信成员映射解析当前 scope，从家庭 canonical 快照读取；请求入口接受的 scope 通过每次调用独立的参数传至后续读取（含保存回执），不能在请求中途改用刚加入的家庭或退出后的个人数据。公开前 token 同时绑定 scope/membershipId、revision/fileID、内容和原作者。事务内再次验证实际调用者仍为同一次加入的成员，旧 scope、移出后重加和迟到操作不能跨家庭提交。
 
-家庭菜谱只有 `createdBy` 本人可以首次公开，其他人收到 `RECIPE_AUTHOR_REQUIRED`。`familyRecipeLink({sourceRecipeId,protocolVersion:2,expectedScope})` 可供同一家人查询已分享的原作者链接，返回 `{publication:null|{id,sourceRecipeId,sourceUpdatedAt,createdBy}}`，只读取当前家庭快照里的菜谱及对应准确公开文档，不扫描别人主页；未分享时由添加菜谱的家人决定。本人公开主页、关注及跟做反馈的作者身份不会因切换家庭而变化。
+家庭菜谱只有 `createdBy` 本人的同步可以首次自动公开，其他成员不会替作者创建主页或发布菜谱，直接代发收到 `RECIPE_AUTHOR_REQUIRED`。`familyRecipeLink({sourceRecipeId,protocolVersion:2,expectedScope})` 可供同一家人查询已公开的原作者链接，返回 `{publication:null|{id,sourceRecipeId,sourceUpdatedAt,createdBy}}`，只读取当前家庭快照里的菜谱及对应准确公开文档，不扫描别人主页；尚无链接时由添加者完成一次同步。本人公开主页、关注及跟做反馈的作者身份不会因切换家庭而变化。
 
-公开记录新增 `publicationScope:'personal'|'family:<familyId>'`，旧无字段记录按 personal 处理。后台对账只操作当前范围中的已分享记录，切换家庭不会自动撤下原个人菜谱，也不会把其他家人的菜谱首次发布到自己名下。当前家庭任何成员保存共享菜谱后，可触发其已分享版本的更新和删除；publicationOwner 取原有公开记录作者，而实际成员权限始终用 actingOwner 检验，公开链接、署名和排序保留，不创建作者资料，不恢复撤回。移入家庭的已分享个人菜谱需作者重新预览并明确确认，才能将该公开版本关联到家庭；同步不会悄悄改换关联范围。
+公开记录新增 `publicationScope:'personal'|'family:<familyId>'`，旧无字段记录按 personal 处理。后台对账只操作当前范围，切换家庭不会自动撤下原个人菜谱，也不会把其他家人的菜谱首次发布到自己名下。当前家庭任何成员保存共享菜谱后，可触发其已公开版本的更新和删除；publicationOwner 取原有公开记录作者，而实际成员权限始终用 actingOwner 检验，公开链接、署名和排序保留，更新路径不创建作者资料。创建家庭后，当前真实调用者是 canonical 菜谱的 `createdBy` 本人时，对账可将其原 personal 公开记录关联到当前家庭，保留原作者、公开 ID、首次时间与排序。迁移同样读取权威家庭快照，并在事务内复核来源关联、成员资格与 generation；其他家人不能代迁，不从其他家庭迁入，也不在退出后自动改回 personal。
 
 `expectedScope` 与 `protocolVersion:2` 用于社交写入的范围保护。公开前预览、个人/家庭保存回执、自动对账、跟做发布/删除、资料和关注变更均复核成员或提交事务；保存回执验证当前家庭已同步副本，仍按真实保存者与原公开菜谱去重。公开返回不增加宝宝生日、过敏、用餐记录、家庭成员列表或内部作用域字段。
 
@@ -78,10 +78,10 @@
 | `profileSummary` | `profileId` | `{profile,isSelf,following,followedBy}`；不查询菜谱或统计，用于详情页作者关系 |
 | `recipe` | `recipeId` | `{recipe,author}` |
 | `previewPublication` | `sourceRecipeId` | `{recipe,author,previewToken,alreadyPublished}`，只读预览 |
-| `publish` | `sourceRecipeId,previewToken` | `{recipe}`，明确确认预览内容 |
+| `publish` | `sourceRecipeId,previewToken?`（旧 token 可选） | `{recipe}`，直接分享；收藏副本返回原作者菜谱 |
 | `updatePublished` | `sourceRecipeId` | `{updated:true,recipe}` 或 `{updated:false}` |
-| `syncPublications` | 无（可传 `expectedOwner`） | `{updated,removed,hasMore}`；失败额外附带 `error` |
-| `unpublish` | `sourceRecipeId` | `{ok:true}`，撤回后自动同步不会重新公开 |
+| `syncPublications` | 可传 `expectedOwner`，家庭须 `protocolVersion:2,expectedScope` | `{updated,removed,hasMore}`；首次公开计入 `updated`，失败额外附带 `error` |
+| `unpublish` | `sourceRecipeId` | `{ok:true}`，兼容旧接口；新客户端不提供公开/私密切换 |
 | `follow` | `profileId,following:boolean` | `{following,followedBy}` |
 | `following` | `offset?` | `{profiles,nextOffset}` |
 | `followers` | `offset?` | `{profiles,nextOffset}` |
@@ -139,25 +139,25 @@
 
 `checkProfile` 供无写入预检和部署验收，与保存共用格式校验及审核，明确返回 `saved:false`，不创建主页、不进入事务，也不更新生日或分享码。正常保存不能凭预检结果跳过审核。使用独立 action 可保证旧部署遇到该请求仅报不支持，不会因忽略参数而意外保存。
 
-## 分享预览、明确确认与内置隔离
+## 自动公开、直接分享与内置隔离（2026-11-03，尚未部署）
 
 私人快照允许可选 `allergies` 与 `allergiesUpdatedAt` 并严格校验，保持与私人同步协议兼容；这些信息不进入主页、菜谱、分享、发现或关注接口的公开白名单。推荐筛选由调用者的客户端使用自己的私人记录完成，不向社交接口上传过敏食物。
 
-2026-11-02 最新规则：保存自己的菜谱后提示“已收进你的食谱，也分享给其他家长吧”；将自己的菜谱记录为“很喜欢”后提示“宝宝喜欢这道菜，把做法分享出去吧”。操作为“公开分享”和“先留给自己”，不预选公开，先展示预览，再由用户确认。新增、导入、保存副本、用餐记录及历史菜谱同步都不能替代公开确认；本规则取代此前未部署的自动公开方案，不回填历史未分享菜谱。本次代码与测试尚未部署或上传。
+最新规则取代 2026-11-02 的预览确认流程：自己的新建和导入菜谱在同步成功后自动公开，分享直接使用公开链接。服务端只使用权威快照的菜名、食材、做法、适龄和照片等白名单；私人心得、宝宝资料、过敏和用餐记录不公开。带 `source` 的收藏副本不重复发布，对账撤下旧重复副本；直接 `publish` 收藏副本兼容返回仍有效的原作者菜谱链接，原菜谱失效则返回 `NOT_FOUND`。
 
-客户端先完成当前账号私人同步，再调用 `previewPublication`。服务端只从该账号已提交的快照读取菜谱，输出公开白名单 `recipe` 和实际公开的 `author`；无主页时显示确认后将采用的系统默认昵称。预览照片仅向本人签发私人照片的 300 秒 HTTPS URL，不复制照片、不创建主页、不写数据库。返回的 `alreadyPublished` 表示是否已有仍有效的分享版，`previewToken` 是绑定账号、快照 revision/fileID、菜谱白名单、照片路径、作者公开资料及现有发布 generation/状态的 SHA-256 版本摘要，不包含私人字段。
+旧 `previewPublication` API 保留兼容且仍为只读，当前客户端无需调用。其 `previewToken` 仍绑定账号、scope/membershipId、快照 revision/fileID、菜谱白名单、照片路径、作者公开资料和发布 generation。若旧客户端主动传入 token，服务端继续校验，过期返回 `PREVIEW_STALE`；未传入 token 不影响直接分享。
 
-确认时调用 `publish({sourceRecipeId,previewToken})`。没有有效 token（包括旧客户端直调发布）返回 `PREVIEW_REQUIRED`；内容、快照、作者或发布状态改变时返回 `PREVIEW_STALE`，必须重新展示预览并再次确认，不能自动重试发布。确认请求不接受客户端拼装的公开内容。复制照片后，事务再次核对快照、公开记录版本和作者资料；仅在确认成功时创建首道公开菜谱和安全默认主页。撤回后旧预览不能重新公开；重新预览并明确确认才可再次分享。
+直接调用 `publish({sourceRecipeId})` 不要求预览 token，不接受客户端拼装内容。照片复制后，事务再次核对快照、成员身份及公开记录 generation，并原子创建公开记录与安全默认主页；已有自定义资料保持。新版直调与旧 token 调用均不能越过当前账号和家庭作者校验。
 
-`syncPublications` 只接受可信身份上下文及可选 `expectedOwner`，不接受客户端拼装的菜谱内容、owner 或 fileID。每批至多下载一份当前账号已提交的快照，与账号索引比对，优先移除已删除、墓碑覆盖或内置来源条目，再更新已明确公开且仍有效的菜谱，每次最多处理 8 条。它不会创建新公开记录或主页，也不会恢复已撤回条目。返回 `hasMore:true` 时客户端继续调用；中途失败也返回已完成的 `updated/removed`，客户端先使缓存失效，再保留待同步状态重试。每条变更在事务内复核 snapshot revision/fileID 与记录 generation；已有资料完整保留。
+`syncPublications` 按可信身份与 `expectedOwner/expectedScope` 读取已提交快照，不接受客户端拼装内容、owner 或 fileID。每批优先移除已删除、墓碑覆盖、内置和收藏副本，再首次公开或更新自有菜谱，最多处理 8 条；首次公开也计入 `updated`。返回 `{updated,removed,hasMore}`，未完成或中途失败可重试。所有变更在事务内复核 snapshot revision/fileID、scope/membershipId 和 generation；家庭其他成员仍只有已公开版本的更新权限。
 
-只有整批对账完成且快照未变时，服务端才在原账号索引合并写入 `publicationPolicyVersion:2` 与 `publicationRevision`。同 revision 且策略有效的下一次对账只读取账号索引，不下载快照或扫描公共列表。`babyBitesSync.commit` 的原有完整索引写入会自然移除标记，新 revision 必须重新对账；身份响应仍只投影 owner/revision/fileID。无快照账号不创建任何记录，只含内置或未分享菜谱的快照也可标记完成。标记不改变业务 revision、快照路径或过敏记录时间。
+策略升级为 `publicationPolicyVersion:3`，使同 revision 的旧策略账号重新对账。仍在权威快照中的自有菜谱，包括旧未分享或旧 withdrawn 记录，会在原作者同步时公开；已删条目、内置、收藏副本和其他 scope 不恢复。新公开记录与后续删除墓碑携带策略 3 标记，迁移不能复活并发的新撤回。只有整批完成且快照未变才在个人账号索引写入策略与 `publicationRevision`，随后同版本跳过下载与扫描；家庭不复用个人标记。标记不改变业务 revision、宝宝资料或快照文件。
 
 内置身份同时检查固定 21 个 ID、`isExample` 和历史来源记录；保存副本的 `shared-<publicId>` 与来源链都不能绕过。来源文档在单次请求内去重读取，递归逐路径检查循环。当前快照已知的内置身份在对账前登记，撤除墓碑保留 `builtin:true` 和来源，防止原记录退下后其他账号副本重新出现。发现、关注、访客主页、详情旧链接和对应计数统一排除这些记录；本机内置菜谱及个人选餐不受影响。
 
 公共清单每次最多读取两窗、每窗 1000 条投影；超出范围的历史索引由批量对账逐步清理，未完成时不会标记为已对账。公共读取遇到过量历史记录明确提示作者同步整理，不返回被截断的总数。过滤后的空页仍推进原始游标。
 
-`publish` 只有携带匹配预览 token 时才能确认分享；同更新时间、已公开的重复确认不写记录、不重新复制照片，也不改变排序。`updatePublished` 保留仅更新已有公开记录的旧合约，不需要预览 token；首次公开与撤回后重新公开都不能通过它完成。`unpublish` 保留主动撤回语义，撤回立即影响后续公共读取，并使已发出的预览版本失效。删除自己的菜谱时先提交删除墓碑，再通过批量对账移除公共记录。
+`publish` 同更新时间的重复分享不写记录、不重新复制照片，也不改变排序。`updatePublished` 保留仅更新已有公开记录的旧合约；新客户端通过 `syncPublications` 完成首次公开。`unpublish` 保留旧接口与墓碑语义，客户端不再提供公开/私密切换入口。删除菜谱先提交删除墓碑，再通过批量对账移除公共记录；旧 token 与迟到请求不能穿透版本校验。
 
 自动更新保留稳定公开 ID、`publishedAt` 与 `sortKey`，不因普通保存反复置顶。服务端内部 `sourcePhotoHash` 用于复用未变化的公开照片；替换或清除照片时同步相应变化，旧记录首次自动更新会补齐该字段。私人心得、收藏、宝宝资料和用餐记录均不进入公开记录。暂时失败时私人提交仍有效，客户端保留待同步状态，并在后续修改、联网恢复、回到前台或手动同步时重试。
 

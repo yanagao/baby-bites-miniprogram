@@ -39,7 +39,7 @@ function setup(options = {}) {
       if (dep.endsWith('/family-photos')) return {photoURL: value => value || ''};
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/social')) return {getMine: async () => ({published: []})};
-      if (dep.endsWith('/share-prompt/controller')) return require('../components/share-prompt/controller');
+      if (dep.endsWith('/form-session/controller')) return require('../components/form-session/controller');
       if (dep.endsWith('/selectors')) return selectors;
       if (dep.endsWith('/recipe-ages')) return recipeAges;
       if (dep.endsWith('/recipe-origin')) return require('../utils/recipe-origin');

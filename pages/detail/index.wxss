@@ -11,11 +11,6 @@
 .detail-title-favorite::after {border:0;}
 .detail-title-favorite.is-favorite {color:#ffba93;}
 .detail-share-entry {flex:none;--td-button-small-padding-horizontal:8rpx;}
-.recipe-share-preview {margin-top:16rpx;text-align:center;}
-.recipe-share-name {font-size:var(--font-card-title);font-weight:600;overflow-wrap:anywhere;}
-.recipe-share-hint {margin-top:10rpx;color:#82969a;font-size:var(--font-caption);line-height:var(--line-height-body);}
-.recipe-share-actions {display:flex;align-items:center;gap:12rpx;width:100%;}
-.recipe-share-actions>t-button {flex:1;min-width:0;}
 .detail-meta {display:flex;align-items:center;gap:9rpx;flex-wrap:wrap;margin:10rpx 0 22rpx;}
 .detail-meta>view {display:flex;align-items:center;gap:5rpx;background:#fff1b8;border-radius:8rpx;padding:3rpx 9rpx;font-size:var(--font-caption);line-height:var(--line-height-body);color:#82969a;}
 .detail-meta>.detail-category {background:#fff1b8;color:#82969a;}

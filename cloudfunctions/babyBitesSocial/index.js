@@ -20,7 +20,7 @@ const MAX_PAGE_BYTES = 800 * 1024;
 const DISCOVERY_SCAN_SIZE = 60;
 const DISCOVERY_CONCURRENCY = 5;
 const PUBLICATION_BATCH_SIZE = 8;
-const PUBLICATION_POLICY_VERSION = 2;
+const PUBLICATION_POLICY_VERSION = 3;
 const CODE_MAX_BYTES = 512 * 1024;
 const CODE_ENVIRONMENTS = ['develop', 'trial', 'release'];
 const SORT_KEY_PATTERN = /^\d{13}-[a-f0-9]{64}$/;
@@ -419,17 +419,28 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       await assertCommitted(transaction, owner, account);
       await write('recipes', previous._id, {owner, profileId: profileIdFor(owner),
         sourceRecipeId: previous.sourceRecipeId, published: false, generation: generation + 1, updatedAt: now(),
-        publicationScope: current.publicationScope || 'personal', ...(builtin ? {builtin: true} : {}), ...(current.source ? {source: current.source} : {})}, transaction);
+        publicationScope: current.publicationScope || 'personal', publicationPolicyVersion: current.publicationPolicyVersion || 0,
+        ...(builtin ? {builtin: true} : {}), ...(current.source ? {source: current.source} : {})}, transaction);
       return true;
     });
   }
 
-  async function savePublication({owner, env, recipe, account, previous, automatic, allowCreate, isBuiltin, previewToken}) {
+  async function savePublication({owner, env, recipe, account, previous, automatic, allowCreate, firstOnly = false, migratePersonal = false, isBuiltin, previewToken}) {
     if (await isBuiltin(recipe)) reject('内置菜谱仅供自己使用。', 'NOT_FOUND');
-    if (account && account.__scope && account.__scope.kind === 'family' && recipe.createdBy !== owner) reject('请由添加这道菜的家人选择公开分享。', 'RECIPE_AUTHOR_REQUIRED');
+    if (recipe.source) reject('已收藏的菜谱请分享原作者的链接。', 'SOURCE_RECIPE_ONLY');
+    if (account && account.__scope && account.__scope.kind === 'family' && recipe.createdBy !== owner) reject('请由添加这道菜的家人先完成同步。', 'RECIPE_AUTHOR_REQUIRED');
     const publicationScope = scopeKey(account && account.__scope);
-    if (!allowCreate && previous && (previous.publicationScope || 'personal') !== publicationScope) return {updated: false};
     const id = recipe.id, ownProfileId = profileIdFor(owner), publicId = recipeIdFor(owner, id);
+    const canMigratePersonal = record => migratePersonal && account && account.__scope && account.__scope.kind === 'family' &&
+      account.__actor === owner && recipe.createdBy === owner && record && record.owner === owner && record.profileId === ownProfileId &&
+      record.sourceRecipeId === id && (record.publicationScope || 'personal') === 'personal';
+    if (migratePersonal && !canMigratePersonal(previous)) reject('菜谱关联已变化，请重新同步。', 'CONFLICT');
+    if (firstOnly && previous && (previous.published === true || previous.publicationPolicyVersion === PUBLICATION_POLICY_VERSION ||
+      (previous.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(previous))) return {updated: false};
+    if (previous && (previous.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(previous)) {
+      if (allowCreate) reject('这份公开菜谱属于另一个家庭，请返回原家庭查看。', 'CONFLICT');
+      return {updated: false};
+    }
     if (automatic && !allowCreate && (!previous || previous.published !== true)) return {updated: false};
     const author = await profile(ownProfileId);
     if (automatic && !allowCreate && !author) reject('分享资料暂时无法读取，请稍后重试。', 'INVALID_ACCOUNT');
@@ -469,7 +480,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     if (!Number.isSafeInteger(time) || time < 0 || time > 9999999999999) throw new Error('Invalid clock');
     const keepOrder = automatic && previous && previous.published === true;
     const record = {
-      owner, profileId: ownProfileId, sourceRecipeId: id, sourceUpdatedAt, publicationScope,
+      owner, profileId: ownProfileId, sourceRecipeId: id, sourceUpdatedAt, publicationScope, publicationPolicyVersion: PUBLICATION_POLICY_VERSION,
       ...fields, photoFileID, sourcePhotoHash,
       published: true, publishedAt: keepOrder ? previous.publishedAt : time, updatedAt: time, generation: generation + 1,
       sortKey: keepOrder ? previous.sortKey : `${String(9999999999999 - time).padStart(13, '0')}-${publicId}`
@@ -477,6 +488,14 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     let written;
     try { written = await db.runTransaction(async transaction => {
       const current = await get('recipes', publicId, transaction);
+      // Only the canonical recipe's actual author can associate their own
+      // personal publication with this family. Recheck the source association
+      // inside the same CAS transaction; no family-to-family migration exists.
+      if (migratePersonal && !canMigratePersonal(current)) reject('菜谱关联已变化，请重新同步。', 'CONFLICT');
+      // Automatic first publication must never revive a concurrent withdrawal
+      // or take over a record already associated with another data scope.
+      if (firstOnly && current && (current.published === true || current.publicationPolicyVersion === PUBLICATION_POLICY_VERSION ||
+        (current.publicationScope || 'personal') !== publicationScope && !canMigratePersonal(current))) return false;
       if (automatic && !allowCreate && (!current || current.published !== true)) return false;
       if ((current ? current.generation : 0) !== generation) reject('菜谱刚有变化，请重新同步。', 'CONFLICT');
       await assertCommitted(transaction, owner, account);
@@ -670,7 +689,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         }
         const eligible = new Map();
         for (const recipe of snapshot.data.recipes) {
-          if (activeRecipe(snapshot, recipe.id) && !await isBuiltin(recipe)) eligible.set(recipe.id, recipe);
+          if (activeRecipe(snapshot, recipe.id) && !recipe.source && !await isBuiltin(recipe)) eligible.set(recipe.id, recipe);
         }
         const indexed = new Map(existing.map(item => [item.sourceRecipeId, item]));
         const work = [];
@@ -684,20 +703,35 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const authors = new Map();
         const authorFor = async id => { if (!authors.has(id)) authors.set(id, profile(profileIdFor(id))); return authors.get(id); };
         for (const recipe of eligible.values()) {
+          // At most one extra candidate is needed to signal another batch.
+          if (work.length > PUBLICATION_BATCH_SIZE) break;
           const previous = indexed.get(recipe.id);
-          // Saving, importing or liking a recipe is not publication consent.
-          // Only an existing live publication may be kept up to date here.
           if (previous && (!scopeState.family || recipe.createdBy === previous.owner) && (!isPublished(previous, await authorFor(previous.owner)) || await isBuiltin(previous) ||
-            previous.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))) work.push({recipe, previous});
+            previous.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))) work.push({recipe, previous, publicationOwner: previous.owner});
+          else if (!previous && (!scopeState.family || recipe.createdBy === owner)) {
+            // Family author stamps come from canonical snapshots. A member may
+            // first-publish their own recipes, never manufacture another
+            // member's public identity. Existing shared recipes remain editable
+            // by all current members through the update-only path above.
+            const record = await get('recipes', recipeIdFor(owner, recipe.id));
+            if (!record || (record.published === false && record.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION &&
+              (record.publicationScope || 'personal') === scopeKey(account.__scope))) {
+              work.push({recipe, previous: record, publicationOwner: owner, firstOnly: true});
+            } else if (scopeState.family && record.owner === owner && (record.publicationScope || 'personal') === 'personal' &&
+              (record.published === true || record.published === false && record.publicationPolicyVersion !== PUBLICATION_POLICY_VERSION)) {
+              work.push({recipe, previous: record, publicationOwner: owner, migratePersonal: true, firstOnly: record.published !== true});
+            }
+          }
         }
         for (const item of work.slice(0, PUBLICATION_BATCH_SIZE)) {
           if (!item.recipe) {
             if (await retirePublication({owner: item.previous.owner, account, previous: item.previous, builtin: item.builtin})) progress.removed++;
           } else {
-            const publicationOwner = item.previous.owner;
+            const publicationOwner = item.publicationOwner;
             const previous = await get('recipes', recipeIdFor(publicationOwner, item.recipe.id));
             const saved = await savePublication({owner: publicationOwner, env: ENV, recipe: item.recipe, account, previous,
-              automatic: true, allowCreate: false, isBuiltin});
+              automatic: true, allowCreate: item.firstOnly === true, firstOnly: item.firstOnly === true,
+              migratePersonal: item.migratePersonal === true, isBuiltin});
             if (saved.updated) progress.updated++;
           }
         }
@@ -718,7 +752,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         if (isBuiltinRecipeId(id)) reject('内置菜谱仅供自己使用。', 'NOT_FOUND');
         const {recipe, account} = await committedRecipe(owner, ENV, id, scopeState.scope);
         if (await isBuiltin(recipe)) reject('内置菜谱仅供自己使用。', 'NOT_FOUND');
-        if (account.__scope && account.__scope.kind === 'family' && recipe.createdBy !== owner) reject('请由添加这道菜的家人选择公开分享。', 'RECIPE_AUTHOR_REQUIRED');
+        if (account.__scope && account.__scope.kind === 'family' && recipe.createdBy !== owner) reject('请由添加这道菜的家人先完成同步。', 'RECIPE_AUTHOR_REQUIRED');
         const previous = await get('recipes', recipeIdFor(owner, id));
         const author = await profile(ownProfileId);
         const authorView = previewAuthor(author, owner);
@@ -750,16 +784,28 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const automatic = event.action === 'updatePublished';
         const id = sourceId(event.sourceRecipeId);
         if (isBuiltinRecipeId(id)) reject('内置菜谱仅供自己使用。', 'NOT_FOUND');
-        if (!automatic && (typeof event.previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(event.previewToken))) {
-          reject('请先预览分享内容，再确认公开。', 'PREVIEW_REQUIRED');
+        if (!automatic && event.previewToken !== undefined && (typeof event.previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(event.previewToken))) {
+          reject('分享参数不正确，请刷新后重试。', 'INVALID_REQUEST');
         }
         const previous = await get('recipes', recipeIdFor(owner, id));
         // Old update-only clients retain their narrower operation. Current
-        // clients likewise update only explicitly shared recipes automatically.
+        // clients use syncPublications for automatic first publication too.
         if (automatic && (!previous || previous.published !== true)) return {updated: false};
         const {recipe, account} = await committedRecipe(owner, ENV, id, scopeState.scope);
+        if (recipe.source) {
+          // A saved public recipe is already shareable under its original
+          // author. Returning that link avoids duplicate publications even
+          // when an older client still calls publish for a saved copy.
+          if (automatic) return {updated: false};
+          const source = await get('recipes', recipe.source.recipeId);
+          const original = source && source.profileId === recipe.source.profileId && await renderRecipe(source, ENV, undefined, isBuiltin);
+          await assertCommitted(db, owner, account);
+          if (!original) reject('原作者的菜谱暂时不可用。', 'NOT_FOUND');
+          return {recipe: original};
+        }
         const saved = await savePublication({owner, env: ENV, recipe, account, previous,
           automatic: true, allowCreate: !automatic, isBuiltin,
+          migratePersonal: !automatic && Boolean(account.__scope && account.__scope.kind === 'family' && previous && (previous.publicationScope || 'personal') === 'personal'),
           ...(automatic ? {} : {previewToken: event.previewToken})});
         if (!saved.updated && automatic) return {updated: false};
         const rendered = await renderRecipe(saved.record || previous, ENV, undefined, isBuiltin);
@@ -968,7 +1014,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         'PROFILE_BIO_REJECTED', 'PROFILE_MODERATION_UNAVAILABLE', 'SELF_FEEDBACK', 'INVALID_COOKSNAP',
         'INVALID_COOKSNAP_PHOTO', 'COOKSNAP_TEXT_REJECTED', 'COOKSNAP_PHOTO_REJECTED',
         'COOKSNAP_MODERATION_UNAVAILABLE', 'FEEDBACK_NOT_SAVED', 'CLIENT_UPDATE_REQUIRED', 'PREVIEW_REQUIRED', 'PREVIEW_STALE',
-        'FAMILY_CHANGED', 'INVALID_FAMILY', 'FAMILY_CONFLICT', 'RECIPE_AUTHOR_REQUIRED']);
+        'FAMILY_CHANGED', 'INVALID_FAMILY', 'FAMILY_CONFLICT', 'RECIPE_AUTHOR_REQUIRED', 'SOURCE_RECIPE_ONLY']);
       const extra = event && event.action === 'syncPublications' ? {...progress, hasMore: true} : {};
       if (allowed.has(error && error.code)) return {...extra, error: {code: error.code, message: error.message}};
       return {...extra, error: {code: 'SOCIAL_FAILED', message: '暂时无法完成，请稍后重试。'}};

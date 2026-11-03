@@ -2,21 +2,25 @@
 
 const config = require('../config/cloud');
 const store = require('./store');
-const PENDING_MESSAGE = '本机修改已保存，菜谱暂未同步完成，请联网后重试。';
+const PENDING_MESSAGE = '记录已同步，公开菜谱暂未更新，请稍后重试。';
 const MAX_BATCHES = 250;
 
 function fail(code) {
-  const error = Error(code === 'ACCOUNT_CHANGED' ? '微信账号已切换，请重新同步当前账号。' : PENDING_MESSAGE);
+  const identityMessages = {ACCOUNT_CHANGED: '微信账号已切换，请重新同步当前账号。',
+    FAMILY_CHANGED: '家庭已变化，请重新同步后重试。', UNAUTHENTICATED: '未能确认微信账号，请重新同步。'};
+  const error = Error(identityMessages[code] || (code === 'INVALID_REQUEST'
+    ? '记录已同步，公开菜谱服务需要更新，请稍后重试。' : PENDING_MESSAGE));
   error.code = code || 'PUBLICATION_SYNC_FAILED';
   error.userMessage = error.message;
-  error.publicationPending = code !== 'ACCOUNT_CHANGED';
+  error.invalidIdentity = Boolean(identityMessages[code]);
+  error.publicationPending = !error.invalidIdentity;
   throw error;
 }
 
 // Do not call social.js here: publishing there waits for private cloud sync.
-// This helper runs after that sync. The server updates only recipes previously
-// shared by explicit confirmation and removes deleted ones. It must never turn
-// a private save/import/meal record into a new publication.
+// This helper runs after that sync. The server automatically publishes the
+// actor's user-created recipes, updates existing publications and removes deleted
+// ones. Built-ins, copied sources and private baby records stay out of the feed.
 async function syncPublished({owner, isCurrent, onUpdated}) {
   if (config.socialEnabled !== true) return {updated: 0, removed: 0};
   const scope = store.getSyncInfo().scope;

@@ -6,7 +6,7 @@
   <view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
   </view>
   <view class="detail-body">
-  <view class="detail-heading"><view class="detail-title">{{recipe.name}}</view><button class="detail-title-favorite {{recipe.favorite ? 'is-favorite' : ''}}" bindtap="favorite" aria-label="{{recipe.favorite ? '取消收藏这道菜谱' : '收藏这道菜谱'}}"><t-icon name="{{recipe.favorite ? 'heart-filled' : 'heart'}}" size="36rpx" /></button><view wx:if="{{socialEnabled}}" class="detail-share-entry"><t-button wx:if="{{builtIn || (publicReady && shareRecipe && !publicLoading && !shareLoading)}}" theme="primary" variant="text" size="small" icon="share" disabled="{{publicBusy || deleting || deleteVisible}}" open-type="share">分享</t-button><t-button wx:elif="{{!familyRecipe}}" theme="primary" variant="text" size="small" icon="share" loading="{{shareLoading}}" disabled="{{publicBusy || deleting || publicLoading || shareLoading}}" bind:tap="requestShare">分享</t-button></view></view>
+  <view class="detail-heading"><view class="detail-title">{{recipe.name}}</view><button class="detail-title-favorite {{recipe.favorite ? 'is-favorite' : ''}}" bindtap="favorite" aria-label="{{recipe.favorite ? '取消收藏这道菜谱' : '收藏这道菜谱'}}"><t-icon name="{{recipe.favorite ? 'heart-filled' : 'heart'}}" size="36rpx" /></button><view wx:if="{{socialEnabled}}" class="detail-share-entry"><t-button wx:if="{{shareReady}}" theme="primary" variant="text" size="small" icon="share" disabled="{{publicBusy || deleting || deleteVisible}}" open-type="share">分享</t-button><t-button wx:else theme="primary" variant="text" size="small" icon="share" loading="{{shareLoading}}" disabled="{{publicBusy || deleting || deleteVisible || publicLoading || shareLoading}}" bind:tap="requestShare">{{shareLoading ? '准备中' : '准备分享'}}</t-button></view></view>
   <view class="detail-meta"><view wx:if="{{recipe.category}}" class="detail-category">{{recipe.category}}</view><view><t-icon name="time" size="22rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="22rpx" />{{recipe.texture}}</view><text wx:if="{{builtIn}}" class="example-label">内置菜谱</text></view>
   <view wx:if="{{recipe.allergyWarning}}" class="publication-error" role="alert">{{recipe.allergyWarning}}</view>
   <view class="detail-top-actions">
@@ -15,10 +15,10 @@
   </view>
   <view wx:if="{{socialEnabled}}" class="publication-panel">
     <view class="publication-heading">
-      <view class="publication-status"><text class="publication-label">{{builtIn ? '内置菜谱' : '菜谱分享'}}</text><view class="publication-state {{!builtIn && publicReady && publicInfo && !publicChanged ? 'publication-state-public' : ''}}"><t-icon name="{{builtIn ? 'book' : publicReady && publicInfo && !publicChanged ? 'check-circle' : 'share'}}" size="28rpx" /><text>{{builtIn ? '保留在你的菜谱中' : publicError ? '暂时无法读取' : publicReady ? publicInfo ? publicChanged ? '分享内容待更新' : '已分享' : '尚未分享' : '正在读取'}}</text></view></view>
+      <view class="publication-status"><text class="publication-label">{{builtIn ? '内置菜谱' : '菜谱分享'}}</text><view class="publication-state {{shareReady && !builtIn ? 'publication-state-public' : ''}}"><t-icon name="{{builtIn ? 'book' : shareReady ? 'check-circle' : 'share'}}" size="28rpx" /><text>{{builtIn ? '保留在你的食谱中' : shareReady ? '可直接分享' : publicLoading ? '正在准备分享' : '分享待准备'}}</text></view></view>
     </view>
     <view wx:if="{{!builtIn && (publicLoading || publicBusy)}}" class="publication-loading"><t-loading size="28rpx" /><text>{{publicBusy ? '正在同步菜谱…' : '正在读取同步状态…'}}</text></view>
-    <view class="publication-hint">{{builtIn ? '内置菜谱供你选餐和记录用餐，不会出现在推荐和他人可见的主页中。分享仅发送小程序入口。' : publicInfo ? '这道菜已分享给其他家长，保存后的菜谱修改会自动更新。小心得、宝宝信息和用餐记录不会公开。' : familyRecipe ? '这道菜由家人添加。全家可以一起编辑和记录用餐，由添加者选择是否公开分享。' : '菜谱先收在你的食谱里。选择公开分享并确认预览后，其他家长才会看到菜名、照片、食材和做法。小心得、宝宝信息和用餐记录不会公开。'}}</view>
+    <view class="publication-hint">{{builtIn ? '内置菜谱供你选餐和记录用餐，不会出现在推荐和他人可见的主页中。分享仅发送小程序入口。' : recipe.source ? '分享会发送原作者的做法。你对副本的调整保留在自己的食谱中。' : familyRecipe ? '这道菜保留添加者的作者身份，家人可以一起编辑，修改同步后自动更新分享内容。' : '创建的菜谱同步后会自动展示给其他家长，修改也会自动更新。小心得、宝宝资料和用餐记录不会展示。'}}</view>
     <view wx:if="{{!builtIn && publicChanged}}" class="publication-hint">修改已保存，联网同步后会自动更新。</view>
     <view wx:if="{{recipe.source}}" class="publication-source">来自 {{recipe.source.authorName}} 的菜谱</view>
     <view wx:if="{{publicError}}" class="publication-error"><text>{{publicError}}</text><t-button size="small" theme="primary" variant="text" disabled="{{publicLoading || publicBusy || deleting}}" bind:tap="refreshPublication">重试</t-button></view>
@@ -39,7 +39,3 @@
 </view>
 <t-empty wx:else icon="file-unknown" description="没有找到这道菜谱，可能已经被删除。"><t-button slot="action" theme="primary" bind:tap="back">返回菜谱列表</t-button></t-empty>
 <t-dialog visible="{{deleteVisible}}" title="删除这道菜谱？" content="{{deleteContent}}" confirm-btn="{{deleteConfirmButton}}" cancel-btn="取消" bind:confirm="confirmDelete" bind:cancel="cancelDelete" />
-<t-dialog visible="{{shareVisible}}" title="分享这道菜" content="朋友可以查看做法并保存独立副本。">
-  <view slot="content" class="recipe-share-preview"><view class="recipe-share-name">{{shareRecipe.name}}</view><view wx:if="{{publicChanged}}" class="recipe-share-hint">将分享当前已同步的菜谱，最新修改将在联网同步后自动更新。</view></view>
-  <view slot="actions" class="recipe-share-actions"><t-button theme="default" variant="text" block bind:tap="closeShare">稍后再发</t-button><t-button theme="primary" block icon="share" open-type="share" disabled="{{!shareRecipe || !publicReady || publicBusy || publicLoading || shareLoading || deleting}}">发送给朋友</t-button></view>
-</t-dialog>

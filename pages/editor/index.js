@@ -3,39 +3,38 @@ const store = require('../../utils/store');
 const { categories, textures } = require('../../utils/selectors');
 const recipeAges = require('../../utils/recipe-ages');
 const ui = require('../../utils/ui');
-const social = require('../../utils/social');
 const {isBuiltInRecipe} = require('../../utils/recipe-origin');
-const {createSharePrompt} = require('../../components/share-prompt/controller');
-const sharePrompt = createSharePrompt({store, wx, isBuiltInRecipe, getMine: options => social.getMine(options)});
+const {createFormSession} = require('../../components/form-session/controller');
+const formSession = createFormSession({store, wx});
 const ageGroupFields = values => ({
   ageGroups: values,
   ageGroupOptions: recipeAges.ageGroups.map(group => ({...group, selected: values.includes(group.value)}))
 });
 
 Page({
-  ...sharePrompt.methods,
+  ...formSession.methods,
   onShareAppMessage() {
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   data: {
-    ...sharePrompt.data,
+    ...formSession.data,
     categories: categories.slice(1), textures, categoryIndex: 0, textureIndex: 0,
     ...ageGroupFields([]), ageGroupsDirty: false,
     pickerVisible: false, pickerField: '', pickerTitle: '', pickerOptions: [], pickerValue: [],
     recordMeal: false, rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
     form: { name: '', minutes: '20', ingredients: '', steps: '', note: '' },
-    photo: '', photoDisplay: '', saving: false, error: '', editing: false, builtIn: false, missingRecipe: false,
+    photo: '', photoDisplay: '', saving: false, error: '', editing: false, builtIn: false, sourceRecipe: false, missingRecipe: false,
     nameError: '', minutesError: '', ingredientsError: '', stepsError: '', ratingError: '',
     discardVisible: false
   },
   onLoad(options = {}) {
-    this.initSharePrompt();
+    this.initDraftSession();
     this._draftOwner = store.getSyncInfo().owner;
     this._draftScope = store.getSyncInfo().scopeKey || this._draftOwner;
     this.setData({familyActive: Boolean(store.getSyncInfo().scope && store.getSyncInfo().scope.kind === 'family')});
     this._unsubscribeAccount = store.subscribe(info => {
-      this.sharePromptAccountChanged(info);
+      this.draftSessionChanged(info);
       if (!this._draftOwner && info.owner) { this._draftOwner = info.owner; this._draftScope = info.scopeKey || info.owner; }
     });
     if (options.id) {
@@ -44,7 +43,7 @@ Page({
       this.original = recipe;
       wx.setNavigationBarTitle({ title: '编辑菜谱' });
       this.setData({
-        editing: true, builtIn: isBuiltInRecipe(recipe),
+        editing: true, builtIn: isBuiltInRecipe(recipe), sourceRecipe: Boolean(recipe.source),
         form: {
           name: recipe.name, minutes: String(recipe.minutes),
           ingredients: recipe.ingredients.map(item => item.name + (item.amount ? ' ' + item.amount : '')).join('\n'),
@@ -59,14 +58,14 @@ Page({
     this.initialDraft = this.draftSnapshot();
   },
   onUnload() {
-    this.disposeSharePrompt();
+    this.disposeDraftSession();
     if (this._unsubscribeAccount) this._unsubscribeAccount();
     this.discardStagedPhoto();
   },
   clearDraftForScopeChange() { this.original = null; this.setData({form: {name: '', minutes: '20', ingredients: '', steps: '', note: ''}, photo: '', photoDisplay: '', error: '家庭或账号已变化，请重新打开菜谱。', discardVisible: false}); },
   assertDraftAccount() {
     if (this._pageUnloaded) throw Error('页面已关闭，请重新打开后操作。');
-    if (this._sharePromptLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
+    if (this._draftLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
     const owner = store.getSyncInfo().owner;
     if (this._draftOwner && (this._draftOwner !== owner || this._draftScope !== (store.getSyncInfo().scopeKey || owner))) throw Error('微信账号已切换，或家庭已变化，请重新打开菜谱编辑页后再保存。');
     if (!this._draftOwner && owner) { this._draftOwner = owner; this._draftScope = store.getSyncInfo().scopeKey || owner; }
@@ -90,7 +89,6 @@ Page({
   },
   leave() {
     if (this._pageUnloaded) return;
-    this.cancelSharePrompt();
     this.alertEnabled = false;
     if (typeof wx.disableAlertBeforeUnload === 'function') wx.disableAlertBeforeUnload({ complete: () => ui.back() });
     else ui.back();
@@ -156,7 +154,7 @@ Page({
     wx.chooseMedia({
       count: 1, mediaType: ['image'], sourceType: ['album', 'camera'], sizeType: ['compressed'],
       success: result => {
-        if (!this.sharePromptCurrent()) return;
+        if (!this.draftCurrent()) return;
         const file = result.tempFiles && result.tempFiles[0];
         if (!file) return;
         if (file.size > 2 * 1024 * 1024) { ui.error(Error('请选择小于 2 MB 的照片')); return; }
@@ -169,7 +167,7 @@ Page({
     });
   },
   previewPhoto() {
-    if (!this.sharePromptCurrent()) return;
+    if (!this.draftCurrent()) return;
     const photo = familyPhotos.photoURL(this.data.photo || '');
     if (photo) wx.previewImage({ current: photo, urls: [photo] });
   },
@@ -227,15 +225,13 @@ Page({
       this.stagedPhotoPath = '';
       this.initialDraft = this.draftSnapshot();
       wx.showToast({ title: '菜谱已保存', icon: 'success' });
-      await this.afterSavedRecipe(recipeId, '已收进你的食谱，也分享给其他家长吧', {newRecipe: !this.data.editing});
+      this.finishSaved();
     } catch (error) {
       // Retain a newly saved photo when storage fails, so the complete draft can be retried.
       if (!this._pageUnloaded) this.setData({ error: error.message || '保存失败，请检查剩余存储空间后重试。' });
     } finally { if (!this._pageUnloaded) this.setData({ saving: false }); }
   },
   cancel() {
-    if (this.data.sharePromptVisible) { this.keepRecipeForSelf(); return; }
-    if (this.data.savedComplete) { if (!this.data.sharePromptBusy) this.leave(); return; }
     if (this.data.saving || this.data.savedComplete) return;
     if (this.initialDraft !== undefined && this.draftSnapshot() !== this.initialDraft) this.setData({ discardVisible: true });
     else this.leave();

@@ -763,14 +763,17 @@ test('recipe reconciliation waits for committed account data and retries even af
     return {updated, removed: 0, hasMore: false};
   };
   await app.sync.start();
-  assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /本机修改已保存，菜谱暂未同步完成/);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
+  assert.match(app.sync.getStatus().publicationMessage, /记录已同步，公开菜谱暂未更新/);
   assert.equal(app.store.getSyncInfo().dirty, false);
   assert.equal(app.calls.commit, 1);
   assert.equal(app.timerCount(), 0, 'a failed public update does not spin retries');
   failUpdate = false;
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, false);
+  assert.equal(app.sync.getStatus().publicationErrorCode, '');
   assert.equal(app.calls.commit, 1, 'retry does not commit private data again');
   assert.equal(app.calls.social.length, 2);
   assert.equal(synchronizedAt.size, 2, 'both existing and newly added user recipes are reconciled');
@@ -834,8 +837,9 @@ test('a failed public update still commits a private save queued while it was in
   assert.equal(updates, 1, 'a failed publication must not retry itself while draining private changes');
   assert.deepEqual(app.calls.social.map(item => item.action), ['syncPublications']);
   assert.equal(app.timerCount(), 0);
-  assert.equal(app.sync.getStatus().state, 'pending');
-  assert.match(app.sync.getStatus().message, /本机修改已保存，菜谱暂未同步完成/);
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
+  assert.match(app.sync.getStatus().publicationMessage, /记录已同步，公开菜谱暂未更新/);
 });
 
 test('an A to B to A account switch cannot accept a stale reconciliation response or continue its batches', async () => {
@@ -1113,7 +1117,7 @@ test('server account mismatches invalidate previously confirmed identity for all
   assert.equal(app.sync.getStatus().state, 'synced');
 });
 
-test('publication change versions report partial successes, retry pending work immediately and stay unchanged after no-op checks', async () => {
+test('publication failures preserve data readiness, throttle foreground checks and permit explicit retries', async () => {
   const app = setup({socialEnabled: true, initial: state([recipe('first'), recipe('second')])});
   const completed = new Set();
   let failSecond = true;
@@ -1128,7 +1132,8 @@ test('publication change versions report partial successes, retry pending work i
   const versions = [];
   app.sync.subscribe(status => versions.push(status.publicationVersion));
   await app.sync.start();
-  assert.equal(app.sync.getStatus().state, 'pending');
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.sync.getStatus().publicationPending, true);
   assert.equal(app.sync.getStatus().revision, 1);
   assert.equal(app.sync.getStatus().publicationVersion, 1);
   assert.ok(versions.includes(1));
@@ -1136,6 +1141,8 @@ test('publication change versions report partial successes, retry pending work i
   assert.equal(app.timerCount(), 0);
   failSecond = false;
   await app.sync.syncNow({ifNeeded: true});
+  assert.equal(app.calls.social.length, 1, 'foreground checks retain the cooldown after a public-only failure');
+  await app.sync.syncNow();
   assert.equal(app.calls.identity, 2);
   assert.equal(app.calls.commit, 1);
   assert.equal(app.calls.download.length, 0);
@@ -1197,4 +1204,15 @@ test('deletion reconciliation waits for the committed tombstone and invalidates 
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().publicationVersion, 2, 'retrying an acknowledged removal is a no-op');
   assert.equal(app.calls.commit, 2);
+});
+
+test('public reconciliation identity rejection still invalidates the synchronized session', async () => {
+  for (const code of ['FAMILY_CHANGED', 'UNAUTHENTICATED']) {
+    const app = setup({socialEnabled: true, initial: state([recipe('published')])});
+    app.hooks.social = () => ({error: {code}});
+    await app.sync.syncNow();
+    assert.equal(app.sync.getStatus().state, 'error');
+    assert.equal(app.sync.getStatus().identityInvalid, true);
+    assert.equal(app.sync.getStatus().publicationPending, false);
+  }
 });

@@ -285,7 +285,6 @@ module.exports = function createProfilePage(isTab = false) { return {
   },
   openCookbook() { if (account.check(this)) wx.navigateTo({url: '/pages/recipes/index'}); },
   openFamily() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/family/index'}); },
-  openFeedback() { if (account.check(this) && this.data.isSelf && this.data.socialEnabled) wx.navigateTo({url: '/pages/feedback/index'}); },
   openAllergies() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/allergies/index'}); },
   openFollowing() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/following/index?tab=people'}); },
   openFollowers() { if (account.check(this) && this.data.isSelf) wx.navigateTo({url: '/pages/following/index?tab=followers'}); },

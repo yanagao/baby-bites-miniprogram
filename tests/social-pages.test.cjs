@@ -13,7 +13,7 @@ function setup(name, social, options = {}) {
   const calls = {errors: [], toasts: [], routes: [], share: [], updates: 0};
   let owner = options.owner === undefined ? 'owner-a' : options.owner;
   const listeners = new Set();
-  const store = {getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getAllergyFilterEnabled: () => false, getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {
     showToast(o) { calls.toasts.push(o.title); },
     navigateTo(o) { calls.routes.push(o.url); }, switchTab(o) { calls.routes.push(o.url); },

@@ -28,12 +28,13 @@ store.subscribe(info => {
     observedOwner = info.owner;
     observedScopeKey = nextScopeKey;
     ownerEpoch++;
-    publish({identityCheckedAt: 0, identityInvalid: true});
+    publish({identityCheckedAt: 0, identityInvalid: true, publicationPending: false, publicationMessage: '', publicationErrorCode: ''});
   }
 });
 let status = {state: configured() ? 'pending' : 'unconfigured',
   message: configured() ? '等待同步' : '云同步尚未配置', lastSyncedAt: 0, owner: '',
-  identityCheckedAt: 0, identityInvalid: false, revision: 0, publicationVersion: 0};
+  identityCheckedAt: 0, identityInvalid: false, revision: 0, publicationVersion: 0,
+  publicationPending: false, publicationMessage: '', publicationErrorCode: ''};
 
 function configured() { return typeof config.env === 'string' && /^[A-Za-z0-9_-]+$/.test(config.env); }
 function copy(value) { return JSON.parse(JSON.stringify(value)); }
@@ -352,12 +353,9 @@ function initialize() {
   initialized = true;
 }
 function onFailure(error) {
+  publish({publicationPending: false, publicationMessage: '', publicationErrorCode: ''});
   if (error && (error.invalidIdentity || error.code === 'ACCOUNT_CHANGED')) {
     publish({identityCheckedAt: 0, identityInvalid: true});
-  }
-  if (error && error.publicationPending) {
-    publish({state: 'pending', message: error.userMessage});
-    return;
   }
   const networkError = disconnected || /network|timeout|timed out|offline|网络/i.test(error && (error.errMsg || error.message) || '');
   publish({state: networkError ? 'pending' : 'error', message: error && error.userMessage ||
@@ -393,7 +391,7 @@ function syncNow(options = {}) {
       if (!publicationError && config.socialEnabled === true && !store.getSyncInfo().dirty && !disconnected) {
         const owner = store.getSyncInfo().owner;
         const epoch = ownerEpoch;
-        publish({message: '菜谱已保存，正在同步菜谱'});
+        publish({message: '记录已保存，正在更新公开菜谱'});
         try {
           await publicationSync.syncPublished({owner, isCurrent: () =>
             store.getSyncInfo().owner === owner && ownerEpoch === epoch,
@@ -409,10 +407,13 @@ function syncNow(options = {}) {
       // this pass. Only edits still pending need another private check.
       queued = store.getSyncInfo().dirty;
     } while (queued && !disconnected);
-    if (publicationError) throw publicationError;
     lastSyncedEpoch = ownerEpoch;
+    // Public discovery is a separate projection of the committed data. Its
+    // failure must not block family reads or imply that baby records were lost.
     publish({state: store.getSyncInfo().dirty ? 'pending' : 'synced',
-      message: store.getSyncInfo().dirty ? '本机修改等待同步' : '已同步当前微信账号', lastSyncedAt: Date.now()});
+      message: store.getSyncInfo().dirty ? '本机修改等待同步' : publicationError ? publicationError.userMessage : '已同步当前微信账号',
+      publicationPending: Boolean(publicationError), publicationMessage: publicationError ? publicationError.userMessage : '',
+      publicationErrorCode: publicationError ? publicationError.code : '', lastSyncedAt: Date.now()});
   }).catch(error => {
     // A failing request never triggers its own retry loop. A later edit, reconnect,
     // foreground event or explicit retry can start a new attempt.

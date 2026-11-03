@@ -36,7 +36,7 @@
       <view wx:if="{{feedbackError}}" class="cooksnap-error"><text>{{feedbackError}}</text><t-button theme="primary" variant="text" size="small" bind:tap="retryFeedback">重试</t-button></view>
       <t-button wx:if="{{feedbackOffset !== null}}" block theme="default" variant="text" loading="{{feedbackMore}}" disabled="{{feedbackMore || !!deletingCooksnap}}" bind:tap="moreFeedback">查看更多跟做</t-button>
     </view>
-    <view wx:if="{{authorKnown && !authorIsSelf}}" class="copy-explanation muted">{{importedId ? '已保存到你的菜谱，可继续编辑、收藏或记录用餐，并保留原作者来源。保存副本不会自动公开。' : '保存后先留在你的食谱里，并保留原作者来源。你可以调整做法，原作者之后的修改或删除不会影响这份副本。'}}</view>
+    <view wx:if="{{authorKnown && !authorIsSelf}}" class="copy-explanation muted">{{importedId ? '已保存到你的食谱，可继续编辑、收藏或记录用餐，并保留原作者来源。分享时发送原作者的做法。' : '保存后可在食谱里调整做法，并保留原作者来源。原作者之后的修改或删除不会影响这份副本。'}}</view>
     <view class="{{authorKnown && !authorIsSelf ? 'detail-bottom-space' : 'public-detail-end'}}" />
     </view>
     <view wx:if="{{authorKnown && !authorIsSelf}}" class="detail-bottom public-bottom"><t-button theme="primary" shape="round" block icon="{{importedId ? 'check' : 'add'}}" loading="{{adding}}" disabled="{{adding}}" bind:tap="add">{{importedId ? '已保存 · 查看我的食谱' : '保存到我的食谱'}}</t-button></view>

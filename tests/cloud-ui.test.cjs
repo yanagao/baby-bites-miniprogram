@@ -70,7 +70,7 @@ function setup(options = {}) {
       require(dependency) {
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
-        if (dependency === '../../components/share-prompt/controller') return require('../components/share-prompt/controller');
+        if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;
         if (dependency === '../../config/cloud') return {socialEnabled: true};
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};

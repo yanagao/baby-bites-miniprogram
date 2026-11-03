@@ -98,7 +98,7 @@ Page({
     const input = {name, label: this.data.roleLabel.trim()};
     const key = JSON.stringify(input);
     if (!this.creation || this.creation.key !== key) this.creation = {key, requestId: newRequestId()};
-    this.confirm('创建家庭并共享现有记录？', '当前宝宝的称呼、生日、食谱、照片、收藏、过敏食物和用餐记录将作为家庭的初始数据。加入的家人都能查看和记录；公开主页、关注和公开分享仍属于各自账号。', '创建并共享',
+    this.confirm('创建家庭并共享现有记录？', '当前宝宝的称呼、生日、食谱、照片、收藏、过敏食物和用餐记录将作为家庭的初始数据。加入的家人都能查看和记录；个人主页和关注仍属于各自账号，菜谱保留创建者身份并在同步后自动展示给其他家长。', '创建并共享',
       () => this.mutate('正在创建家庭…', () => familyService.create({...input, requestId: this.creation.requestId}), true));
   },
   async previewInvite() {

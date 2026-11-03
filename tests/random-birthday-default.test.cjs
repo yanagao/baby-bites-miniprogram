@@ -30,7 +30,7 @@ function setup(options = {}) {
   const state = {nickname: '私人称呼', ...(options.babyBirthDate !== undefined ? {babyBirthDate: options.babyBirthDate} : {}), recipes: clone(options.recipes || RECIPES), logs: clone(options.logs || [])};
   const calls = {mine: 0, errors: [], toasts: [], writes: 0, updates: 0, routes: []};
   const store = {
-    getState: () => clone(state), getSyncInfo: () => ({owner, ...(options.scope ? {scope: options.scope, scopeKey: JSON.stringify(options.scope)} : {})}),
+    getAllergyFilterEnabled: () => false, getState: () => clone(state), getSyncInfo: () => ({owner, ...(options.scope ? {scope: options.scope, scopeKey: JSON.stringify(options.scope)} : {})}),
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); },
     toggleFavorite() { calls.writes++; throw Error('Default-age initialization must not save a favorite'); },
     setNickname() { calls.writes++; throw Error('Default-age initialization must not save private data'); }

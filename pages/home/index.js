@@ -5,7 +5,7 @@ const ui = require('../../utils/ui');
 const defaultPantryPreview = ['南瓜', '鸡蛋', '西兰花', '小米'];
 
 function homeRecipes(state) {
-  const all = selectors.listRecipes(state, {excludeAllergies: true});
+  const all = selectors.listRecipes(state, {excludeAllergies: store.getAllergyFilterEnabled()});
   const eligibleIds = new Set(all.map(recipe => recipe.id));
   const today = selectors.today();
   const day = 24 * 60 * 60 * 1000;
@@ -43,7 +43,7 @@ Page({
       const pantry = typeof getApp === 'function' ? getApp().globalData.pantry || [] : [];
       const hour = new Date().getHours();
       const greeting = hour < 11 ? '早上好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
-      this.setData({hasAllergies: Boolean(state.allergies && state.allergies.length), hasRecipes: Boolean(state.recipes.length), greeting, nickname: state.nickname || '宝宝', warning: store.getWarning(),
+      this.setData({hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length), hasRecipes: Boolean(state.recipes.length), greeting, nickname: state.nickname || '宝宝', warning: store.getWarning(),
         recommendationOwner: store.getSyncInfo().scopeKey || store.getSyncInfo().owner || '',
         pantryCount: pantry.length, pantryPreview: pantry.length ? pantry.slice(0, 4) : defaultPantryPreview,
         ...homeRecipes(state)});

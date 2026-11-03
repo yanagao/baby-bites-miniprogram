@@ -42,6 +42,33 @@ test('family info caches for the same scope and force reload bypasses the cache'
   app.setServerScope(FAMILY); await app.api.info(); assert.equal(app.calls.length, 3);
   assert.deepEqual(app.calls[2].expectedScope, FAMILY);
 });
+test('a publication-only failure does not block authenticated family reads or invitations', async () => {
+  const app = setup(); app.setScope(FAMILY); app.setServerScope(FAMILY);
+  app.hooks.sync = () => ({state: 'synced', owner: OWNER, publicationPending: true,
+    publicationErrorCode: 'INVALID_REQUEST', publicationMessage: '记录已同步，公开菜谱服务需要更新，请稍后重试。'});
+  const result = await app.api.info();
+  assert.equal(result.family.id, FAMILY.id);
+  assert.equal(app.calls[0].action, 'familyState');
+  assert.deepEqual(app.calls[0].expectedScope, FAMILY);
+  await app.api.invite();
+  assert.equal(app.calls[1].action, 'familyInvite');
+  assert.deepEqual(app.calls[1].expectedScope, FAMILY);
+  assert.equal(app.calls[1].expectedOwner, OWNER);
+  assert.equal(app.locks(), 0);
+});
+test('public retry state cannot bypass private pending data or dirty checks, even with a cached family', async () => {
+  for (const condition of ['pending', 'error', 'dirty']) {
+    const app = setup(); app.setScope(FAMILY); app.setServerScope(FAMILY);
+    await app.api.info();
+    app.hooks.sync = () => ({state: condition === 'dirty' ? 'synced' : condition,
+      owner: OWNER, publicationPending: true, message: '当前数据尚未同步'});
+    if (condition === 'dirty') app.setDirty();
+    await assert.rejects(app.api.info(), error => error.code === 'SYNC_REQUIRED');
+    await assert.rejects(app.api.invite(), error => error.code === 'SYNC_REQUIRED');
+    assert.equal(app.calls.length, 1, 'only the original clean family read reaches the backend');
+    assert.equal(app.locks(), 0);
+  }
+});
 test('create synchronizes first, stamps protocol and expected scope, then verifies the resulting scope before unlocking', async () => {
   const app = setup(); const result = await app.api.create({name: '小米家', label: '妈妈'});
   assert.equal(app.calls[0].action, 'familyCreate'); assert.equal(app.calls[0].roleLabel, '妈妈');

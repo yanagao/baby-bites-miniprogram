@@ -170,8 +170,8 @@ function fakeEnvironment(options = {}) {
   };
 }
 
-// Most publication tests exercise the confirmed flow; consent-specific tests
-// below call the raw handler to assert that missing/stale previews are rejected.
+// Legacy preview clients remain supported. Automatic-publication and direct
+// sharing tests below also call publish without a preview token.
 async function publishWithPreview(handler, input) {
   const preview = await handler({action: 'previewPublication', sourceRecipeId: input.sourceRecipeId,
     ...(input.expectedOwner === undefined ? {} : {expectedOwner: input.expectedOwner})});
@@ -2299,7 +2299,7 @@ test('malformed IDs and pagination are rejected before resource access', async (
   assert.equal(env.downloads.length, 0);
 });
 
-test('imported source attribution resolves against server records, never a forged author name', async () => {
+test('sharing a saved copy returns its original author link and never publishes a duplicate', async () => {
   const env = fakeEnvironment();
   const sourceRecipeId = env.addPublished('bob');
   const sourceProfileId = profileIdFor(ownerFor('bob'));
@@ -2308,9 +2308,11 @@ test('imported source attribution resolves against server records, never a forge
   input.data.recipes[0].source = {profileId: sourceProfileId, recipeId: sourceRecipeId, authorName: 'FORGED AUTHOR'};
   env.commit('alice', input);
   const result = await publishWithPreview(env.handler(), {sourceRecipeId: 'recipe-1'});
-  assert.deepEqual(result.recipe.source, {profileId: sourceProfileId, recipeId: sourceRecipeId, authorName: 'bob的小厨房'});
+  assert.equal(result.recipe.id, sourceRecipeId); assert.equal(result.recipe.profileId, sourceProfileId);
+  assert.equal(result.recipe.authorName, 'bob的小厨房');
+  assert.equal(env.table('recipes').has(recipeIdFor(ownerFor('alice'), 'recipe-1')), false);
   await env.handler('bob')({action: 'unpublish', sourceRecipeId: 'recipe-1'});
-  assert.equal((await publishWithPreview(env.handler(), {sourceRecipeId: 'recipe-1'})).recipe.source.authorName, 'bob的小厨房');
+  assert.equal((await publishWithPreview(env.handler(), {sourceRecipeId: 'recipe-1'})).error.code, 'NOT_FOUND');
 });
 
 test('invalid source attribution cannot access arbitrary resources', async () => {
@@ -2331,7 +2333,7 @@ test('nonexistent or corrupt public records never grant access to private detail
   assert.equal((await env.handler()({action: 'recipe', recipeId: '0'.repeat(64)})).error.code, 'NOT_FOUND');
 });
 
-test('saving imported or liked user recipes never publishes them or creates a profile without confirmation', async () => {
+test('saved and imported own recipes automatically publish in bounded batches without private fields', async () => {
   const env = fakeEnvironment(), data = snapshot();
   const template = data.data.recipes[0];
   data.data.recipes = Array.from({length: 10}, (_, index) => ({...clone(template), id: `user-${index}`}));
@@ -2339,14 +2341,20 @@ test('saving imported or liked user recipes never publishes them or creates a pr
   data.data.logs = []; data.data.allergies = ['PRIVATE ALLERGY']; data.data.allergiesUpdatedAt = NOW;
   env.commit('alice', data); const handler = env.handler();
   assert.deepEqual(await handler({action: 'syncPublications', expectedOwner: ownerFor('alice'), owner: ownerFor('bob'), recipes: []}),
-    {updated: 0, removed: 0, hasMore: false});
+    {updated: 8, removed: 0, hasMore: true});
   assert.equal(env.downloads.length, 1);
-  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  assert.equal(env.table('profiles').size, 1); assert.equal(env.table('recipes').size, 8);
   assert.equal(env.uploads.length, 0); assert.equal(env.signed.length, 0);
+  assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 2, removed: 0, hasMore: false});
+  assert.equal(env.table('recipes').size, 10);
+  for (const record of env.table('recipes').values()) {
+    for (const key of ['note', 'favorite', 'allergies', 'logs', 'nickname', 'babyBirthDate']) assert.equal(Object.hasOwn(record, key), false, key);
+    assert.equal(record.owner, ownerFor('alice')); assert.equal(record.publicationPolicyVersion, 3);
+  }
   const writes = env.writes.length;
   assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
   assert.equal(env.writes.length, writes);
-  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 2);
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 3);
 });
 
 test('already confirmed user recipes update in bounded batches without private fields', async () => {
@@ -2365,15 +2373,15 @@ test('already confirmed user recipes update in bounded batches without private f
   }
 });
 
-test('syncPublications keeps old unshared user recipes unshared and preserves existing custom profile details', async () => {
+test('policy migration publishes surviving formerly private recipes and preserves custom author details', async () => {
   const env = fakeEnvironment(); const id = env.addPublished('alice'); env.commit();
   env.table('recipes').get(id).published = false;
   const profileId = profileIdFor(ownerFor('alice'));
   Object.assign(env.table('profiles').get(profileId), {name: '自定义昵称', babyBirthDate: '2025-01-01'});
   const before = clone(env.table('profiles').get(profileId));
-  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
   assert.deepEqual(env.table('profiles').get(profileId), before);
-  assert.equal(env.table('recipes').get(id).published, false);
+  assert.equal(env.table('recipes').get(id).published, true); assert.equal(env.table('recipes').get(id).publicationPolicyVersion, 3);
 });
 
 test('repeated sharing is idempotent and never recopies a synchronized photo or changes its ordering', async () => {
@@ -2439,15 +2447,16 @@ test('historical saved copies of builtins remain hidden through multiple source 
   assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
 });
 
-test('missing attribution records and ordinary saved copies remain eligible instead of being mistaken for builtins', async () => {
+test('saved copies are never automatically republished and missing original links remain unavailable', async () => {
   const env = fakeEnvironment(), original = env.addPublished('bob');
   const input = snapshot(); input.data.logs = [];
   input.data.recipes = [original, '1'.repeat(64)].map((id, index) => ({...clone(input.data.recipes[0]),
     id: 'shared-' + id, source: {profileId: profileIdFor(ownerFor('bob')), recipeId: id, authorName: '用户作者'}, updatedAt: NOW + index}));
   env.commit('alice', input);
   assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
-  for (const recipe of input.data.recipes) assert.ok((await publishWithPreview(env.handler(), {sourceRecipeId: recipe.id})).recipe);
-  assert.equal((await env.handler()({action: 'mine'})).publishedCount, 2);
+  assert.equal((await publishWithPreview(env.handler(), {sourceRecipeId: input.data.recipes[0].id})).recipe.id, original);
+  assert.equal((await publishWithPreview(env.handler(), {sourceRecipeId: input.data.recipes[1].id})).error.code, 'NOT_FOUND');
+  assert.equal((await env.handler()({action: 'mine'})).publishedCount, 0);
 });
 
 test('empty pages of hidden starter recipes advance discovery, following and profile pagination', async () => {
@@ -2503,7 +2512,7 @@ test('batch publication rejects account mismatches and newer snapshots without c
   }})({action: 'syncPublications'});
   assert.equal(result.error.code, 'SYNC_REQUIRED');
   assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
-  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
 });
 
 test('concurrent reconciliation never overwrites a newer generation and converges on retry', async () => {
@@ -2528,7 +2537,7 @@ test('completed reconciliation skips all downloads and inventory reads until the
   const handler = env.handler();
   assert.deepEqual(await handler({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
   let stored = env.table('accounts').get(ownerFor('alice'));
-  assert.equal(stored.publicationPolicyVersion, 2); assert.equal(stored.publicationRevision, stored.revision);
+  assert.equal(stored.publicationPolicyVersion, 3); assert.equal(stored.publicationRevision, stored.revision);
   assert.equal(stored.allergiesUpdatedAt, NOW);
   env.downloads.length = 0; env.queries.length = 0; env.gets.length = 0;
   const writes = env.writes.length;
@@ -2563,7 +2572,7 @@ test('missing snapshots create no accounts or profiles, while all-builtin snapsh
   const input = snapshot(); input.data.recipes[0].id = 'pumpkin-millet'; input.data.logs = []; env.commit('alice', input);
   assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
   assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
-  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 2);
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 3);
 });
 
 test('retiring a historical nonstandard example preserves its builtin identity for same-batch and later copies', async () => {
@@ -2657,10 +2666,10 @@ test('publication previews expose only the share payload and never publish, copy
   assert.equal(env.writes.length, 0); assert.equal(env.uploads.length, 0);
   assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
   assert.deepEqual([...env.table('accounts')], before);
-  // Leaving the preview or choosing to keep it personal causes no publication,
-  // even when the automatic reconciler subsequently runs in a fresh instance.
-  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
-  assert.equal(env.table('recipes').size, 0); assert.equal(env.table('profiles').size, 0);
+  // Legacy preview remains read-only; the current automatic reconciler does
+  // not need a preview token to publish this saved own recipe.
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  assert.equal(env.table('recipes').size, 1); assert.equal(env.table('profiles').size, 1);
 });
 
 test('publication preview author omits private birth dates and uses only actually displayed public fields', async () => {
@@ -2674,17 +2683,19 @@ test('publication preview author omits private birth dates and uses only actuall
   assert.equal(env.writes.length, 0);
 });
 
-test('publish cannot bypass preview through missing, malformed or invented confirmation data', async () => {
+test('publish no longer needs preview while supplied legacy tokens remain validated', async () => {
   const env = fakeEnvironment(); env.commit(); const handler = env.handler();
-  for (const token of [undefined, null, true, {}, '', 'short', 'g'.repeat(64)]) {
+  for (const token of [null, true, {}, '', 'short', 'g'.repeat(64)]) {
     const result = await handler({action: 'publish', sourceRecipeId: 'recipe-1', previewToken: token, confirmed: true});
-    assert.equal(result.error.code, 'PREVIEW_REQUIRED');
+    assert.equal(result.error.code, 'INVALID_REQUEST');
   }
   assert.equal(env.downloads.length, 0);
   const forged = await handler({action: 'publish', sourceRecipeId: 'recipe-1', previewToken: '0'.repeat(64)});
   assert.equal(forged.error.code, 'PREVIEW_STALE');
   assert.equal(env.writes.length, 0); assert.equal(env.uploads.length, 0);
   assert.equal(env.table('recipes').size, 0); assert.equal(env.table('profiles').size, 0);
+  const published = await handler({action: 'publish', sourceRecipeId: 'recipe-1'});
+  assert.equal(published.recipe.id, recipeIdFor(ownerFor('alice'), 'recipe-1'));
 });
 
 test('explicit confirmation publishes the previewed content and creates the matching default author atomically', async () => {
@@ -2818,19 +2829,60 @@ test('automatic updates cannot recreate a profile removed while a photograph is 
   }
 });
 
-test('source attribution changed during photograph copying invalidates confirmation', async () => {
+test('sharing a saved copy never copies its modified private photo or creates another author profile', async () => {
   const env = fakeEnvironment(), input = snapshot(), photo = privateFile(ownerFor('alice'), 'photos/source-race.jpg');
   const sourceId = env.addPublished('bob'), sourceProfileId = profileIdFor(ownerFor('bob'));
   input.data.recipes[0].source = {recipeId: sourceId, profileId: sourceProfileId, authorName: 'IGNORED'};
   input.data.recipes[0].photo = photo; env.files.set(photo, JPG); env.commit('alice', input);
   const preview = await env.handler()({action: 'previewPublication', sourceRecipeId: 'recipe-1'});
-  const result = await env.handler('alice', {async uploadFile({cloudPath, fileContent}) {
-    env.table('profiles').get(sourceProfileId).name = '未预览的来源名字';
-    const fileID = cloudFile(cloudPath); env.files.set(fileID, fileContent); return {fileID};
-  }})({action: 'publish', sourceRecipeId: 'recipe-1', previewToken: preview.previewToken});
-  assert.equal(result.error.code, 'PREVIEW_STALE');
+  const result = await env.handler('alice', {async uploadFile() { throw Error('must not copy saved recipe photos'); }})
+    ({action: 'publish', sourceRecipeId: 'recipe-1', previewToken: preview.previewToken});
+  assert.equal(result.recipe.id, sourceId); assert.equal(result.recipe.profileId, sourceProfileId);
   assert.equal(env.table('recipes').has(recipeIdFor(ownerFor('alice'), 'recipe-1')), false);
   assert.equal(env.table('profiles').has(profileIdFor(ownerFor('alice'))), false);
+});
+
+test('policy 3 migrates a completed policy 2 account and only restores recipes present in the authoritative snapshot', async () => {
+  const env = fakeEnvironment(), input = snapshot(); input.data.logs = [];
+  const live = env.addPublished('alice', 'recipe-1'), absent = env.addPublished('alice', 'deleted-before-migration');
+  env.table('recipes').get(live).published = false; env.table('recipes').get(absent).published = false;
+  input.data.recipes.push({...clone(input.data.recipes[0]), id: 'never-shared'}); env.commit('alice', input);
+  const account = env.table('accounts').get(ownerFor('alice')); account.publicationPolicyVersion = 2; account.publicationRevision = account.revision;
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 2, removed: 0, hasMore: false});
+  assert.equal(env.table('recipes').get(live).published, true); assert.equal(env.table('recipes').get(live).generation, 2);
+  assert.equal(env.table('recipes').get(absent).published, false); assert.equal(env.table('recipes').get(absent).generation, 1);
+  assert.equal(env.table('accounts').get(ownerFor('alice')).publicationPolicyVersion, 3);
+});
+
+test('reconciliation retires historical duplicate saved copies while retaining the original publication', async () => {
+  const env = fakeEnvironment(), original = env.addPublished('bob'), duplicate = env.addPublished('alice');
+  const input = snapshot(); input.data.recipes[0].source = {profileId: profileIdFor(ownerFor('bob')), recipeId: original, authorName: '原作者'};
+  env.commit('alice', input);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 1, hasMore: false});
+  assert.equal(env.table('recipes').get(duplicate).published, false); assert.equal(env.table('recipes').get(original).published, true);
+});
+
+test('automatic first publication rolls back a default profile when writing the recipe fails', async () => {
+  let rejectWrite = true;
+  const env = fakeEnvironment({beforeWrite({name}) { if (rejectWrite && name === COLLECTIONS.recipes) throw Error('retry'); }}); env.commit();
+  assert.equal((await env.handler()({action: 'syncPublications'})).error.code, 'SOCIAL_FAILED');
+  assert.equal(env.table('profiles').size, 0); assert.equal(env.table('recipes').size, 0);
+  rejectWrite = false;
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 1, removed: 0, hasMore: false});
+  assert.equal(env.table('profiles').size, 1);
+});
+
+test('a policy migration racing with a newer publication and withdrawal cannot revive its tombstone', async () => {
+  const env = fakeEnvironment(), input = snapshot(), photo = privateFile(ownerFor('alice'), 'photos/migration-race.jpg');
+  input.data.recipes[0].photo = photo; env.files.set(photo, JPG); const id = env.addPublished('alice'); env.table('recipes').get(id).published = false; env.commit('alice', input);
+  let raced = false;
+  const result = await env.handler('alice', {async uploadFile({cloudPath, fileContent}) {
+    if (!raced) { raced = true; await env.handler()({action: 'publish', sourceRecipeId: 'recipe-1'}); await env.handler()({action: 'unpublish', sourceRecipeId: 'recipe-1'}); }
+    const fileID = cloudFile(cloudPath); env.files.set(fileID, fileContent); return {fileID};
+  }})({action: 'syncPublications'});
+  assert.equal(result.updated, 0); assert.equal(env.table('recipes').get(id).published, false);
+  assert.equal(env.table('recipes').get(id).publicationPolicyVersion, 3);
+  assert.deepEqual(await env.handler()({action: 'syncPublications'}), {updated: 0, removed: 0, hasMore: false});
 });
 
 test('a fresh confirmation publishes changed fields even if a snapshot reused its recipe timestamp', async () => {

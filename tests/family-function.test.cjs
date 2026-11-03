@@ -148,12 +148,61 @@ test('only the family recipe creator can first publish, and others obtain the ex
   const published=await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1',previewToken:preview.previewToken});assert.ok(published.recipe,JSON.stringify(published));
   const link=await env.socialCall('bob','familyRecipeLink',b.scope,{sourceRecipeId:'r1'});assert.equal(link.publication.id,recipeIdFor(ownerFor('alice'),'r1'));assert.equal(link.publication.createdBy,ownerFor('alice'));assert.equal(env.tables.get(COLLECTIONS.recipes).get(link.publication.id).publicationScope,'family:'+a.family.id);
 });
-test('switching to family does not retire or silently update previous personal publications',async()=>{
+test('an author automatically associates their personal publication with a new family while retaining its author and share link',async()=>{
   const env=environment();await env.savePersonal();const preview=await env.socialCall('alice','previewPublication',personal('alice'),{sourceRecipeId:'r1'});await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1',previewToken:preview.previewToken});
   const id=recipeIdFor(ownerFor('alice'),'r1'),before=clone(env.tables.get(COLLECTIONS.recipes).get(id)),a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'scoped-create',baseRevision:1});
-  await env.socialCall('alice','syncPublications',a.scope);assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),before);assert.equal((await env.socialCall('alice','mine',a.scope)).published.length,0);
-  const familyPreview=await env.socialCall('alice','previewPublication',a.scope,{sourceRecipeId:'r1'});assert.equal(familyPreview.alreadyPublished,false);assert.ok(!(await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1',previewToken:familyPreview.previewToken})).error);
+  assert.deepEqual(await env.socialCall('alice','syncPublications',a.scope),{updated:1,removed:0,hasMore:false});
+  const migrated=env.tables.get(COLLECTIONS.recipes).get(id);assert.equal(migrated.owner,before.owner);assert.equal(migrated.profileId,before.profileId);assert.equal(migrated.publishedAt,before.publishedAt);assert.equal(migrated.sortKey,before.sortKey);assert.equal(migrated.generation,before.generation+1);assert.equal(migrated.publicationScope,'family:'+a.family.id);
+  assert.equal((await env.socialCall('alice','mine',a.scope)).published.length,1);
+  assert.equal((await env.socialCall('alice','familyRecipeLink',a.scope,{sourceRecipeId:'r1'})).publication.id,id);
   const sharedBefore=clone(env.tables.get(COLLECTIONS.recipes).get(id));await env.call('alice','familyLeave',a.scope);await env.socialCall('alice','syncPublications',personal('alice'));assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),sharedBefore);
+});
+test('another family member cannot associate the original author personal publication on their behalf',async()=>{
+  const env=environment();await env.savePersonal();await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'});
+  const id=recipeIdFor(ownerFor('alice'),'r1'),before=clone(env.tables.get(COLLECTIONS.recipes).get(id));
+  const a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'own-migration',baseRevision:1}),b=await env.join();
+  assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:0,removed:0,hasMore:false});assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),before);
+  assert.deepEqual(await env.socialCall('bob','familyRecipeLink',b.scope,{sourceRecipeId:'r1'}),{publication:null});
+  const current=await env.read('bob',b.scope);current.snapshot.data.recipes[0].name='家人一起更新的菜谱';current.snapshot.data.recipes[0].updatedAt++;await env.commit('bob',b.scope,current.revision,current.snapshot);
+  await env.socialCall('alice','syncPublications',a.scope);
+  assert.equal(env.tables.get(COLLECTIONS.recipes).get(id).name,'家人一起更新的菜谱');assert.equal(env.tables.get(COLLECTIONS.recipes).get(id).owner,ownerFor('alice'));
+  assert.equal((await env.socialCall('bob','familyRecipeLink',b.scope,{sourceRecipeId:'r1'})).publication.id,id);
+});
+test('legacy direct sharing can still migrate the actual author personal publication into their current family',async()=>{
+  const env=environment();await env.savePersonal();const original=await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'});
+  const a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'direct-personal-migration',baseRevision:1});
+  const result=await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1'});assert.equal(result.recipe.id,original.recipe.id);
+  assert.equal(env.tables.get(COLLECTIONS.recipes).get(result.recipe.id).publicationScope,'family:'+a.family.id);
+});
+test('the current author can migrate an old-policy personal withdrawal still present in the new family snapshot',async()=>{
+  const env=environment();await env.savePersonal();await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'});
+  const id=recipeIdFor(ownerFor('alice'),'r1'),record=env.tables.get(COLLECTIONS.recipes).get(id);record.published=false;record.publicationPolicyVersion=2;
+  const a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'old-policy-migration',baseRevision:1});
+  assert.deepEqual(await env.socialCall('alice','syncPublications',a.scope),{updated:1,removed:0,hasMore:false});
+  const published=env.tables.get(COLLECTIONS.recipes).get(id);assert.equal(published.published,true);assert.equal(published.publicationScope,'family:'+a.family.id);assert.equal(published.publicationPolicyVersion,3);
+});
+test('automatic publication never moves an existing recipe from another family or back to personal scope',async()=>{
+  const env=environment(),a=await env.create();await env.socialCall('alice','syncPublications',a.scope);
+  const id=recipeIdFor(ownerFor('alice'),'r1'),before=clone(env.tables.get(COLLECTIONS.recipes).get(id));
+  await env.call('alice','familyLeave',a.scope);await env.socialCall('alice','syncPublications',personal('alice'));assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),before);
+  assert.equal((await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'})).error.code,'CONFLICT');
+  const b=await env.call('alice','familyCreate',personal('alice'),{name:'新家',roleLabel:'妈妈',requestId:'other-family',baseRevision:1});
+  assert.notEqual(b.family.id,a.family.id);assert.deepEqual(await env.socialCall('alice','syncPublications',b.scope),{updated:0,removed:0,hasMore:false});
+  assert.equal((await env.socialCall('alice','publish',b.scope,{sourceRecipeId:'r1'})).error.code,'CONFLICT');
+  assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),before);assert.deepEqual(await env.socialCall('alice','familyRecipeLink',b.scope,{sourceRecipeId:'r1'}),{publication:null});
+});
+test('leaving a family during publication migration cannot rewrite the personal publication',async()=>{
+  const env=environment(),data=snapshot(),photo=file(`users/${ownerFor('alice')}/photos/migration.jpg`);data.data.recipes[0].photo=photo;env.files.set(photo,JPG);await env.savePersonal('alice',data);await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'});
+  const id=recipeIdFor(ownerFor('alice'),'r1'),before=clone(env.tables.get(COLLECTIONS.recipes).get(id)),a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'migration-leave',baseRevision:1});
+  let armed=true;env.hooks.upload=async path=>{if(armed&&path.startsWith('social/')){armed=false;await env.call('alice','familyLeave',a.scope);}};
+  const result=await env.socialCall('alice','syncPublications',a.scope);assert.equal(result.error.code,'FAMILY_CHANGED');assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),before);
+});
+test('a concurrent newer migration wins its generation and stale copying cannot overwrite it',async()=>{
+  const env=environment(),data=snapshot(),photo=file(`users/${ownerFor('alice')}/photos/migration-race.jpg`);data.data.recipes[0].photo=photo;env.files.set(photo,JPG);await env.savePersonal('alice',data);await env.socialCall('alice','publish',personal('alice'),{sourceRecipeId:'r1'});
+  const id=recipeIdFor(ownerFor('alice'),'r1'),a=await env.call('alice','familyCreate',personal('alice'),{name:'家',roleLabel:'妈妈',requestId:'migration-generation',baseRevision:1});let armed=true,winner;
+  env.hooks.upload=async path=>{if(armed&&path.startsWith('social/')){armed=false;assert.deepEqual(await env.socialCall('alice','syncPublications',a.scope),{updated:1,removed:0,hasMore:false});winner=clone(env.tables.get(COLLECTIONS.recipes).get(id));}};
+  const result=await env.socialCall('alice','syncPublications',a.scope);assert.equal(result.error.code,'CONFLICT');assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),winner);
+  assert.deepEqual(await env.socialCall('alice','syncPublications',a.scope),{updated:0,removed:0,hasMore:false});
 });
 test('stale family preview cannot publish after removal or use another membership after rejoining',async()=>{
   const env=environment(),a=await env.create(),b=await env.join(),read=await env.read('bob',b.scope);read.snapshot.data.recipes.push(recipe('bob-own'));await env.commit('bob',b.scope,read.revision,read.snapshot);
@@ -173,10 +222,29 @@ test('another family member updates and removes an already shared recipe under i
   const removed=clone(saved.snapshot);removed.data.recipes=[];removed.data.logs=[];removed.deleted.recipes=[{id:'r1',updatedAt:NOW+2}];await env.commit('bob',b.scope,saved.revision,removed);
   assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:0,removed:1,hasMore:false});assert.equal(env.tables.get(COLLECTIONS.recipes).get(published.recipe.id).published,false);
 });
-test('family automatic reconciliation never first-publishes or revives an author withdrawal',async()=>{
+test('other family members cannot first-publish or revive an author withdrawal',async()=>{
   const env=environment(),a=await env.create(),b=await env.join();assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:0,removed:0,hasMore:false});assert.equal(env.tables.get(COLLECTIONS.recipes).size,0);
   const preview=await env.socialCall('alice','previewPublication',a.scope,{sourceRecipeId:'r1'});const shared=await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1',previewToken:preview.previewToken});await env.socialCall('alice','unpublish',a.scope,{sourceRecipeId:'r1'});
   const read=await env.read('bob',b.scope);read.snapshot.data.recipes[0].name='新名字';read.snapshot.data.recipes[0].updatedAt++;await env.commit('bob',b.scope,read.revision,read.snapshot);assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:0,removed:0,hasMore:false});assert.equal(env.tables.get(COLLECTIONS.recipes).get(shared.recipe.id).published,false);
+});
+test('automatic family publication creates only the current member own recipes under the original individual author',async()=>{
+  const env=environment(),a=await env.create(),b=await env.join();
+  assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:0,removed:0,hasMore:false});
+  assert.equal(env.tables.get(COLLECTIONS.profiles).size,0);
+  assert.deepEqual(await env.socialCall('alice','syncPublications',a.scope),{updated:1,removed:0,hasMore:false});
+  const id=recipeIdFor(ownerFor('alice'),'r1'),first=clone(env.tables.get(COLLECTIONS.recipes).get(id));
+  assert.equal(first.owner,ownerFor('alice'));assert.equal(first.publicationScope,'family:'+a.family.id);
+  const read=await env.read('bob',b.scope);read.snapshot.data.recipes.push(recipe('bob-own'));await env.commit('bob',b.scope,read.revision,read.snapshot);
+  assert.deepEqual(await env.socialCall('bob','syncPublications',b.scope),{updated:1,removed:0,hasMore:false});
+  assert.deepEqual(env.tables.get(COLLECTIONS.recipes).get(id),first);
+  assert.equal(env.tables.get(COLLECTIONS.recipes).get(recipeIdFor(ownerFor('bob'),'bob-own')).owner,ownerFor('bob'));
+});
+test('removal during automatic first family publication does not create a public recipe or author profile',async()=>{
+  const env=environment(),a=await env.create(),b=await env.join(),read=await env.read('bob',b.scope),photo=file(`users/${ownerFor('bob')}/photos/first.jpg`);env.files.set(photo,JPG);
+  read.snapshot.data.recipes.push({...recipe('bob-own'),photo});await env.commit('bob',b.scope,read.revision,read.snapshot);
+  let once=true;env.hooks.upload=async path=>{if(once&&path.startsWith('social/')){once=false;await env.call('alice','familyRemove',a.scope,{memberId:b.family.memberId});}};
+  const result=await env.socialCall('bob','syncPublications',b.scope);assert.equal(result.error.code,'FAMILY_CHANGED');
+  assert.equal(env.tables.get(COLLECTIONS.recipes).size,0);assert.equal(env.tables.get(COLLECTIONS.profiles).size,0);
 });
 test('member removal during automatic public photo copying blocks the original author write',async()=>{
   const env=environment(),a=await env.create(),b=await env.join();const preview=await env.socialCall('alice','previewPublication',a.scope,{sourceRecipeId:'r1'});const shared=await env.socialCall('alice','publish',a.scope,{sourceRecipeId:'r1',previewToken:preview.previewToken});const before=clone(env.tables.get(COLLECTIONS.recipes).get(shared.recipe.id));

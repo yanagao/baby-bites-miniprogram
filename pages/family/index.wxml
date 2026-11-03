@@ -36,7 +36,7 @@
           <view class="family-actions"><t-button theme="default" variant="text" disabled="{{busy}}" bind:tap="cancelBaby">取消</t-button><t-button theme="primary" disabled="{{busy}}" bind:tap="saveBaby">保存宝宝资料</t-button></view>
         </block>
         <view wx:else>{{nickname}}<text wx:if="{{babyAgeLabel}}"> · {{babyAgeLabel}}</text></view>
-        <view class="family-note">宝宝称呼、生日、食谱、收藏、过敏食物和用餐记录在家庭内共享，不会因此公开给其他用户。</view>
+        <view class="family-note">宝宝称呼、生日、收藏、过敏食物和用餐记录只在家庭内共享。自行创建的菜谱同步后会展示给其他家长。</view>
       </view>
       <view class="family-card">
         <view class="family-card-heading"><view class="family-title">家人</view><t-button size="small" theme="primary" variant="text" disabled="{{busy}}" bind:tap="editRole">修改我的称谓</t-button></view>

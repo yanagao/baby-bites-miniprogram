@@ -19,7 +19,7 @@ function harness(pantry = []) {
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages', name, 'index.js'), 'utf8'), {
       Page: value => { definition = value; }, getApp: () => app, getCurrentPages: () => currentPages,
       require: name => name.endsWith('/selectors') ? selectors : name.endsWith('/store') ?
-        {getState: () => state, getWarning: () => ''} : {error: error => {throw error;}, back() {navigation.push({type: 'back'});}},
+        {getAllergyFilterEnabled: () => false, getState: () => state, getWarning: () => ''} : {error: error => {throw error;}, back() {navigation.push({type: 'back'});}},
       wx: {hideKeyboard() {}, showToast() {},
         navigateTo(options) {navigation.push({type: 'navigateTo', url: options.url});},
         navigateBack() {navigation.push({type: 'navigateBack'});},

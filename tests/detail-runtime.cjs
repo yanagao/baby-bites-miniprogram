@@ -32,7 +32,7 @@ function setup(options = {}) {
       date: '2020-01-01', portion: '', note: '私密用餐记录', createdAt: 1}]}]]);
   const hooks = {};
   const syncListeners = new Set();
-  const calls = {mine: 0, recipe: [], publish: [], unpublish: [], navigation: [], toasts: [], errors: [],
+  const calls = {shareLinks: [], mine: 0, recipe: [], publish: [], unpublish: [], navigation: [], toasts: [], errors: [],
     shareMenu: [], updates: 0, backs: 0, sync: 0};
   let published = Boolean(options.published);
   let sourceUpdatedAt = 1;
@@ -56,6 +56,16 @@ function setup(options = {}) {
   const store = storeModule.exports;
   if (!options.unbound) store.bindAccount(OWNER);
   const social = {
+    async getRecipeShareLink(id, options) {
+      calls.shareLinks.push({id, ...options});
+      const localVersion = JSON.stringify(store.getRecipe(id));
+      if (hooks.link) return hooks.link(id, options, localVersion);
+      const source = store.getRecipe(id).source;
+      const result = hooks.recipe ? await hooks.recipe(source ? source.recipeId : PUBLIC_ID) :
+        {recipe: {...clone(publicRecipe), id: source ? source.recipeId : PUBLIC_ID}};
+      published = true;
+      return {...result, localVersion};
+    },
     async getMine() {
       calls.mine++;
       if (hooks.mine) return hooks.mine();

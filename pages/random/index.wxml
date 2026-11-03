@@ -12,7 +12,7 @@
   <view class="random-content">
     <view wx:if="{{accountError}}" class="random-empty"><view class="random-empty-description">{{accountError}}</view><t-button theme="primary" shape="round" block bind:tap="back">返回</t-button></view>
     <block wx:else>
-      <view wx:if="{{hasAllergies}}" class="random-pool-note">已按过敏记录跳过相关食材，清除偏好不会关闭此项</view>
+      <view wx:if="{{hasAllergies}}" class="random-pool-note">已按你的选择跳过过敏食材，可在「宝宝过敏食物」中关闭</view>
       <view wx:if="{{hasRecipes}}" class="random-filters">
         <view class="random-section-heading"><text class="random-section-title">按月龄</text><text class="random-section-caption">可多选</text></view>
         <view wx:if="{{ageDefaultLoading || defaultAgeHint}}" class="random-age-default">{{ageDefaultLoading ? '正在读取宝宝月龄…' : defaultAgeHint}}</view>

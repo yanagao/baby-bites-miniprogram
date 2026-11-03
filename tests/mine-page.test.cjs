@@ -46,15 +46,12 @@ test('mine is the own profile with a local cookbook, authoritative relationship 
   assert.ok(page.data.recipes.every(r => !Object.hasOwn(r, 'visibility')));
 });
 
-test('received feedback opens only from the current own profile without requiring profile setup', async () => {
-  const app = setup({social: {getMine: async () => ({profile: {...profile, exists: false}, published: []})}});
-  await app.page.load(); app.page.openFeedback();
-  assert.deepEqual(app.calls.routes, ['/pages/feedback/index']);
-  app.page.setData({isSelf: false}); app.page.openFeedback();
-  app.page.setData({isSelf: true}); app.changeOwner('owner-b'); app.page.openFeedback();
-  assert.equal(app.calls.routes.length, 1);
-  const disabled = setup({socialEnabled: false}); disabled.page.openFeedback();
-  assert.equal(disabled.calls.routes.length, 0);
+test('the own profile no longer offers a received-feedback entry', async () => {
+  const app = setup(); await app.page.load();
+  assert.equal(app.page.openFeedback, undefined);
+  const template = fs.readFileSync(path.join(__dirname, '../pages/profile/content.wxml'), 'utf8');
+  assert.doesNotMatch(template, /openFeedback|收到的反馈/);
+  assert.deepEqual(app.calls.routes, []);
 });
 
 test('content tabs filter in place; own recipes and logs open local editors', async () => {

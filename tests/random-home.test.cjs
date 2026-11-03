@@ -17,7 +17,7 @@ function harness(name = 'home', recipes = [seed[0], seed[2], seed[5]], logs = []
   const navigation = [], errors = [], listeners = new Set();
   let definition, owner = initialOwner, failSave = false, writes = 0;
   const store = {
-    getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner}),
+    getAllergyFilterEnabled: () => false, getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner}),
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); },
     toggleFavorite(id) {
       if (failSave) throw new Error('保存失败');

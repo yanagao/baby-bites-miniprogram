@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const OWNER = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
-const MESSAGE = '本机修改已保存，菜谱暂未同步完成，请联网后重试。';
+const MESSAGE = '记录已同步，公开菜谱暂未更新，请稍后重试。';
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const result = (updated = 0, removed = 0, hasMore = false) => ({updated, removed, hasMore});
@@ -164,4 +164,13 @@ test('server account mismatch is preserved instead of reduced to a retryable syn
   const app = setup(); app.hooks.request = () => ({error: {code: 'ACCOUNT_CHANGED'}});
   await assert.rejects(app.run(), accountFailure);
   assert.equal(app.invalidations(), 0);
+});
+
+for (const code of ['FAMILY_CHANGED', 'UNAUTHENTICATED']) test('publication identity rejection remains fatal: ' + code, async () => {
+  const app = setup(); app.hooks.request = () => ({error: {code}});
+  await assert.rejects(app.run(), error => error.code === code && error.invalidIdentity && !error.publicationPending);
+});
+test('an outdated backend explains the service mismatch without blaming connectivity', async () => {
+  const app = setup(); app.hooks.request = () => ({error: {code: 'INVALID_REQUEST'}});
+  await assert.rejects(app.run(), error => error.publicationPending && /服务需要更新/.test(error.message) && !/联网/.test(error.message));
 });

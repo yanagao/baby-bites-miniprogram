@@ -108,11 +108,11 @@ function listRecipes(state, options) {
   return list;
 }
 
-function matchRecipes(state, ingredients, completeOnly) {
+function matchRecipes(state, ingredients, completeOnly, options = {}) {
   const selected = new Set(Array.from(ingredients || []).map(normalizeIngredient).filter(Boolean));
   if (!selected.size) return [];
   const feedback = latestRatings(state);
-  return state.recipes.filter(recipe => !findRecipeAllergens(recipe, state.allergies).length).map(recipe => {
+  return state.recipes.filter(recipe => !options.excludeAllergies || !findRecipeAllergens(recipe, state.allergies).length).map(recipe => {
     const missing = recipe.ingredients.filter(item => !selected.has(normalizeIngredient(item.name)));
     const totalCount = recipe.ingredients.length;
     const foundCount = totalCount - missing.length;
@@ -129,7 +129,7 @@ function randomCandidates(state, options) {
     ? opts.categories.filter(value => value !== '全部' && categories.includes(value)) : null;
   const selectedAges = Array.isArray(opts.ageGroups)
     ? opts.ageGroups.filter(value => recipeAges.ageGroups.some(group => group.value === value)) : [];
-  return listRecipes(state, { category: selected ? '全部' : opts.category, excludeAllergies: true }).filter(recipe =>
+  return listRecipes(state, { category: selected ? '全部' : opts.category, excludeAllergies: opts.excludeAllergies === true }).filter(recipe =>
     (!selected || !selected.length || selected.includes(recipe.category)) &&
     recipeAges.matchesAgeGroups(recipe, selectedAges) &&
     (!opts.skipDisliked || recipe.rating !== 1));

@@ -43,7 +43,7 @@ Page({
   disposeLocalContent() { this._allRecipes = []; this._loadedAt = 0; this.setData({hasAllergies: false, skippedAllergyCount: 0}); },
   refreshAllergies() {
     if (!account.check(this) || this.data.tab !== 'recipes') return;
-    const allergies = store.getState().allergies || [];
+    const allergies = store.getAllergyFilterEnabled() ? store.getState().allergies || [] : [];
     const all = this._allRecipes || [];
     const recipes = allergies.length ? all.filter(recipe => !findRecipeAllergens(recipe, allergies).length) : all;
     this.setData({recipes, hasAllergies: Boolean(allergies.length), skippedAllergyCount: all.length - recipes.length});

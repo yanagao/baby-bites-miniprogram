@@ -94,9 +94,9 @@ function setup(options = {}) {
   const store = storeModule.exports;
   store.bindAccount(OWNER);
   if (options.scope) store.bindScope(OWNER, options.scope);
-  const sync = {getStatus() { return copy(syncStatus); }, subscribe(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }, async syncNow() {
+  const sync = {getStatus() { return copy(syncStatus); }, subscribe(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }, async syncNow(syncOptions) {
     calls.push({action: 'sync'});
-    if (hooks.sync) await hooks.sync();
+    if (hooks.sync) await hooks.sync(syncOptions);
     store.bindAccount(syncOwner);
     if (options.scope) store.bindScope(syncOwner, options.scope);
     return {state: syncState, owner: syncOwner, message: syncState === 'synced' ? '已同步' : '等待联网同步'};
@@ -694,7 +694,7 @@ test('edited built-in recipes remain personal and cannot be published', async ()
   assert.deepEqual(app.calls.map(item => item.action), ['sync']);
 });
 
-test('user recipes are shared only with a preview token after synchronization and without profile setup', async () => {
+test('user recipes can be shared directly after synchronization without a preview token or profile setup', async () => {
   const app = setup();
   const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '私人心得'});
   app.hooks.sync = () => {
@@ -702,10 +702,9 @@ test('user recipes are shared only with a preview token after synchronization an
     app.store.applySyncedSnapshot(app.store.getSyncSnapshot(),
       {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
   };
-  const previewToken = 'e'.repeat(64);
-  await app.social.publishRecipe(id, previewToken);
+  await app.social.publishRecipe(id);
   assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
-  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, previewToken, ...PERSONAL});
+  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, ...PERSONAL});
   assert.equal(app.store.getRecipe(id).isExample, false);
   assert.equal(app.store.getRecipe(id).note, '私人心得');
 });
@@ -764,12 +763,16 @@ test('previewing synchronizes private data and requests a read-only preview with
   assert.equal(app.store.getRecipe(id).note, '不分享的小心得');
 });
 
-test('missing or invalid confirmation tokens never send a publication request', async () => {
+test('direct sharing omits absent or obsolete invalid preview tokens and preserves valid legacy tokens', async () => {
   for (const token of [undefined, null, '', 'short', {}]) {
     const app = setup(), id = readyUserRecipe(app);
-    await assert.rejects(app.social.publishRecipe(id, token), error => error.code === 'PREVIEW_REQUIRED');
-    assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+    await app.social.publishRecipe(id, token);
+    assert.deepEqual(app.calls.map(item => item.action), ['sync', 'publish']);
+    assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, ...PERSONAL});
   }
+  const app = setup(), id = readyUserRecipe(app), previewToken = 'e'.repeat(64);
+  await app.social.publishRecipe(id, previewToken);
+  assert.deepEqual(app.calls[1], {action: 'publish', sourceRecipeId: id, previewToken, ...PERSONAL});
 });
 
 test('preview response validation rejects broken tokens, photos, author identity and recipe content', async () => {
@@ -1201,4 +1204,140 @@ test('same actor leaving and returning to a family invalidates a pending public 
     return {profile: {name: 'old family response'}, published: []};
   };
   await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
+});
+
+function publicationFor(app, localId) {
+  const recipe = app.store.getRecipe(localId);
+  return {id: PUBLIC_ID, sourceRecipeId: localId, sourceUpdatedAt: recipe.updatedAt || recipe.createdAt || 0};
+}
+
+test('direct share links use the automatically published version and only return public share-card fields', async () => {
+  const app = setup(), id = readyUserRecipe(app), syncOptions = [], sync = app.hooks.sync;
+  app.hooks.sync = options => { syncOptions.push(copy(options)); sync(); };
+  const response = {...publicRecipe(), name: '服务器上的公开菜名', photoURL: 'https://storage.example/public.jpg', note: 'SECRET', babyBirthDate: '2025-01-01'};
+  app.hooks.request = args => args.data.action === 'mine' ? {published: [publicationFor(app, id)]} : args.data.action === 'recipe' ? {recipe: response} : undefined;
+  const result = await app.social.getRecipeShareLink(id);
+  assert.deepEqual(copy(result), {recipe: {id: PUBLIC_ID, name: response.name, photoURL: response.photoURL}, localVersion: JSON.stringify(app.store.getRecipe(id))});
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'mine', 'recipe']);
+  assert.equal(app.calls.some(item => ['publish', 'previewPublication', 'updateProfile'].includes(item.action)), false);
+  assert.doesNotMatch(JSON.stringify(result.recipe), /SECRET|note|babyBirthDate|favorite|logs/);
+  await app.social.getRecipeShareLink(id, {force: true});
+  assert.deepEqual(syncOptions, [{ifNeeded: true}, {ifNeeded: false}]);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+  assert.equal(app.calls.filter(item => item.action === 'recipe').length, 2);
+});
+
+test('share links reject absent, stale or mismatched publication metadata without falling back to an old link', async () => {
+  for (const mode of ['missing', 'stale', 'wrong-source', 'invalid-id']) {
+    const app = setup(), id = readyUserRecipe(app);
+    app.hooks.request = args => {
+      if (args.data.action !== 'mine') return;
+      const publication = publicationFor(app, id);
+      if (mode === 'stale') publication.sourceUpdatedAt--;
+      if (mode === 'wrong-source') publication.sourceRecipeId = 'another-recipe';
+      if (mode === 'invalid-id') publication.id = 'invalid';
+      return {published: mode === 'missing' ? [] : [publication]};
+    };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'PUBLICATION_PENDING', mode);
+    assert.equal(app.calls.some(item => ['recipe', 'publish', 'previewPublication'].includes(item.action)), false, mode);
+  }
+});
+
+test('share links reject dirty local data when synchronization has not completed', async () => {
+  const app = setup(), id = app.store.saveRecipe({...publicRecipe(), id: undefined});
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'SYNC_REQUIRED');
+  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+});
+
+test('local changes during either share-link lookup remain rejected even after the new edit finishes syncing', async () => {
+  for (const phase of ['mine', 'recipe']) for (const syncAfterEdit of [false, true]) {
+    const app = setup(), id = readyUserRecipe(app);
+    app.hooks.request = args => {
+      const publication = publicationFor(app, id);
+      if (args.data.action === phase) {
+        app.store.saveRecipe({...app.store.getRecipe(id), name: '等待时刚修改的菜名'});
+        if (syncAfterEdit) app.hooks.sync();
+      }
+      return args.data.action === 'mine' ? {published: [publication]} : args.data.action === 'recipe' ? {recipe: publicRecipe()} : undefined;
+    };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'SYNC_REQUIRED', phase + ':' + syncAfterEdit);
+    assert.equal(app.calls.some(item => ['publish', 'previewPublication'].includes(item.action)), false);
+  }
+});
+
+test('account switches and account ABA during share-link awaits cannot reuse the previous account response', async () => {
+  for (const phase of ['mine', 'recipe']) for (const returnToOriginal of [false, true]) {
+    const app = setup(), id = readyUserRecipe(app);
+    app.hooks.request = args => {
+      const publication = publicationFor(app, id);
+      if (args.data.action === phase) { app.store.bindAccount(OTHER); if (returnToOriginal) app.store.bindAccount(OWNER); }
+      return args.data.action === 'mine' ? {published: [publication]} : args.data.action === 'recipe' ? {recipe: publicRecipe()} : undefined;
+    };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED', phase + ':' + returnToOriginal);
+  }
+  const app = setup(), id = readyUserRecipe(app); app.setSyncOwner(OTHER);
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED');
+  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+});
+
+test('saved recipe share links use the original publication without publishing or looking up a duplicate', async () => {
+  const app = setup(), id = readyUserRecipe(app);
+  app.store.saveRecipe({...app.store.getRecipe(id), name: '我调整后的本地菜名', source: {recipeId: PUBLIC_ID, profileId: PROFILE_ID, authorName: '原作者'}});
+  app.hooks.request = args => {
+    assert.equal(args.data.action, 'recipe'); assert.equal(args.data.recipeId, PUBLIC_ID);
+    return {recipe: {...publicRecipe(), name: '原作者的菜名'}};
+  };
+  const result = await app.social.getRecipeShareLink(id);
+  assert.deepEqual(copy(result.recipe), {id: PUBLIC_ID, name: '原作者的菜名', photoURL: ''});
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'recipe']);
+  app.hooks.request = () => ({error: {code: 'NOT_FOUND'}});
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'NOT_FOUND');
+  assert.equal(app.calls.some(item => item.action === 'publish'), false);
+});
+
+test('share links reject built-in recipes before any public lookup', async () => {
+  const app = setup(), original = app.store.getState().recipes[0];
+  app.store.saveRecipe({...original, name: '改过名字的内置菜'});
+  app.hooks.sync = () => { const info = app.store.getSyncInfo(); app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: info.sequence, revision: info.revision + 1}); };
+  await assert.rejects(app.social.getRecipeShareLink(original.id), error => error.code === 'BUILTIN_RECIPE');
+  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+});
+
+test('family members can forward an existing original-author link without taking over authorship', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope}), id = readyUserRecipe(app);
+  app.store.saveRecipe({...app.store.getRecipe(id), createdBy: OTHER});
+  app.hooks.request = args => args.data.action === 'familyRecipeLink' ? {publication: {...publicationFor(app, id), createdBy: OTHER}} : undefined;
+  const result = await app.social.getRecipeShareLink(id);
+  assert.equal(result.recipe.id, PUBLIC_ID);
+  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'familyRecipeLink', 'recipe']);
+  for (const item of app.calls.filter(item => ['familyRecipeLink', 'recipe'].includes(item.action))) {
+    assert.deepEqual(item.expectedScope, scope); assert.equal(item.expectedOwner, OWNER); assert.equal(item.protocolVersion, 2);
+  }
+  assert.equal(app.store.getRecipe(id).createdBy, OTHER);
+});
+
+test('family share links reject stale publications and same-family leave-and-rejoin responses', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  for (const phase of ['familyRecipeLink', 'recipe']) {
+    const app = setup({scope}), id = readyUserRecipe(app);
+    app.hooks.request = args => {
+      const publication = {...publicationFor(app, id), createdBy: OWNER};
+      if (args.data.action === phase) { app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, scope); }
+      return args.data.action === 'familyRecipeLink' ? {publication} : undefined;
+    };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED', phase);
+  }
+  const app = setup({scope}), id = readyUserRecipe(app);
+  app.hooks.request = () => ({publication: {...publicationFor(app, id), createdBy: OTHER, sourceUpdatedAt: 1}});
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'PUBLICATION_PENDING');
+  assert.equal(app.calls.some(item => item.action === 'recipe'), false);
+});
+
+test('share links validate public response identities, names and signed photo URLs', async () => {
+  for (const change of [recipe => { recipe.id = 'f'.repeat(64); }, recipe => { recipe.name = ''; }, recipe => { recipe.photoURL = 'http://unsafe.example/photo'; }]) {
+    const app = setup(), id = readyUserRecipe(app), recipe = publicRecipe(); change(recipe);
+    app.hooks.request = args => args.data.action === 'mine' ? {published: [publicationFor(app, id)]} : {recipe};
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'INVALID_RECIPE');
+  }
 });

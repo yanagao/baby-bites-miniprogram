@@ -19,10 +19,10 @@ const rice = makeRecipe('b'.repeat(64), '大米');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return {resolve, promise}; };
 
 function setup(name, social = {}) {
-  let definition, owner = OWNER;
+  let definition, owner = OWNER, filterEnabled = false;
   const state = {nickname: '宝宝', allergies: ['鸡蛋'], recipes: clone([egg, rice]), logs: []};
   const listeners = new Set(), errors = [], routes = [];
-  const store = {getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner}),
+  const store = {getAllergyFilterEnabled: () => filterEnabled, setAllergyFilterEnabled(value) {filterEnabled = value;}, getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner}),
     subscribe(fn) {listeners.add(fn); return () => listeners.delete(fn);}};
   const wx = {showShareMenu() {}, hideShareMenu() {}, stopPullDownRefresh() {},
     navigateTo(value) {routes.push(value.url);}, showToast() {}};
@@ -56,6 +56,7 @@ function setup(name, social = {}) {
 
 test('home skips an allergic recent meal and still offers other saved recipes', () => {
   const h = setup('home');
+  h.store.setAllergyFilterEnabled(true);
   h.state.logs = [{id: 'meal', recipeId: egg.id, date: selectors.today(), rating: 3, createdAt: 1}];
   h.page.refresh();
   assert.deepEqual(h.page.data.recommendations.map(item => item.id), [rice.id]);
@@ -70,6 +71,7 @@ test('returning to a recent feed applies changed allergies without another remot
     let reads = 0;
     const read = async () => { reads++; return {recipes: clone([egg, rice]), nextCursor: null}; };
     const h = setup(name, {getReadVersion: () => 1, getDiscover: read, getFeed: read});
+  h.store.setAllergyFilterEnabled(true);
     await h.page.onShow(); assert.deepEqual(h.page.data.recipes.map(item => item.id), [rice.id]);
     h.state.allergies = [];
     await h.page.onShow();
@@ -80,6 +82,7 @@ test('returning to a recent feed applies changed allergies without another remot
 
 test('random refresh removes a newly excluded result and resetting preferences keeps allergy filtering', () => {
   const h = setup('random');
+  h.store.setAllergyFilterEnabled(true);
   h.page.refresh();
   assert.equal(h.page.data.result.id, rice.id);
   h.state.allergies = ['鸡蛋', '大米'];
@@ -93,6 +96,7 @@ test('random refresh removes a newly excluded result and resetting preferences k
 
 for (const name of ['ingredients', 'ingredient-results']) test(name + ' excludes allergic pantry matches and restores them when the record changes', () => {
   const h = setup(name);
+  h.store.setAllergyFilterEnabled(true);
   h.page.refresh();
   assert.deepEqual(h.page.data.matches.map(item => item.id), [rice.id]);
   assert.equal(h.page.data.hasAllergies, true);
@@ -109,6 +113,7 @@ for (const name of ['discover', 'following']) test(name + ' keeps cursors and or
     return cursor ? {recipes: clone([egg, rice]), nextCursor: null} : {recipes: [clone(egg)], nextCursor: 'next-page'};
   };
   const h = setup(name, {getDiscover: read, getFeed: read});
+  h.store.setAllergyFilterEnabled(true);
   await h.page.load();
   assert.equal(h.page.data.recipes.length, 0);
   assert.equal(h.page.data.nextCursor, 'next-page');
@@ -132,6 +137,7 @@ for (const name of ['discover', 'following']) test(name + ' keeps cursors and or
 test('a pending discovery response uses the latest private allergy record', async () => {
   const pending = deferred();
   const h = setup('discover', {getDiscover: () => pending.promise});
+  h.store.setAllergyFilterEnabled(true);
   h.state.allergies = [];
   const loading = h.page.load();
   h.state.allergies = ['鸡蛋'];
@@ -142,6 +148,7 @@ test('a pending discovery response uses the latest private allergy record', asyn
 
 test('a direct public recipe remains readable with a private allergy warning that never enters sharing', async () => {
   const h = setup('public-recipe');
+  h.store.setAllergyFilterEnabled(true);
   await h.page.load();
   assert.equal(h.page.data.recipe.id, egg.id);
   assert.match(h.page.data.allergyWarning, /鸡蛋/);
@@ -174,4 +181,18 @@ test('private store updates refresh the active public filter without reloading t
   app.onLaunch();
   listener();
   assert.equal(refreshed, 1);
+});
+
+
+for (const name of ['home', 'random', 'ingredients', 'ingredient-results', 'discover', 'following']) test(name + ' keeps recorded allergens visible until the user opts in and restores them when disabled', async () => {
+  const h = setup(name), refresh = async () => {
+    if (name === 'discover' || name === 'following') { if (!h.page._allRecipes.length) await h.page.load(); else h.page.refreshAllergies(); }
+    else h.page.refresh();
+  };
+  const count = () => name === 'home' ? h.page.data.recommendations.length : name === 'random' ? h.page.data.candidateCount :
+    name === 'ingredients' || name === 'ingredient-results' ? h.page.data.matches.length : h.page.data.recipes.length;
+  await refresh(); assert.equal(count(), 2); assert.equal(h.page.data.hasAllergies, false);
+  h.store.setAllergyFilterEnabled(true); await refresh(); assert.equal(count(), 1); assert.equal(h.page.data.hasAllergies, true);
+  h.store.setAllergyFilterEnabled(false); await refresh(); assert.equal(count(), 2); assert.equal(h.page.data.hasAllergies, false);
+  assert.deepEqual(h.state.allergies, ['鸡蛋']); assert.deepEqual(h.errors, []);
 });

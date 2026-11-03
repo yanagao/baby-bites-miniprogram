@@ -13,6 +13,7 @@ const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
 const ACCOUNT_PREFIX = 'baby-bites-account-';
 const ACTIVE_SCOPE_KEY = 'baby-bites-active-scope';
 const FAMILY_PREFIX = 'baby-bites-family-cache-';
+const ALLERGY_FILTER_PREFIX = 'baby-bites-allergy-filter-v1:';
 // Bump when snapshot parsing gains fields older clients discarded. Keep this
 // beside the data in __sync: older writers drop unknown metadata on persistence.
 const SNAPSHOT_SCHEMA_VERSION = 2;
@@ -263,6 +264,25 @@ function getSyncSnapshot() {
   init();
   if (readBlocked) fail(warning);
   return clone({version: 1, data: sync.hasLocalData ? state : emptyState(), deleted: sync.deleted});
+}
+
+// Recommendation preferences belong to this device and this exact membership,
+// never to the shared baby snapshot or a portable backup.
+function allergyFilterKey() { return ALLERGY_FILTER_PREFIX + (getScopeKey() || 'guest'); }
+function getAllergyFilterEnabled() {
+  init();
+  try { return wx.getStorageSync(allergyFilterKey()) === true; }
+  catch (_) { return false; }
+}
+function setAllergyFilterEnabled(enabled) {
+  init();
+  if (typeof enabled !== 'boolean') fail('请选择是否跳过过敏食材。');
+  if (scopeChanges) fail('正在切换家庭，请稍后再设置。');
+  if (readBlocked) fail(warning);
+  if (getAllergyFilterEnabled() === enabled) return;
+  try { wx.setStorageSync(allergyFilterKey(), enabled); }
+  catch (_) { fail('筛选偏好未保存，请检查本机存储后重试。'); }
+  notify();
 }
 
 function bindAccount(nextOwner) {
@@ -600,7 +620,7 @@ function exportBackup() {
 
 module.exports = {
   STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
-  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setBabyProfile, setBabyBirthDate, setAllergies, importBackup, exportBackup,
+  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, applySyncedSnapshot,
   subscribe, validateData, validateSnapshot, bindScope, getScopeKey, normalizeScope, beginScopeChange, ACTIVE_SCOPE_KEY, FAMILY_PREFIX
 };

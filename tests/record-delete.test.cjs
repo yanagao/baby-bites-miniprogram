@@ -60,7 +60,7 @@ function setup() {
         if (name === '../../utils/store') return store;
         if (name === '../../utils/social') return {getMine: async () => ({published: []})};
         if (name === '../../utils/recipe-origin') return require('../utils/recipe-origin');
-        if (name === '../../components/share-prompt/controller') return require('../components/share-prompt/controller');
+        if (name === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (name === '../../utils/selectors') return selectors;
         if (name === '../../utils/ui') return {
           back() { assert.equal(returnWarning, false); calls.backs += 1; },

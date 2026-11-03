@@ -1,9 +1,0 @@
-<view wx:if="{{visible}}" class="share-prompt" aria-live="polite">
-  <view class="share-prompt-message">{{message}}</view>
-  <view class="share-prompt-note">先预览分享内容，确认后才会公开。</view>
-  <view wx:if="{{error}}" class="share-prompt-error" role="alert">{{error}}</view>
-  <view class="share-prompt-actions">
-    <button class="share-prompt-action" disabled="{{busy}}" loading="{{busy}}" bindtap="share">公开分享</button>
-    <button class="share-prompt-action" disabled="{{busy}}" bindtap="keep">先留给自己</button>
-  </view>
-</view>

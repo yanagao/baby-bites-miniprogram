@@ -195,8 +195,8 @@ Page({
     const confirmed = await new Promise(resolve => {
       this.resolveImportConfirmation = resolve;
       this.setData({importVisible: true, importDescription: inFamily() ?
-        '这份备份将合并到当前家庭的宝宝数据，影响所有家人的食谱、过敏食物和用餐记录。请确认属于同一个宝宝；相同内容保留较新的修改，导入不会自动公开新菜谱。' :
-        '将菜谱和用餐记录合并到本机；相同内容保留较新的修改。导入不会自动公开新菜谱，分享前可以先预览。'});
+        '这份备份将合并到当前家庭的宝宝数据，影响所有家人的食谱、过敏食物和用餐记录。请确认属于同一个宝宝；相同内容保留较新的修改，导入的自有菜谱同步后会自动展示给其他家长。' :
+        '将菜谱和用餐记录合并到本机；相同内容保留较新的修改。导入的自有菜谱同步后会自动展示给其他家长，来自他人的菜谱保留原作者。'});
     });
     if (!confirmed) return;
     this.assertDraftAccount();

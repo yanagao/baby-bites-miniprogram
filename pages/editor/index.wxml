@@ -1,7 +1,7 @@
 <t-navbar z-index="100" title="{{editing ? '编辑菜谱' : '添加菜谱'}}" placeholder left-arrow delta="{{0}}" bind:go-back="cancel" />
 <block wx:if="{{!missingRecipe}}">
   <view class="editor-page">
-  <view class="editor-sharing-note">{{builtIn ? "内置菜谱的修改保留在食谱中，不会出现在公开推荐里。" : (familyActive ? "菜谱保存后与家人共享。首次公开分享需要由创建者确认预览，其他家长才能看到做法。" : "菜谱先保存到你的食谱。选择公开分享并确认预览后，其他家长才能看到做法。")}}</view>
+  <view class="editor-sharing-note">{{builtIn ? '内置菜谱保留在你的食谱中，不会出现在推荐里。' : sourceRecipe ? '这是收进食谱的他人菜谱，修改保留在你的食谱中，分享会发送原作者的做法。' : '创建的菜谱同步后会自动展示给其他家长，修改也会自动更新。小心得、宝宝资料和用餐记录不会展示。'}}</view>
   <t-cell-group class="editor-group" title="基本信息">
     <t-input label="菜谱名称" align="right" placeholder="例如：南瓜小米粥" value="{{form.name}}" maxlength="60" disabled="{{saving || savedComplete}}" status="{{nameError ? 'error' : 'default'}}" tips="{{nameError}}" data-field="name" bind:change="input" />
     <t-cell title="菜谱分类" note="{{categories[categoryIndex]}}" arrow hover="{{!saving && !savedComplete}}" data-field="categoryIndex" bind:click="openPicker" />
@@ -57,5 +57,3 @@
 <t-empty wx:else description="没有找到这道菜谱，可能已经被删除。">
   <t-button slot="action" theme="primary" bind:tap="cancel">返回</t-button>
 </t-empty>
-
-<share-prompt visible="{{sharePromptVisible}}" message="{{sharePromptMessage}}" busy="{{sharePromptBusy}}" error="{{sharePromptError}}" bind:share="previewSavedRecipe" bind:keep="keepRecipeForSelf" />

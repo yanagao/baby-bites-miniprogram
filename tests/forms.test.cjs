@@ -16,8 +16,7 @@ function setup() {
   const storage = new Map();
   let failWrites = false;
   let returnWarning = false;
-  let nextTimer = 0;
-  const hooks = {}, timers = new Map();
+  const hooks = {};
   const calls = { writes: 0, saves: [], unlinks: [], back: 0, alerts: [], toasts: [], addLog: 0, updateLog: 0, redirects: [], mine: [], timerDelays: [] };
   const wx = {
     getStorageSync(key) { return copy(storage.get(key)); },
@@ -31,7 +30,7 @@ function setup() {
     setNavigationBarTitle() {},
     showToast(options) { calls.toasts.push(options.title); },
     redirectTo(options) { calls.redirects.push(options); },
-    cloud: {callFunction() { throw Error('Saving or prompting must not publish a recipe'); }},
+    cloud: {callFunction() { throw Error('Forms must save locally before background publication'); }},
     chooseMedia(options) {
       options.success({ tempFiles: [{ tempFilePath: 'wxfile://tmp/selected-photo.jpg', size: 4096 }] });
     },
@@ -74,10 +73,7 @@ function setup() {
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../utils/social') return {getMine: async options => { calls.mine.push(options); return hooks.mine ? hooks.mine(options) : {published: []}; }};
-        if (dependency === '../../components/share-prompt/controller') return {createSharePrompt: options =>
-          require('../components/share-prompt/controller').createSharePrompt({...options,
-            setTimer(fn, delay) { calls.timerDelays.push(delay); timers.set(++nextTimer, fn); return nextTimer; },
-            clearTimer(id) { timers.delete(id); }})};
+        if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/selectors') return selectors;
         if (dependency === '../../utils/recipe-origin') return require('../utils/recipe-origin');
         if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
@@ -107,8 +103,6 @@ function setup() {
   }
   return {
     store, calls, open, wx, hooks,
-    runPromptTimers() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); },
-    pendingTimers: () => timers.size,
     returnWarning: () => returnWarning,
     failWrites() { failWrites = true; }, allowWrites() { failWrites = false; }
   };
@@ -294,9 +288,7 @@ test('canceling a changed recipe and choosing to continue keeps all edits withou
   assert.equal(app.returnWarning(), true);
   await page.save();
   assert.equal(newRecipe(app).note, '下次切得更细');
-  assert.equal(app.calls.back, 0);
-  assert.equal(page.data.sharePromptVisible, true);
-  page.keepRecipeForSelf();
+  assert.equal(page.data.savedComplete, true);
   assert.equal(app.calls.back, 1);
   assert.equal(app.returnWarning(), false);
 });
@@ -350,9 +342,7 @@ test('failed storage keeps the full photo draft and retries without saving the p
   assert.deepEqual(copy(recipe.steps), ['南瓜切小块', '与小米一起煮熟']);
   assert.equal(app.store.getState().logs[0].rating, 3);
   assert.equal(app.calls.writes, 1);
-  assert.equal(app.calls.back, 0);
-  assert.equal(page.data.sharePromptVisible, true);
-  page.keepRecipeForSelf();
+  assert.equal(page.data.savedComplete, true);
   assert.equal(app.calls.back, 1);
   page.onUnload();
   assert.deepEqual(app.calls.unlinks, [], 'the photo referenced by the saved recipe must survive page unload');
@@ -417,157 +407,69 @@ function ownRecipe(app, overrides = {}) {
 }
 const SHARED_SOURCE = {profileId: 'c'.repeat(32), recipeId: 'd'.repeat(64), authorName: '其他家长'};
 
-test('saving an own recipe offers an unselected share choice only after the local save succeeds', async () => {
-  const app = setup(), page = app.open('editor');
-  fillRecipe(page);
-  assert.equal(page.data.sharePromptVisible, false);
+test('saving a new recipe returns immediately without a sharing choice or remote status request', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page);
   await page.save();
   const saved = newRecipe(app), writes = app.calls.writes;
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.equal(page.data.sharePromptMessage, '已收进你的食谱，也分享给其他家长吧');
-  assert.equal(page.data.savedComplete, true);
-  assert.equal(page.data.sharePromptBusy, false);
-  assert.equal(app.returnWarning(), false);
-  assert.equal(app.calls.back, 0);
-  assert.deepEqual(app.calls.redirects, []);
-  await page.save();
-  input(page, 'name', '不应重新保存');
-  assert.equal(app.calls.writes, writes);
-  assert.equal(page.data.form.name, saved.name);
-  assert.equal(app.store.getRecipe(saved.id).name, saved.name);
+  assert.equal(page.data.savedComplete, true); assert.equal(app.calls.back, 1);
+  assert.equal(app.returnWarning(), false); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
+  await page.save(); input(page, 'name', '不应再次保存');
+  assert.equal(app.calls.writes, writes); assert.equal(app.store.getRecipe(saved.id).name, saved.name);
 });
 
-test('keep for myself and the back button dismiss the saved prompt without another discard warning or write', async () => {
-  for (const method of ['keepRecipeForSelf', 'cancel']) {
-    const app = setup(), page = app.open('editor'); fillRecipe(page); await page.save();
-    const before = copy(app.store.getState()), writes = app.calls.writes;
-    page[method]();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(page.data.discardVisible, false);
-    assert.equal(app.calls.back, 1);
-    assert.equal(app.calls.writes, writes);
-    assert.deepEqual(copy(app.store.getState()), before);
-    assert.deepEqual(app.calls.redirects, []);
+test('editing own, built-in and attributed recipes returns without publishing from the form', async () => {
+  for (const kind of ['own', 'builtin', 'copy']) {
+    const app = setup(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
+    const page = app.open('editor', {id}); input(page, 'name', '调整后的做法'); await page.save();
+    assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
+    assert.equal(app.store.getRecipe(id).name, '调整后的做法');
+    if (kind === 'copy') assert.deepEqual(copy(app.store.getRecipe(id).source), SHARED_SOURCE);
   }
 });
 
-test('public share opens a preview without publishing, and repeated taps open it once', async () => {
-  const app = setup(), page = app.open('editor'); fillRecipe(page); await page.save();
-  const id = newRecipe(app).id, writes = app.calls.writes;
-  page.previewSavedRecipe(); page.previewSavedRecipe(); page.keepRecipeForSelf();
-  assert.equal(app.calls.redirects.length, 1);
-  assert.equal(app.calls.redirects[0].url, '/pages/share-preview/index?id=' + encodeURIComponent(id));
-  assert.equal(page.data.sharePromptBusy, true);
-  assert.equal(app.calls.writes, writes);
-  assert.equal(app.calls.back, 0);
-});
-
-test('preview navigation failure leaves the saved recipe and both choices available for retry', async () => {
-  const app = setup(), page = app.open('editor'); fillRecipe(page); await page.save();
-  const before = copy(app.store.getState());
-  page.previewSavedRecipe(); app.calls.redirects[0].fail(Error('offline'));
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.equal(page.data.sharePromptBusy, false);
-  assert.match(page.data.sharePromptError, /菜谱已保存/);
-  assert.equal(app.returnWarning(), false);
-  assert.deepEqual(copy(app.store.getState()), before);
-  page.previewSavedRecipe(); assert.equal(app.calls.redirects.length, 2);
-  page.onUnload(); const data = copy(page.data); app.calls.redirects[1].fail(Error('late response'));
-  assert.deepEqual(copy(page.data), data);
-});
-
-test('built-in edits and attributed copies do not show a prompt to publish someone else’s recipe', async () => {
-  for (const kind of ['builtin', 'copy']) {
-    const app = setup();
-    const id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, {source: SHARED_SOURCE});
-    const page = app.open('editor', {id}); input(page, 'name', '我调整的做法'); await page.save();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 1);
-    assert.deepEqual(app.calls.redirects, []);
-  }
-});
-
-test('a new recipe with an initial very-liked meal shows one save prompt rather than two prompts', async () => {
+test('a new recipe with a very-liked meal saves both once and returns', async () => {
   const app = setup(), page = app.open('editor'); fillRecipe(page);
   page.toggleRecordMeal(valueEvent(true)); page.rate(valueEvent(3)); await page.save();
-  assert.equal(page.data.sharePromptMessage, '已收进你的食谱，也分享给其他家长吧');
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.equal(app.store.getState().logs.length, 1);
-  assert.equal(app.calls.toasts.filter(value => value === '菜谱已保存').length, 1);
+  assert.equal(app.store.getState().logs.length, 1); assert.equal(app.store.getState().logs[0].rating, 3);
+  assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []);
+  await page.save(); assert.equal(app.store.getState().logs.length, 1);
 });
 
-test('recording an own recipe as very liked shows the requested prompt after the meal is saved', async () => {
-  const app = setup(), id = ownRecipe(app), page = app.open('record-editor', {id});
-  page.rate(valueEvent(3)); await page.save();
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.equal(page.data.sharePromptMessage, '宝宝喜欢这道菜，把做法分享出去吧');
-  assert.equal(app.store.getState().logs[0].rating, 3);
-  assert.equal(app.returnWarning(), false);
-  assert.equal(app.calls.back, 0);
-  const writes = app.calls.writes; page.save(); page.rate(valueEvent(2));
-  assert.equal(app.calls.writes, writes); assert.equal(page.data.rating, 3);
-  page.back(); assert.equal(app.calls.back, 1); assert.equal(page.data.discardVisible, false);
-});
-
-test('only transitioning an existing own meal to very liked prompts, not editing its note or lowering its rating', async () => {
-  for (const [before, after, prompt] of [[2, 3, true], [3, 3, false], [3, 2, false], [1, 2, false]]) {
-    const app = setup(), id = ownRecipe(app);
-    const logId = app.store.addLog({recipeId: id, rating: before, date: '2020-01-01'});
-    const page = app.open('record-editor', {logId}); page.rate(valueEvent(after)); page.note(valueEvent('补充记录')); await page.save();
-    assert.equal(page.data.sharePromptVisible, prompt, before + ' to ' + after);
-    assert.equal(app.store.getLog(logId).rating, after);
-    assert.equal(app.store.getState().logs.length, 1);
-    assert.equal(app.calls.back, prompt ? 0 : 1);
+test('all meal ratings return after saving without a share prompt or remote request', async () => {
+  for (const rating of [1, 2, 3]) {
+    const app = setup(), id = ownRecipe(app), page = app.open('record-editor', {id});
+    page.rate(valueEvent(rating)); await page.save();
+    assert.equal(app.store.getState().logs[0].rating, rating); assert.equal(app.calls.back, 1);
+    assert.equal(page.data.savedComplete, true); assert.deepEqual(app.calls.mine, []); assert.deepEqual(app.calls.redirects, []);
+    const writes = app.calls.writes; page.save(); page.rate(valueEvent(1)); assert.equal(app.calls.writes, writes);
   }
 });
 
-test('other ratings, built-in recipes and saved copies never trigger the very-liked share prompt', () => {
-  for (const kind of ['ordinary-rating', 'builtin', 'copy']) {
-    const app = setup();
-    const id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
-    const page = app.open('record-editor', {id}); page.rate(valueEvent(kind === 'ordinary-rating' ? 2 : 3)); page.save();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 1);
-    assert.deepEqual(app.calls.redirects, []);
-  }
+test('updating a meal to very liked edits the existing log and immediately returns', async () => {
+  const app = setup(), id = ownRecipe(app), logId = app.store.addLog({recipeId: id, rating: 2, date: '2020-01-01'});
+  const page = app.open('record-editor', {logId}); page.rate(valueEvent(3)); page.note(valueEvent('喜欢南瓜')); await page.save();
+  assert.equal(app.store.getState().logs.length, 1); assert.equal(app.store.getLog(logId).rating, 3);
+  assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
 });
 
-test('failed local saves never prompt or navigate, and successful retries prompt exactly once', async () => {
-  for (const kind of ['editor', 'record-editor']) {
-    const app = setup(), id = kind === 'record-editor' ? ownRecipe(app) : null;
-    const page = app.open(kind, id ? {id} : {});
-    if (kind === 'editor') fillRecipe(page); else page.rate(valueEvent(3));
+test('failed saves retain the draft and successful retries return exactly once', async () => {
+  for (const name of ['editor', 'record-editor']) {
+    const app = setup(), id = name === 'record-editor' ? ownRecipe(app) : null, page = app.open(name, id ? {id} : {});
+    if (id) page.rate(valueEvent(3)); else fillRecipe(page);
     app.failWrites(); await page.save();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(page.data.savedComplete, false);
-    assert.equal(app.calls.back, 0);
-    assert.deepEqual(app.calls.redirects, []);
+    assert.equal(page.data.savedComplete, false); assert.equal(app.calls.back, 0);
     app.allowWrites(); await page.save();
-    assert.equal(page.data.sharePromptVisible, true);
+    assert.equal(page.data.savedComplete, true); assert.equal(app.calls.back, 1);
     const writes = app.calls.writes; await page.save(); assert.equal(app.calls.writes, writes);
   }
 });
 
-test('switching accounts invalidates a saved prompt permanently, including A to B to A', async () => {
-  const app = setup(), owner = 'a'.repeat(64), other = 'b'.repeat(64);
-  app.store.bindAccount(owner);
-  const page = app.open('editor'); fillRecipe(page); await page.save();
-  const id = newRecipe(app).id;
-  app.store.bindAccount(other); app.store.bindAccount(owner);
-  assert.equal(page.data.sharePromptVisible, false);
-  page.previewSavedRecipe(); page.keepRecipeForSelf();
-  assert.deepEqual(app.calls.redirects, []);
-  assert.equal(app.calls.back, 0);
-  assert.ok(app.store.getRecipe(id));
-});
-
-test('a saved recipe removed on another device cannot be opened through a stale prompt', async () => {
-  const app = setup(), page = app.open('editor'); fillRecipe(page); await page.save();
-  app.store.deleteRecipe(newRecipe(app).id);
-  page.previewSavedRecipe();
-  assert.deepEqual(app.calls.redirects, []);
-  assert.equal(page.data.sharePromptVisible, false);
-  assert.equal(app.calls.back, 1);
+test('recipe and record forms have no publication-choice UI or preview route', () => {
+  for (const name of ['editor', 'record-editor']) {
+    const page = fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8');
+    const template = fs.readFileSync(path.join(root, 'pages', name, 'index.wxml'), 'utf8');
+    assert.doesNotMatch(page + template, /share-prompt|share-preview|先留给自己|确认预览|previewPublication|publishRecipe/);
+  }
 });
 
 test('closing the editor during photo persistence prevents the save and removes its orphaned staged photo', async () => {
@@ -577,156 +479,16 @@ test('closing the editor during photo persistence prevents the save and removes 
   const save = page.save(); page.onUnload(); finish({savedFilePath: 'wxfile://usr/late-photo.jpg'}); await save;
   assert.equal(app.calls.writes, 0);
   assert.deepEqual(app.calls.unlinks, ['wxfile://usr/late-photo.jpg']);
-  assert.equal(page.data.sharePromptVisible, false);
+  assert.equal(page.data.savedComplete, false);
   assert.deepEqual(app.calls.redirects, []);
-});
-
-test('the prompt renders both requested neutral actions without a radio selection or direct sharing capability', () => {
-  const template = fs.readFileSync(path.join(root, 'components/share-prompt/index.wxml'), 'utf8');
-  assert.match(template, />公开分享<\/button>/);
-  assert.match(template, />先留给自己<\/button>/);
-  assert.doesNotMatch(template, /open-type=|checked=|selected|radio/);
-  assert.equal((template.match(/class="share-prompt-action"/g) || []).length, 2);
-});
-
-const nextTurn = () => new Promise(resolve => setImmediate(resolve));
-function deferredResult() {
-  let resolve, reject;
-  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
-  return {promise, resolve, reject};
-}
-function existingOwnSave(app, name) {
-  const id = ownRecipe(app);
-  const page = app.open(name, {id});
-  if (name === 'editor') input(page, 'name', '修改后的菜谱');
-  else page.rate(valueEvent(3));
-  return {id, page};
-}
-
-test('new recipe invitations do not wait for remote sharing status', async () => {
-  const app = setup(), page = app.open('editor'); fillRecipe(page);
-  app.hooks.mine = () => new Promise(() => {});
-  await page.save();
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.deepEqual(app.calls.mine, []);
-  assert.deepEqual(app.calls.timerDelays, []);
-});
-
-test('already shared recipes skip the first-publication invitation after either save moment', async () => {
-  for (const name of ['editor', 'record-editor']) {
-    const app = setup(), {id, page} = existingOwnSave(app, name);
-    app.hooks.mine = () => ({published: [{sourceRecipeId: id}]});
-    await page.save();
-    assert.equal(page.data.savedComplete, true);
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.deepEqual(app.calls.mine, [{force: true}]);
-    assert.equal(app.calls.back, 1);
-    assert.equal(app.pendingTimers(), 0);
-    assert.equal(page.data.error, '');
-    if (name === 'editor') assert.equal(app.store.getRecipe(id).name, '修改后的菜谱');
-    else assert.equal(app.store.getState().logs[0].rating, 3);
-  }
-});
-
-test('existing unshared own recipes receive the invitation after a fresh successful status check', async () => {
-  const app = setup(), {page} = existingOwnSave(app, 'editor');
-  app.hooks.mine = () => ({published: [{sourceRecipeId: 'some-other-recipe'}]});
-  await page.save();
-  assert.equal(page.data.sharePromptVisible, true);
-  assert.equal(page.data.sharePromptMessage, '已收进你的食谱，也分享给其他家长吧');
-  assert.deepEqual(app.calls.mine, [{force: true}]);
-  assert.equal(app.calls.back, 0);
-  assert.equal(app.pendingTimers(), 0);
-});
-
-test('offline, failed or malformed optional status checks never turn a successful save into an error or invitation', async () => {
-  for (const response of [undefined, null, {}, {published: null}, {published: [{}]}, {published: [{sourceRecipeId: ''}]}]) {
-    const app = setup(), {id, page} = existingOwnSave(app, 'editor');
-    app.hooks.mine = () => { if (response === undefined) throw Error('network offline'); return response; };
-    await page.save();
-    assert.equal(app.store.getRecipe(id).name, '修改后的菜谱');
-    assert.equal(page.data.savedComplete, true);
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(page.data.error, '');
-    assert.equal(app.calls.back, 1);
-    assert.equal(app.returnWarning(), false);
-    assert.equal(app.pendingTimers(), 0);
-  }
-});
-
-test('sharing-status timeout leaves after 1200 ms and ignores a late unshared response', async () => {
-  for (const name of ['editor', 'record-editor']) {
-    const app = setup(), {id, page} = existingOwnSave(app, name), gate = deferredResult();
-    app.hooks.mine = () => gate.promise;
-    const save = page.save(); await nextTurn();
-    assert.equal(page.data.savedComplete, true);
-    assert.equal(page.data.saving, false);
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 0);
-    assert.deepEqual(app.calls.timerDelays, [1200]);
-    const writes = app.calls.writes; await page.save(); assert.equal(app.calls.writes, writes);
-    app.runPromptTimers(); await save;
-    assert.equal(app.calls.back, 1);
-    assert.equal(app.pendingTimers(), 0);
-    gate.resolve({published: []}); await nextTurn();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 1);
-    assert.deepEqual(app.calls.redirects, []);
-    assert.ok(app.store.getRecipe(id));
-  }
-});
-
-test('a late failed status response after timeout is ignored without losing a saved meal', async () => {
-  const app = setup(), {page} = existingOwnSave(app, 'record-editor'), gate = deferredResult();
-  app.hooks.mine = () => gate.promise;
-  const save = page.save(); await nextTurn(); app.runPromptTimers(); await save;
-  gate.reject(Error('late network failure')); await nextTurn();
-  assert.equal(page.data.error, '');
-  assert.equal(page.data.sharePromptVisible, false);
-  assert.equal(app.store.getState().logs[0].rating, 3);
-  assert.equal(app.calls.back, 1);
-});
-
-test('account changes and page unload cancel the optional check without late prompts or navigation', async () => {
-  for (const mode of ['account', 'unload']) {
-    const app = setup(), owner = 'a'.repeat(64), other = 'b'.repeat(64), gate = deferredResult();
-    app.store.bindAccount(owner);
-    const {id, page} = existingOwnSave(app, 'editor');
-    app.hooks.mine = () => gate.promise;
-    const save = page.save(); await nextTurn();
-    if (mode === 'account') { app.store.bindAccount(other); app.store.bindAccount(owner); }
-    else page.onUnload();
-    await save;
-    assert.equal(app.pendingTimers(), 0);
-    gate.resolve({published: []}); await nextTurn();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 0);
-    assert.deepEqual(app.calls.redirects, []);
-    assert.equal(app.store.getRecipe(id).name, '修改后的菜谱');
-  }
-});
-
-test('back while optional sharing status is pending cancels it before the native unload event', async () => {
-  for (const name of ['editor', 'record-editor']) {
-    const app = setup(), {page} = existingOwnSave(app, name), gate = deferredResult();
-    app.hooks.mine = () => gate.promise;
-    const save = page.save(); await nextTurn();
-    if (name === 'editor') page.cancel(); else page.back();
-    await save;
-    assert.equal(app.calls.back, 1);
-    assert.equal(app.pendingTimers(), 0);
-    assert.equal(page.data.discardVisible, false);
-    gate.resolve({published: []}); await nextTurn();
-    assert.equal(page.data.sharePromptVisible, false);
-    assert.equal(app.calls.back, 1);
-  }
 });
 
 test('same-account family changes clear editor drafts and an ABA return cannot save them', async () => {
   for (const name of ['editor', 'record-editor']) {
     const app = setup(), owner = 'a'.repeat(64);
     app.store.bindAccount(owner);
-    const {page} = existingOwnSave(app, name);
+    const id = ownRecipe(app), page = app.open(name, {id});
+    if (name === 'editor') input(page, 'name', '待保存修改'); else page.rate(valueEvent(3));
     app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
     if (name === 'editor') assert.equal(page.data.form.name, '');
     app.store.bindScope(owner, {kind: 'personal', id: owner});
@@ -734,12 +496,11 @@ test('same-account family changes clear editor drafts and an ABA return cannot s
     await page.save();
     assert.deepEqual(copy(app.store.getState()), before);
     assert.match(page.data.error, /家庭|账号/);
-    assert.equal(page.data.sharePromptVisible, false);
     assert.equal(app.calls.back, 0);
   }
 });
 
-test('editing another family member recipe preserves creator and never prompts first publication', async () => {
+test('editing another family member recipe preserves creator and returns without changing its creator', async () => {
   const app = setup(), owner = 'a'.repeat(64), creator = 'b'.repeat(64);
   app.store.bindAccount(owner);
   app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
@@ -750,6 +511,5 @@ test('editing another family member recipe preserves creator and never prompts f
   await page.save();
   assert.equal(app.store.getRecipe(recipe.id).createdBy, creator);
   assert.equal(app.store.getRecipe(recipe.id).name, '爸爸调整后的南瓜饭');
-  assert.equal(page.data.sharePromptVisible, false);
   assert.equal(app.calls.mine.length, 0);
 });

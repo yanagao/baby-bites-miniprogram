@@ -16,5 +16,3 @@
   <t-dialog visible="{{deleteVisible}}" title="删除这条用餐记录？" content="{{deleteContent}}" confirm-btn="{{deleteConfirmButton}}" cancel-btn="取消" bind:confirm="confirmDelete" bind:cancel="cancelDelete" />
 </block>
 <t-empty wx:else description="{{missingMessage}}"><t-button slot="action" theme="primary" bind:tap="back">返回</t-button></t-empty>
-
-<share-prompt visible="{{sharePromptVisible}}" message="{{sharePromptMessage}}" busy="{{sharePromptBusy}}" error="{{sharePromptError}}" bind:share="previewSavedRecipe" bind:keep="keepRecipeForSelf" />

@@ -90,11 +90,11 @@ function call(target, method, options) {
     } catch (error) { reject(error); }
   });
 }
-async function ready() {
+async function ready(options) {
   requireEnabled();
   const previous = store.getSyncInfo().owner;
   const previousEpoch = ownerEpoch;
-  const status = await cloudSync.syncNow();
+  const status = await cloudSync.syncNow(options);
   const current = store.getSyncInfo();
   if ((previous && (current.owner !== previous || ownerEpoch !== previousEpoch)) ||
     (!previous && ownerEpoch > previousEpoch + 1)) fail('微信账号已切换，请重新打开当前页面。', 'ACCOUNT_CHANGED');
@@ -107,7 +107,7 @@ const errors = {
   ACCOUNT_CHANGED: '微信账号已切换，请重新打开当前页面。',
   FAMILY_CHANGED: '家庭已变化，请等待同步后重新打开当前页面。',
   FAMILY_NOT_FOUND: '家庭暂时不可用，请重新同步。',
-  RECIPE_AUTHOR_REQUIRED: '请由添加这道菜的家人选择公开分享。',
+  RECIPE_AUTHOR_REQUIRED: '请等待添加这道菜的家人完成同步。',
   UNAUTHENTICATED: '未能识别当前微信账号，请在微信中重试。',
   INVALID_ENV: '好友功能暂未配置完成，请稍后重试。',
   NOT_FOUND: '这份内容已移除，或暂时无法查看。',
@@ -335,6 +335,43 @@ function saveProfile(input) {
 function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
+async function getRecipeShareLink(sourceRecipeId, options = {}) {
+  const owner = await ready({ifNeeded: !options.force});
+  const local = store.getRecipe(sourceRecipeId);
+  if (!local || store.getSyncInfo().dirty) fail(errors.SYNC_REQUIRED, 'SYNC_REQUIRED');
+  if (isBuiltInRecipe(local)) fail(errors.BUILTIN_RECIPE, 'BUILTIN_RECIPE');
+  const localVersion = JSON.stringify(local);
+  const check = () => {
+    assertOwner(owner);
+    if (store.getSyncInfo().dirty || JSON.stringify(store.getRecipe(sourceRecipeId)) !== localVersion) {
+      fail('菜谱已有更新，请同步后重新分享。', 'SYNC_REQUIRED');
+    }
+  };
+  let id;
+  if (local.source && publicId(local.source.recipeId)) {
+    id = local.source.recipeId;
+  } else {
+    const value = owner.scope && owner.scope.kind === 'family'
+      ? await getFamilyRecipeLink(sourceRecipeId, {force: true}) : await getMine({force: true});
+    check();
+    const publication = owner.scope && owner.scope.kind === 'family' ? value.publication
+      : Array.isArray(value.published) && value.published.find(item => item.sourceRecipeId === sourceRecipeId);
+    if (!publication || !publicId(publication.id) || publication.sourceUpdatedAt !== (local.updatedAt || local.createdAt || 0)) {
+      const status = cloudSync.getStatus();
+      fail(status && status.publicationMessage || '菜谱正在同步公开，请稍后重试。', 'PUBLICATION_PENDING');
+    }
+    id = publication.id;
+  }
+  const value = await getRecipe(id);
+  check();
+  const recipe = value && value.recipe;
+  if (!object(recipe) || recipe.id !== id || typeof recipe.name !== 'string' || !recipe.name.trim() || recipe.name.length > 60 ||
+    (recipe.photoURL && (typeof recipe.photoURL !== 'string' || recipe.photoURL.length > 8000 || !/^https:\/\//.test(recipe.photoURL)))) {
+    fail('菜谱分享信息暂时无法读取，请重试。', 'INVALID_RECIPE');
+  }
+  // The share card needs only server-verified public fields, never local notes.
+  return {recipe: {id, name: recipe.name, photoURL: recipe.photoURL || ''}, localVersion};
+}
 async function shareReady(sourceRecipeId) {
   const owner = await ready();
   const recipe = store.getRecipe(sourceRecipeId);
@@ -381,8 +418,7 @@ async function previewPublication(sourceRecipeId) {
 }
 async function publishRecipe(sourceRecipeId, previewToken) {
   const owner = await shareReady(sourceRecipeId);
-  if (!publicId(previewToken)) fail(errors.PREVIEW_REQUIRED, 'PREVIEW_REQUIRED');
-  return mutate('publish', {sourceRecipeId, previewToken}, owner);
+  return mutate('publish', {sourceRecipeId, ...(publicId(previewToken) ? {previewToken} : {})}, owner);
 }
 function unpublishRecipe(sourceRecipeId) { return mutate('unpublish', {sourceRecipeId}); }
 function setFollowing(id, following) {
@@ -674,6 +710,6 @@ async function deleteCooksnap(id) {
   return {deleted: true};
 }
 
-module.exports = {getMine, getFamilyRecipeLink, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
+module.exports = {getMine, getFamilyRecipeLink, getRecipeShareLink, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe,
   getRecipeFeedback, getFeedbackInbox, addCooksnap, deleteCooksnap};

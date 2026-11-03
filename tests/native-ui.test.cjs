@@ -34,7 +34,7 @@ function pageHarness(name, state, app) {
   const selectors = require('../utils/selectors');
   vm.runInNewContext(fs.readFileSync(path.join(root, `pages/${name}/index.js`),'utf8'), {
     Page: value => { definition = value; }, getApp: () => app,
-    require: name => name.endsWith('/selectors') ? selectors : name.endsWith('/store') ? {getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner: 'owner-a'}), subscribe: () => () => {}} : {error: error => {throw error;}},
+    require: name => name.endsWith('/selectors') ? selectors : name.endsWith('/store') ? {getAllergyFilterEnabled: () => false, getState: () => state, getWarning: () => '', getSyncInfo: () => ({owner: 'owner-a'}), subscribe: () => () => {}} : {error: error => {throw error;}},
     wx: {hideKeyboard() {}, pageScrollTo() {}, navigateTo: options => navigation.push(options.url)}
   });
   const page = {...definition, data: JSON.parse(JSON.stringify(definition.data)), setData(value) {Object.assign(this.data, value);}};

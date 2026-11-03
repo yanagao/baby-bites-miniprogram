@@ -1,9 +1,7 @@
 {
-  "navigationBarTitleText": "分享预览",
+  "navigationBarTitleText": "菜谱分享",
   "usingComponents": {
     "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
-    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
-    "t-loading": "/miniprogram_npm/tdesign-miniprogram/loading/loading",
-    "food-art": "/components/food-art/index"
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button"
   }
 }

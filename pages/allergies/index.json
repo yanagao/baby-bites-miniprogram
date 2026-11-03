@@ -3,6 +3,7 @@
   "usingComponents": {
     "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
     "t-input": "/miniprogram_npm/tdesign-miniprogram/input/input",
+    "t-switch": "/miniprogram_npm/tdesign-miniprogram/switch/switch",
     "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
     "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
     "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog",

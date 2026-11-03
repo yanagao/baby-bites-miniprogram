@@ -105,11 +105,11 @@ Page({
       const pool = this.candidates(state);
       const current = this.data.result && pool.find(recipe => recipe.id === this.data.result.id);
       if (!current) this.draw();
-      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
+      else this.setData({result: current, candidateCount: pool.length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   toggleFilters() { if (this.accountOK(false)) this.setData({filtersVisible: !this.data.filtersVisible}); },
-  candidates(state) { return selectors.randomCandidates(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, skipDisliked: this.data.skipDisliked}); },
+  candidates(state) { return selectors.randomCandidates(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, excludeAllergies: store.getAllergyFilterEnabled(), skipDisliked: this.data.skipDisliked}); },
   toggleAgeGroup(event) {
     if (!this.accountOK(false)) return;
     const ageGroup = event.currentTarget.dataset.ageGroup;
@@ -151,9 +151,9 @@ Page({
     if (!this.accountOK(false)) return;
     try {
       const state = store.getState();
-      const result = selectors.randomRecipe(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, skipDisliked: this.data.skipDisliked, lastId: this.lastId});
+      const result = selectors.randomRecipe(state, {categories: this.data.selectedCategories, ageGroups: this.data.selectedAgeGroups, excludeAllergies: store.getAllergyFilterEnabled(), skipDisliked: this.data.skipDisliked, lastId: this.lastId});
       this.lastId = result ? result.id : null;
-      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(state.allergies && state.allergies.length)});
+      this.setData({result, candidateCount: this.candidates(state).length, hasRecipes: Boolean(state.recipes.length), hasAllergies: Boolean(store.getAllergyFilterEnabled() && state.allergies && state.allergies.length)});
     } catch (error) { ui.error(error); }
   },
   favorite() {

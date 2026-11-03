@@ -17,7 +17,7 @@ Page({
     deleting: false,
     familyRecipe: false, publicInfo: null, publicReady: false, publicError: '', publicBusy: false, publicLoading: false,
     builtIn: false, publicChanged: false,
-    shareRecipe: null, shareVisible: false, shareLoading: false, shareError: ''
+    shareRecipe: null, shareReady: false, shareLoading: false, shareError: ''
   },
   onLoad(options) {
     this.recipeId = options.id;
@@ -29,7 +29,7 @@ Page({
     this._sessionScope = store.getSyncInfo().scopeKey || this._sessionOwner;
     this._accountBound = Boolean(this._sessionOwner);
     this._accountLocked = false;
-    this._unsubscribeAccount = store.subscribe(() => { this.accountOK(false); });
+    this._unsubscribeAccount = store.subscribe(() => { if (this.accountOK(false) && this.data.recipe) this.refresh(); });
     if (this.data.socialEnabled) this._unsubscribeSync = cloudSync.subscribe(status => {
       if (!status || !this.accountOK(false) || status.owner !== this._sessionOwner) return;
       const key = syncVersion(status);
@@ -43,8 +43,6 @@ Page({
   async onShow() {
     if (!this.accountOK(false)) return;
     this._visible = true;
-    this._openingPreview = false;
-    this.setData({shareVisible: false});
     this.refresh();
     if (this.data.socialEnabled) await this.refreshPublication();
   },
@@ -54,7 +52,6 @@ Page({
     this._visible = false;
     this._syncRefreshPending = false;
     this._publicRequest = (this._publicRequest || 0) + 1;
-    this._shareRequest = (this._shareRequest || 0) + 1;
     this.updateShareMenu();
     if (this._unsubscribeAccount) this._unsubscribeAccount();
     if (this._unsubscribeSync) this._unsubscribeSync();
@@ -72,11 +69,10 @@ Page({
       this._accountCleared = true;
       this._syncRefreshPending = false;
       this._publicRequest = (this._publicRequest || 0) + 1;
-      this._shareRequest = (this._shareRequest || 0) + 1;
-      this.setData({recipe: null, lastLog: null, publicInfo: null, publicReady: false,
+        this.setData({recipe: null, lastLog: null, publicInfo: null, publicReady: false,
         publicError: message, publicChanged: false, builtIn: false,
         deleteVisible: false, publicBusy: false, publicLoading: false, deleting: false,
-        shareRecipe: null, shareVisible: false, shareLoading: false, shareError: ''});
+        shareRecipe: null, shareReady: false, shareLoading: false, shareError: ''});
       this.updateShareMenu();
     }
     if (report) ui.error(new Error(message));
@@ -84,7 +80,7 @@ Page({
   },
   actionAllowed() {
     return this.accountOK(true) && !this.data.publicBusy && !this.data.deleting &&
-      !this.data.deleteVisible && !this.data.shareVisible && Boolean(this.data.recipe);
+      !this.data.deleteVisible && Boolean(this.data.recipe);
   },
   refresh() {
     if (!this.accountOK(false)) return;
@@ -93,7 +89,10 @@ Page({
       const recipe = state.recipes.find(item => item.id === this.recipeId);
       this.setData({familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
         publicChanged: !!(recipe && this.data.publicInfo && this.data.publicInfo.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))});
-      if (!recipe) this.setData({shareRecipe: null, shareVisible: false});
+      if (!recipe || this._shareVersion && this._shareVersion !== JSON.stringify(recipe)) {
+        this._shareVersion = '';
+        this.setData({shareRecipe: null, shareReady: false, publicReady: false, publicChanged: Boolean(recipe)});
+      }
       this.updateShareMenu();
     } catch (error) { ui.error(error); }
   },
@@ -117,50 +116,45 @@ Page({
   refreshAfterSync() {
     if (!this._syncRefreshPending || !this._visible || !this.accountOK(false) || !this.data.recipe ||
       this.data.publicBusy || this.data.deleting || this.data.publicLoading || this.data.shareLoading ||
-      this.data.deleteVisible || this.data.shareVisible) return;
-    return this.refreshPublication(true);
+      this.data.deleteVisible) return;
+    return this.refreshPublication();
   },
   async refreshPublication(fromOperation) {
-    if (!this.data.socialEnabled || !this.accountOK(false) || this.data.deleting || (this.data.publicBusy && fromOperation !== true)) return;
+    if (!this.data.socialEnabled || !this.accountOK(false) || !this.data.recipe || this.data.deleting || this.data.publicBusy) return false;
     this._syncRefreshPending = false;
     if (this.data.builtIn) {
       this.setData({publicInfo: null, publicReady: true, publicLoading: false, publicError: '', shareRecipe: null, shareError: ''});
-      this.updateShareMenu();
-      return true;
+      this.updateShareMenu(); return true;
     }
     const request = this._publicRequest = (this._publicRequest || 0) + 1;
-    this._shareRequest = (this._shareRequest || 0) + 1;
-    this.setData({publicReady: false, publicError: '', publicLoading: true,
-      shareRecipe: null, shareVisible: false, shareLoading: false, shareError: ''});
+    this._shareVersion = '';
+    this.setData({publicReady: false, publicError: '', publicLoading: true, shareReady: false,
+      shareRecipe: null, shareLoading: true, shareError: ''});
     this.updateShareMenu();
     try {
-      if (this.data.familyRecipe) {
-        const link = await social.getFamilyRecipeLink(this.recipeId, fromOperation ? {force: true} : undefined);
-        if (!this.accountOK(false) || request !== this._publicRequest) return;
-        this.setData({publicInfo: link.publication, publicReady: true, publicLoading: false});
-        if (link.publication) await this.refreshShareRecipe(request);
-        return this.data.publicReady;
-      }
-      const mine = await social.getMine(fromOperation ? {force: true} : undefined);
-      if (!this.accountOK(false) || request !== this._publicRequest) return;
-      if (!mine || !mine.profile || typeof mine.profile.exists !== 'boolean' || !Array.isArray(mine.published) ||
-        !mine.published.every(item => item && typeof item.sourceRecipeId === 'string' && item.sourceRecipeId.trim())) {
-        throw Error('暂时无法确认同步状态，请重试。');
-      }
-      const publicInfo = mine.published.find(item => item.sourceRecipeId === this.recipeId) || null;
-      this.setData({publicInfo, publicReady: true, publicLoading: false});
-      this.refresh();
-      if (publicInfo && this.data.recipe) await this.refreshShareRecipe(request);
+      const result = await social.getRecipeShareLink(this.recipeId, {force: fromOperation === true});
       if (!this.accountOK(false) || request !== this._publicRequest) return false;
-      return this.data.publicReady;
+      const local = store.getRecipe(this.recipeId), recipe = result && result.recipe;
+      if (!local || !result.localVersion || result.localVersion !== JSON.stringify(local)) throw Error('菜谱已有更新，请重新准备分享。');
+      if (!recipe || !/^[a-f0-9]{64}$/.test(recipe.id || '') || typeof recipe.name !== 'string' || !recipe.name.trim()) {
+        throw Error('暂时无法读取可分享的菜谱，请重试。');
+      }
+      // Only metadata verified from the synchronized public recipe can leave this page.
+      this._shareVersion = result.localVersion;
+      this.setData({publicInfo: {id: recipe.id, sourceUpdatedAt: local.updatedAt || local.createdAt || 0},
+        publicReady: true, publicChanged: false, shareRecipe: {id: recipe.id, name: recipe.name}});
+      return true;
     } catch (error) {
       if (this.accountOK(false) && request === this._publicRequest) {
         if (error.code === 'ACCOUNT_CHANGED') { this._accountLocked = true; this.accountOK(false); }
-        else this.setData({publicError: error.message || '暂时无法读取同步状态', publicLoading: false});
+        else this.setData({publicInfo: null, publicReady: false, shareError: error.message || '分享尚未准备好，请联网后重试。'});
       }
       return false;
     } finally {
-      if (request === this._publicRequest) this.refreshAfterSync();
+      if (this.accountOK(false) && request === this._publicRequest) {
+        this.setData({publicLoading: false, shareLoading: false}); this.updateShareMenu();
+        this.refreshAfterSync();
+      }
     }
   },
   openProfile() { if (this.data.socialEnabled && this.actionAllowed()) wx.navigateTo({url: '/pages/profile/index'}); },
@@ -177,68 +171,20 @@ Page({
     return !this._unloaded && !this._accountLocked && data.socialEnabled && !!data.recipe &&
       !data.publicBusy && !data.deleting && !data.deleteVisible &&
       (data.builtIn || (data.publicReady && !data.publicLoading && !data.shareLoading &&
-      !!data.publicInfo && !!data.shareRecipe && data.shareRecipe.id === data.publicInfo.id));
+      !!data.publicInfo && !!data.shareRecipe && data.shareRecipe.id === data.publicInfo.id &&
+      this._shareVersion === JSON.stringify(store.getRecipe(this.recipeId))));
   },
   updateShareMenu() {
     const available = this.shareAvailable();
+    if (available !== this.data.shareReady) this.setData({shareReady: available});
     if (available === this._shareMenuShown) return;
     this._shareMenuShown = available;
     const method = available ? 'showShareMenu' : 'hideShareMenu';
     if (wx[method]) wx[method]({menus: ['shareAppMessage']});
   },
-  async refreshShareRecipe(publicRequest) {
-    if (!this.accountOK(false) || !this.data.publicReady || !this.data.publicInfo || !this.data.recipe) return;
-    const id = this.data.publicInfo.id;
-    const request = this._shareRequest = (this._shareRequest || 0) + 1;
-    const current = () => this.accountOK(false) && request === this._shareRequest &&
-      publicRequest === this._publicRequest && this.data.publicInfo && this.data.publicInfo.id === id;
-    this.setData({shareRecipe: null, shareLoading: true, shareError: ''});
-    this.updateShareMenu();
-    try {
-      const result = await social.getRecipe(id);
-      if (!current()) return;
-      const recipe = result && result.recipe;
-      if (!recipe || recipe.id !== id || !/^[a-f0-9]{64}$/.test(id) || typeof recipe.name !== 'string' || !recipe.name.trim()) {
-        throw Error('暂时无法读取可分享的菜谱，请重试。');
-      }
-      // Only the public snapshot may supply share metadata. Local edits and
-      // automatic page screenshots can contain information the user kept private.
-      this.setData({shareRecipe: {id, name: recipe.name}});
-    } catch (error) {
-      if (!current()) return;
-      if (error.code === 'ACCOUNT_CHANGED') { this._accountLocked = true; this.accountOK(false); }
-      else {
-        const unavailable = ['NOT_FOUND', 'RECIPE_NOT_FOUND', 'NOT_PUBLIC'].includes(error.code);
-        this.setData({shareError: error.message || '分享暂时不可用，请重试。',
-          ...(unavailable ? {publicInfo: null, publicReady: false, publicChanged: false} : {})});
-      }
-    } finally {
-      if (this.accountOK(false) && request === this._shareRequest && publicRequest === this._publicRequest) {
-        this.setData({shareLoading: false});
-        this.updateShareMenu();
-      }
-    }
-  },
-  async requestShare() {
-    if (!this.data.socialEnabled || !this.actionAllowed() || this.data.publicLoading || this.data.shareLoading || this.data.builtIn || this._openingPreview) return;
-    if (!this.data.publicReady && !(await this.refreshPublication())) return;
-    if (!this.accountOK(false) || !this.data.recipe || this.data.builtIn || this.data.deleting || this.data.deleteVisible) return;
-    if (!this.data.publicInfo && this.data.familyRecipe) {
-      ui.error(Error('请由添加这道菜的家人选择公开分享。')); return;
-    }
-    if (!this.data.publicInfo) {
-      this._openingPreview = true;
-      wx.navigateTo({url: '/pages/share-preview/index?id=' + encodeURIComponent(this.recipeId),
-        fail: () => {
-          this._openingPreview = false;
-          if (this.accountOK(false)) this.setData({shareError: '暂时无法打开分享预览，请重试。'});
-        }});
-      return;
-    } else if (!this.data.shareRecipe) await this.refreshShareRecipe(this._publicRequest);
-    if (this.accountOK(false) && this.shareAvailable()) this.setData({shareVisible: true});
-  },
-  closeShare() {
-    if (this.accountOK(false)) { this.setData({shareVisible: false}); this.refreshAfterSync(); }
+  requestShare() {
+    if (!this.data.socialEnabled || !this.actionAllowed() || this.data.publicLoading || this.data.shareLoading || this.data.builtIn) return;
+    return this.refreshPublication(true);
   },
   onShareAppMessage() {
     if (this.accountOK(false) && !this.data.builtIn && this.shareAvailable()) {
@@ -269,8 +215,8 @@ Page({
   },
   async confirmDelete() {
     if (!this.accountOK(true) || this.data.deleting || this.data.publicBusy || !this.data.deleteVisible) return;
-    this._shareRequest = (this._shareRequest || 0) + 1;
-    this.setData({deleting: true, deleteVisible: false, shareRecipe: null, shareVisible: false, shareLoading: false});
+    this._publicRequest = (this._publicRequest || 0) + 1;
+    this.setData({deleting: true, deleteVisible: false, shareRecipe: null, shareReady: false, shareLoading: false});
     this.updateShareMenu();
     let deleted = false;
     try {
