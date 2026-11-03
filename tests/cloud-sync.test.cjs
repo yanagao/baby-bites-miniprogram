@@ -238,7 +238,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   const oldPhoto = familyFileID('photos', 'old.jpg'), newPhoto = familyFileID('photos', 'new.jpg');
   let shared = snapshot(state([
     recipe('replaced', {photo: oldPhoto}), recipe('removed', {photo: familyFileID('photos', 'removed.jpg')}),
-    recipe('still-using-old-photo', {photo: oldPhoto})
+    recipe('still-using-old-photo', {photo: oldPhoto}), recipe('first-photo')
   ]));
   let revision = 1, attempts = 0;
   const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
@@ -250,6 +250,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
       if (attempts === 1) {
         Object.assign(shared.data.recipes[0], {photo: newPhoto, updatedAt: 2});
         Object.assign(shared.data.recipes[1], {photo: '', updatedAt: 2});
+        Object.assign(shared.data.recipes[3], {photo: newPhoto, updatedAt: 2});
         revision++;
         return {...identity(), conflict: true};
       }
@@ -262,6 +263,7 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   await app.sync.syncNow();
   app.store.saveRecipe({...app.store.getRecipe('replaced'), name: '离线改过的粥'});
   app.store.toggleFavorite('removed');
+  app.store.toggleFavorite('first-photo');
   const logId = app.store.addLog({recipeId: 'replaced', rating: 3});
   assert.equal((await app.sync.syncNow()).state, 'synced');
   assert.equal(attempts, 2);
@@ -270,7 +272,48 @@ test('offline family edits and meal logs survive a concurrent photo replacement 
   assert.equal(app.store.getRecipe('removed').favorite, true);
   assert.equal(app.store.getRecipe('removed').photo, '');
   assert.equal(app.store.getRecipe('still-using-old-photo').photo, oldPhoto);
+  assert.equal(app.store.getRecipe('first-photo').favorite, true);
+  assert.equal(app.store.getRecipe('first-photo').photo, newPhoto);
+  assert.equal(shared.data.recipes.find(item => item.id === 'first-photo').photo, newPhoto);
   assert.ok(shared.data.logs.some(item => item.id === logId));
+});
+
+test('explicit family photo removals survive restart and in-flight edits, and stop applying after acknowledgement', async () => {
+  const oldPhoto = familyFileID('photos', 'old.jpg'), newPhoto = familyFileID('photos', 'new.jpg');
+  let app = setup(), revision = 1, commits = 0;
+  let shared = snapshot(state([recipe('clear', {photo: oldPhoto}), recipe('clear-later', {photo: newPhoto})]));
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
+  const handle = ({data}) => {
+    if (data.action === 'identity') return identity();
+    if (data.action === 'familyRead') return {...identity(), snapshot: copy(shared)};
+    if (data.action === 'commit') {
+      shared = JSON.parse(app.cloudFiles.get(data.fileID));
+      revision++;
+      if (++commits === 1) app.store.saveRecipe({...app.store.getRecipe('clear-later'), photo: ''});
+      return {...identity(), snapshot: copy(shared)};
+    }
+  };
+  app.hooks.request = handle;
+  await app.sync.syncNow();
+  app.store.saveRecipe({...app.store.getRecipe('clear'), photo: ''});
+  const remoteEdit = app.store.getRecipe('clear').updatedAt + 100;
+  Object.assign(shared.data.recipes[0], {name: '家人刚改的名字', updatedAt: remoteEdit});
+  revision++;
+
+  app = setup({storage: app.storage});
+  app.hooks.request = handle;
+  assert.equal((await app.sync.syncNow()).state, 'synced');
+  assert.equal(commits, 2);
+  assert.equal(app.store.getRecipe('clear').name, '家人刚改的名字');
+  assert.ok(app.store.getRecipe('clear').updatedAt > remoteEdit);
+  assert.deepEqual(shared.data.recipes.map(item => item.photo), ['', '']);
+
+  app.store.toggleFavorite('clear');
+  shared.data.recipes[0].photo = newPhoto;
+  revision++;
+  assert.equal((await app.sync.syncNow()).state, 'synced');
+  assert.equal(app.store.getRecipe('clear').photo, newPhoto);
+  assert.equal(app.store.getRecipe('clear').favorite, true);
 });
 
 test('late family reads cannot apply after membership changes even for the same actor', async () => {

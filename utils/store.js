@@ -188,7 +188,12 @@ function validateSync(value, fallbackHasData) {
   if (!isObject(value) || !Number.isSafeInteger(value.sequence) || value.sequence < 0 ||
     !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.dirty !== 'boolean' ||
     typeof value.hasLocalData !== 'boolean' || typeof value.migratedLegacy !== 'boolean') fail('账号同步缓存格式不正确。');
+  const photoEdits = value.photoEdits;
+  if (photoEdits !== undefined && (!Array.isArray(photoEdits) || photoEdits.length > 1000 ||
+    !photoEdits.every(edit => isObject(edit) && validString(edit.id, 100) && Number.isSafeInteger(edit.sequence) &&
+      edit.sequence > 0 && edit.sequence <= value.sequence))) fail('账号照片同步缓存格式不正确。');
   return {sequence: value.sequence, revision: value.revision, dirty: value.dirty,
+    ...(photoEdits ? {photoEdits} : {}),
     snapshotSchemaVersion: value.snapshotSchemaVersion === SNAPSHOT_SCHEMA_VERSION ? SNAPSHOT_SCHEMA_VERSION : 0,
     hasLocalData: value.hasLocalData, migratedLegacy: value.migratedLegacy, deleted: validateDeleted(value.deleted)};
 }
@@ -264,6 +269,11 @@ function getSyncSnapshot() {
   init();
   if (readBlocked) fail(warning);
   return clone({version: 1, data: sync.hasLocalData ? state : emptyState(), deleted: sync.deleted});
+}
+
+function pendingFamilyPhotoIds(afterSequence = 0) {
+  init();
+  return new Set((sync.photoEdits || []).filter(edit => edit.sequence > afterSequence).map(edit => edit.id));
 }
 
 // Recommendation preferences belong to this device and this exact membership,
@@ -370,6 +380,17 @@ function commit(mutator, recover) {
   nextSync.sequence += 1;
   nextSync.dirty = true;
   nextSync.hasLocalData = true;
+  if (scope && scope.kind === 'family') {
+    const previous = new Map(state.recipes.map(recipe => [recipe.id, recipe.photo]));
+    const edits = new Map((sync.photoEdits || []).map(edit => [edit.id, edit.sequence]));
+    nextSync.photoEdits = [];
+    for (const recipe of validated.recipes) {
+      // Saving an unrelated field must not claim an empty or cached photo.
+      const changed = recipe.photo !== (previous.get(recipe.id) || '');
+      const sequence = changed ? nextSync.sequence : edits.get(recipe.id);
+      if (sequence) nextSync.photoEdits.push({id: recipe.id, sequence});
+    }
+  }
   ['recipes', 'logs'].forEach(type => {
     const ids = new Set(validated[type].map(item => item.id));
     const tombstones = new Map(nextSync.deleted[type].map(item => [item.id, item]));
@@ -404,11 +425,13 @@ function applySyncedSnapshot(snapshot, options) {
   if (options.revision < sync.revision) return false;
   const incoming = validateSnapshot(snapshot);
   const editedDuringSync = options.sequence !== sync.sequence;
-  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming, scope && scope.kind === 'family') :
+  const family = scope && scope.kind === 'family';
+  const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming, family, family && pendingFamilyPhotoIds(options.sequence)) :
     {...incoming, data: {...incoming.data, ...mergeAllergies(state, incoming.data)}};
   const validated = validateData(merged.data);
   const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync,
     hasLocalData: true, snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION, deleted: merged.deleted});
+  if (family) nextSync.photoEdits = (sync.photoEdits || []).filter(edit => edit.sequence > options.sequence);
   writeState(validated, nextSync, owner);
   state = validated;
   sync = nextSync;
@@ -621,6 +644,6 @@ function exportBackup() {
 module.exports = {
   STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
   toggleFavorite, addLog, updateLog, deleteLog, setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
-  ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, applySyncedSnapshot,
+  ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, pendingFamilyPhotoIds, applySyncedSnapshot,
   subscribe, validateData, validateSnapshot, bindScope, getScopeKey, normalizeScope, beginScopeChange, ACTIVE_SCOPE_KEY, FAMILY_PREFIX
 };

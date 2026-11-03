@@ -27,7 +27,7 @@ function setup(options = {}) {
   const setScope = value => {scope = value; listeners.forEach(fn => fn(store.getSyncInfo()));};
   const service = {
     async info() {calls.info++; return hooks.info ? hooks.info() : result();},
-    async create(input) {calls.create.push(clone(input)); if (hooks.create) return hooks.create(input); family = group(); setScope(shared); return result();},
+    async create(input) {calls.create.push(clone(input)); if (hooks.create) return hooks.create(input); family = group({memberCount: 1, members: [group().members[0]]}); setScope(shared); return result();},
     async preview(token) {calls.preview.push(token); return hooks.preview ? hooks.preview(token) : {name: '团团的小家庭', nickname: '团团', memberCount: 2, expiresAt: Date.now() + 86400000};},
     async join(input) {calls.join.push(clone(input)); if (hooks.join) return hooks.join(input); family = group({isManager: false}); setScope(shared); return result();},
     async invite() {calls.invite++; return hooks.invite ? hooks.invite() : {token: 'valid-family-invite-token', expiresAt: Date.now() + 86400000};},
@@ -70,6 +70,32 @@ test('create failures preserve fields and retries reuse the same operation ident
   app.page.create(); await app.page.confirmOperation();
   assert.equal(app.calls.create[0].requestId, app.calls.create[1].requestId);
   assert.equal(app.page.data.roleLabel, '爸爸');
+});
+
+test('creating the same family again after dissolution uses a fresh operation identity', async () => {
+  for (const lostResponse of [false, true]) {
+    const app = setup();
+    await app.page.onShow();
+    app.page.changeRole(change('妈妈'));
+    if (lostResponse) app.hooks.create = () => {throw Error('请求超时');};
+    app.page.create(); await app.page.confirmOperation();
+    if (lostResponse) {
+      // A later membership refresh can confirm a creation whose response was lost.
+      delete app.hooks.create;
+      app.setScope(shared);
+      app.hooks.info = () => ({family: group({memberCount: 1, members: [group().members[0]]})});
+      await app.page.reload();
+    }
+    app.page.leave(); await app.page.confirmOperation();
+    assert.equal(app.page.data.family, null);
+    app.page.changeName(change('宝宝的小家庭'));
+    app.page.create(); await app.page.confirmOperation();
+    const [first, second] = app.calls.create;
+    assert.equal(second.name, first.name);
+    assert.equal(second.label, first.label);
+    assert.notEqual(second.requestId, first.requestId);
+    assert.equal(app.page.data.family.memberCount, 1);
+  }
 });
 
 test('opening an invite previews only and joins only after explicit confirmation', async () => {

@@ -32,6 +32,14 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
     }
     return record;
   }
+  function needsRecorderCheck(family) {
+    // Families created by V1 cleared all imported recorder claims at creation.
+    // Families migrated by V1 retain the original, potentially tainted snapshot.
+    return family.legacyRecordersChecked !== true && (!family.attributionV1Revision || Boolean(family.originalAttributionFileID));
+  }
+  function needsUpgrade(family) {
+    return family.attributionV1Revision !== family.revision || needsRecorderCheck(family);
+  }
   async function resolve(owner, env, database = db) {
     const membership = await get('memberships', owner, database);
     if (!membership || membership.active === false) return {scope: personalScope(owner), family: null, member: null};
@@ -42,7 +50,7 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
     const state = {scope: {kind: 'family', id: family._id, membershipId: member.membershipId}, family, member};
     // Old function instances may spread unknown fields into a later revision.
     // Bind the schema marker to this exact snapshot, not just the family.
-    if (database === db && family.attributionV1Revision !== family.revision) return upgradeAttribution(state, env);
+    if (database === db && needsUpgrade(family)) return upgradeAttribution(state, env);
     return state;
   }
   function expect(event, state, protocolRequired = true) {
@@ -69,8 +77,8 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
     return validateSnapshot(downloaded.fileContent, {env, owner: state.member.owner, now: now(), familyTombstones: true,
       photoAllowed: id => familyFile(id, env, state.family._id, 'photos')});
   }
-  async function upgradeAttribution(state, env) {
-    const {family, member} = state, data = await snapshot(state, env);
+  async function verifyLegacyAuthors(state, data) {
+    const {family} = state;
     const candidates = new Map();
     for (const recipe of data.data.recipes) {
       if (family.revision === 1 && id64(family.createdBy)) recipe.createdBy = family.createdBy;
@@ -93,7 +101,34 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
           Number.isSafeInteger(row.publishedAt) && row.publishedAt > 0 && row.publishedAt < family.createdAt) recipe.createdBy = row.owner;
       }
     }
-    if (family.revision === 1) data.data.logs.forEach(log => { delete log.recordedBy; });
+  }
+  async function verifyLegacyRecorders(state, data, env) {
+    const {family} = state;
+    // Family member IDs are random and minted after the personal backup was
+    // sealed. Later commits stamped new logs on the server. A nickname alone
+    // cannot establish membership, and a renamed member's current label does
+    // not attest to a different label in a legacy backup.
+    const labels = new Map(family.members.map(member => [member.id, member.label]));
+    const unverified = data.data.logs.concat(data.deleted.logs).filter(({recordedBy}) =>
+      recordedBy && (family.revision === 1 || labels.get(recordedBy.memberId) !== recordedBy.label));
+    if (!unverified.length) return;
+    let originalClaims;
+    const claimKey = ({id, recordedBy}) => JSON.stringify([id, recordedBy.memberId, recordedBy.label]);
+    if (familyFile(family.originalAttributionFileID, env, family._id, 'snapshots')) {
+      // V1 only allowed a legacy claim to survive unchanged. A recorder absent
+      // from the pre-migration file was assigned by subsequent server commits,
+      // and remains valid even if the member has since changed roles or left.
+      const original = await snapshot({...state, family: {...family, fileID: family.originalAttributionFileID}}, env);
+      originalClaims = new Set(original.data.logs.concat(original.deleted.logs).filter(log => log.recordedBy).map(claimKey));
+    }
+    for (const log of unverified) {
+      if (!originalClaims || originalClaims.has(claimKey(log))) delete log.recordedBy;
+    }
+  }
+  async function upgradeAttribution(state, env) {
+    const {family, member} = state, data = await snapshot(state, env);
+    if (family.attributionV1Revision !== family.revision) await verifyLegacyAuthors(state, data);
+    if (needsRecorderCheck(family)) await verifyLegacyRecorders(state, data, env);
     const bytes = Buffer.from(JSON.stringify(data));
     if (bytes.length > 5 * 1024 * 1024) reject('家庭数据超过 5 MB，请先整理记录。', 'INVALID_SNAPSHOT');
     const fileID = await upload(bytes, family._id, 'snapshots', 'json', env);
@@ -101,10 +136,10 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
     try {
       migrated = await db.runTransaction(async transaction => {
         const latest = await current(member.owner, env, state.scope, transaction);
-        if (latest.family.attributionV1Revision === latest.family.revision) return latest;
+        if (!needsUpgrade(latest.family)) return latest;
         if (latest.family.revision !== family.revision || latest.family.fileID !== family.fileID) reject('家人刚更新了记录，请同步后重试。', 'FAMILY_CONFLICT');
         const revision = family.revision + 1;
-        const updated = {...latest.family, revision, fileID, attributionV1Revision: revision, updatedAt: now(),
+        const updated = {...latest.family, revision, fileID, attributionV1Revision: revision, legacyRecordersChecked: true, updatedAt: now(),
           originalAttributionFileID: latest.family.originalAttributionFileID || family.fileID};
         await put('families', family._id, clean(updated), transaction);
         return {...latest, family: updated};

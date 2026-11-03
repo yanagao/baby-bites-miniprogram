@@ -427,6 +427,26 @@ test('editing own, built-in and attributed recipes returns without publishing fr
   }
 });
 
+test('a text-only draft keeps the family photo synced while the editor was open', async () => {
+  const app = setup(), owner = 'a'.repeat(64), familyId = 'f'.repeat(64);
+  app.store.bindAccount(owner);
+  app.store.bindScope(owner, {kind: 'family', id: familyId, membershipId: 'e'.repeat(32)});
+  const id = ownRecipe(app, {photo: ''}), editor = app.open('editor', {id});
+  const snapshot = app.store.getSyncSnapshot(), {sequence} = app.store.getSyncInfo();
+  const photo = 'cloud://test.bucket/families/' + familyId + '/photos/first.jpg';
+  snapshot.data.recipes.find(recipe => recipe.id === id).photo = photo;
+  app.store.applySyncedSnapshot(snapshot, {owner, revision: 1, sequence});
+  input(editor, 'name', '新菜名');
+  await editor.save();
+  assert.equal(app.store.getRecipe(id).photo, photo);
+  assert.equal(app.store.getRecipe(id).name, '新菜名');
+
+  const next = app.open('editor', {id});
+  next.clearPhoto();
+  await next.save();
+  assert.equal(app.store.getRecipe(id).photo, '');
+});
+
 test('a new recipe with a very-liked meal saves both once and returns', async () => {
   const app = setup(), page = app.open('editor'); fillRecipe(page);
   page.toggleRecordMeal(valueEvent(true)); page.rate(valueEvent(3)); await page.save();

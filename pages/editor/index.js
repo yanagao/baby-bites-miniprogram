@@ -218,6 +218,8 @@ Page({
         name: form.name.trim(), minutes, category: this.data.categories[this.data.categoryIndex],
         texture: textures[this.data.textureIndex], ingredients, steps, note: form.note.trim(), photo
       });
+      // The store may have received a family photo while this draft was open.
+      if (this.original && photo === this.original.photo) delete recipe.photo;
       if (this.data.ageGroupsDirty) recipe.ageGroups = recipeAges.normalizeAgeGroups(this.data.ageGroups);
       else delete recipe.ageGroups;
       this.assertDraftAccount();

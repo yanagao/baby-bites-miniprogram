@@ -122,6 +122,55 @@ test('an old writer carrying a stale provenance revision cannot authorize a forg
   assert.equal(saved.snapshot.data.recipes[2].createdBy, undefined);
   assert.equal(env.tables.get(COLLECTIONS.families).get(alice.scope.id).attributionV1Revision, saved.revision);
 });
+test('migrating a mixed legacy family verifies meal recorders before they can enter deletion history', async () => {
+  const env = environment(), foreign = await env.create('carol'), alice = await env.create(), bob = await env.join();
+  const family = env.tables.get(COLLECTIONS.families).get(alice.scope.id);
+  const initial = JSON.parse(env.files.get(family.fileID));
+  const foreignRecorder = {memberId: foreign.family.memberId, label: '妈妈'};
+  // Old creation copied this other family's recorder from the personal backup.
+  initial.data.logs[0].recordedBy = foreignRecorder;
+  env.files.set(family.fileID, Buffer.from(JSON.stringify(initial)));
+  initial.data.logs.push({...initial.data.logs[0], id: 'real', recordedBy: undefined});
+  const saved = await env.commit('bob', bob.scope, family.revision, initial);
+  assert.deepEqual(saved.snapshot.data.logs[1].recordedBy, {memberId: bob.family.memberId, label: '爸爸'});
+  delete env.tables.get(COLLECTIONS.families).get(alice.scope.id).attributionV1Revision;
+
+  const clean = await env.read('alice', alice.scope);
+  assert.equal(clean.snapshot.data.logs[0].recordedBy, undefined);
+  assert.deepEqual(clean.snapshot.data.logs[1].recordedBy, saved.snapshot.data.logs[1].recordedBy);
+  const removed = clean.snapshot.data.logs.shift();
+  clean.snapshot.deleted.logs.push({id: removed.id, updatedAt: NOW + 1, recordedBy: foreignRecorder});
+  const deleted = await env.commit('alice', alice.scope, clean.revision, clean.snapshot);
+  assert.equal(deleted.snapshot.deleted.logs[0].recordedBy, undefined);
+  deleted.snapshot.data.logs.push({...removed, recordedBy: foreignRecorder, updatedAt: NOW + 2});
+  const restored = await env.commit('alice', alice.scope, deleted.revision, deleted.snapshot);
+  assert.equal(restored.snapshot.data.logs.find(log => log.id === removed.id).recordedBy, undefined);
+});
+test('a V1-migrated family scrubs inherited tombstones and keeps later verified attributions after the member leaves', async () => {
+  const env = environment(), alice = await env.create(), bob = await env.join();
+  const family = env.tables.get(COLLECTIONS.families).get(alice.scope.id);
+  const original = family.fileID, previous = JSON.parse(env.files.get(original));
+  previous.data.logs[0].recordedBy = {memberId: 'f'.repeat(32), label: '爸爸'};
+  env.files.set(original, Buffer.from(JSON.stringify(previous)));
+  const next = clone(previous);
+  next.data.logs = [{...previous.data.logs[0], id: 'later', recordedBy: undefined}];
+  next.deleted.logs.push({id: 'l1', updatedAt: NOW + 1});
+  next.data.recipes.push(recipe('later-recipe'));
+  const saved = await env.commit('bob', bob.scope, family.revision, next);
+  const laterRecorder = saved.snapshot.data.logs[0].recordedBy;
+  assert.deepEqual(saved.snapshot.deleted.logs[0].recordedBy, previous.data.logs[0].recordedBy);
+  await env.call('bob', 'familyLeave', bob.scope);
+  // Previous software marked recipes migrated, without checking mixed logs.
+  env.tables.get(COLLECTIONS.families).get(alice.scope.id).originalAttributionFileID = original;
+  const fixed = await env.socialCall('alice', 'mine', alice.scope);
+  assert.ok(!fixed.error, JSON.stringify(fixed));
+  const read = await env.read('alice', alice.scope);
+  assert.equal(read.revision, saved.revision + 1);
+  assert.deepEqual(read.snapshot.data.logs[0].recordedBy, laterRecorder);
+  assert.equal(read.snapshot.deleted.logs[0].recordedBy, undefined);
+  assert.equal(read.snapshot.data.recipes[1].createdBy, ownerFor('bob'));
+  assert.equal((await env.read('alice', alice.scope)).revision, read.revision);
+});
 test('birthdays prefer existing private data and only migrate a valid own public birthday when absent',async()=>{
   for(const existing of [undefined,null,'2025-01-01']){const env=environment(),data=snapshot();env.tables.get(COLLECTIONS.profiles).set(profileIdFor(ownerFor('alice')),{_id:profileIdFor(ownerFor('alice')),owner:ownerFor('alice'),name:'妈妈',babyBirthDate:'2024-01-01'});
     if(existing!==undefined)Object.assign(data.data,{babyBirthDate:existing,babyBirthDateUpdatedAt:NOW-2});const created=await env.create('alice',data),read=await env.read('alice',created.scope);assert.equal(read.snapshot.data.babyBirthDate,existing===undefined?'2024-01-01':existing);assert.equal(env.tables.get(COLLECTIONS.profiles).get(profileIdFor(ownerFor('alice'))).babyBirthDate,'2024-01-01');}

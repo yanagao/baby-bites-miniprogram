@@ -63,6 +63,7 @@ Page({
     }
   },
   present(result) {
+    if (result.family) this.creation = null;
     const state = store.getState();
     const member = result.family && result.family.members.find(item => item.isSelf);
     this.setData({family: result.family, loading: false, error: '', actionError: '',

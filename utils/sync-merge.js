@@ -78,7 +78,25 @@ function keepRemoteAttribution(merged, remote, field, family) {
   }
 }
 
-function mergeSnapshots(local, remote, family = false) {
+function mergeFamilyPhotos(recipes, local, remote, editedPhotoIds) {
+  const edits = new Map(local.filter(recipe => editedPhotoIds.has(recipe.id)).map(recipe => [recipe.id, recipe.photo]));
+  const remoteRecipes = new Map(remote.map(recipe => [recipe.id, recipe]));
+  const referenced = new Set(remote.map(recipe => recipe.photo));
+  for (const recipe of recipes.values()) {
+    const current = remoteRecipes.get(recipe.id);
+    let photo = current ? current.photo : recipe.photo;
+    if (edits.has(recipe.id)) photo = edits.get(recipe.id);
+    // A restore can bring back a no-longer-readable family file. The cloud
+    // accepts only currently referenced family files or caller-owned uploads.
+    if (/^cloud:\/\/[^/]+\/families\//.test(photo) && !referenced.has(photo)) photo = current ? current.photo : '';
+    // Publishing compares the recipe timestamp. A photo edit merged into a
+    // newer remote title must still produce a new public revision.
+    const updatedAt = current && photo !== current.photo && timeOf(recipe) <= timeOf(current) ? timeOf(current) + 1 : recipe.updatedAt;
+    if (recipe.photo !== photo || recipe.updatedAt !== updatedAt) recipes.set(recipe.id, {...recipe, photo, updatedAt});
+  }
+}
+
+function mergeSnapshots(local, remote, family = false, editedPhotoIds) {
   const deletedRecipes = mergeTombstones(local.deleted.recipes, remote.deleted.recipes);
   const deletedLogs = mergeTombstones(local.deleted.logs, remote.deleted.logs);
   const recipes = mergeItems(local.data.recipes, remote.data.recipes, deletedRecipes);
@@ -90,6 +108,7 @@ function mergeSnapshots(local, remote, family = false) {
   // historical attribution cannot be verified. Drop any cached backup claim.
   keepRemoteAttribution(recipes, remote.data.recipes, 'createdBy', family);
   keepRemoteAttribution(logs, remote.data.logs, 'recordedBy', family);
+  if (family && editedPhotoIds) mergeFamilyPhotos(recipes, local.data.recipes, remote.data.recipes, editedPhotoIds);
   // A record cannot survive removal of the recipe it belongs to, even when the
   // record was added offline after the recipe was deleted on another device.
   logs.forEach((log, id) => {
