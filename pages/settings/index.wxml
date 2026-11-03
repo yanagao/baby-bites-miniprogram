@@ -11,12 +11,11 @@
       <view wx:if="{{syncMessage}}" class="settings-description settings-sync-description">{{syncMessage}}</view>
       <view wx:if="{{syncState !== 'unconfigured'}}" class="settings-sync-footer">
         <text class="settings-sync-time">{{syncTime || '尚无成功同步记录'}}</text>
-        <t-button theme="primary" size="small" loading="{{syncState === 'syncing'}}" disabled="{{syncState === 'syncing'}}" bind:tap="syncNow">立即同步</t-button>
+        <t-button class="settings-sync-action" theme="primary" size="small" shape="round" loading="{{syncState === 'syncing'}}" disabled="{{syncState === 'syncing'}}" bind:tap="syncNow">立即同步</t-button>
       </view>
     </view>
+    <view class="settings-card settings-family-entry"><t-cell title="宝宝的家庭" description="{{familyActive ? '管理共享宝宝数据的家人' : '邀请爸爸妈妈和祖辈一起记录'}}" bordered="{{false}}" arrow bind:click="openFamily" /></view>
   </view>
-
-  <view class="settings-card settings-family-entry"><t-cell title="宝宝的家庭" description="{{familyActive ? '管理共享宝宝数据的家人' : '邀请爸爸妈妈和祖辈一起记录'}}" arrow bind:click="openFamily" /></view>
   <view class="settings-section">
     <view class="settings-section-title">{{familyActive ? '家庭数据与备份' : '数据与备份'}}</view>
     <view class="settings-card settings-overview">
@@ -33,7 +32,7 @@
       <view class="settings-description settings-storage-description">{{storageDescription}}</view>
     </view>
     <view class="settings-card settings-backup-actions">
-      <t-cell-group>
+      <t-cell-group bordered="{{false}}">
         <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导出备份文件" description="保存菜谱、照片和用餐记录" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="exportBackup" />
         <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="导入备份文件" description="从微信聊天选择 JSON 文件，最多 20 MB" note="{{busy ? '处理中…' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="chooseBackup" />
       </t-cell-group>
@@ -44,9 +43,9 @@
           <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="复制备份内容" description="复制为文字，方便自行保存" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="copyBackup" />
           <t-cell t-class-center="settings-cell-main" t-class-note="settings-cell-note" title="粘贴备份内容" note="{{showPaste ? '收起' : ''}}" arrow="{{!busy && !scopeLocked}}" hover="{{!busy && !scopeLocked}}" bind:click="togglePaste" />
           <view wx:if="{{showPaste}}" class="settings-paste">
-            <t-textarea label="备份内容" maxlength="-1" disabled="{{busy || scopeLocked}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" />
+            <view class="settings-paste-field"><t-textarea label="备份内容" maxlength="-1" disabled="{{busy || scopeLocked}}" value="{{backupText}}" bind:change="inputBackup" placeholder="粘贴小口袋备份的 JSON 内容" /></view>
             <view class="settings-paste-action">
-              <t-button theme="primary" size="small" disabled="{{busy || scopeLocked}}" loading="{{busy}}" bind:tap="confirmImport">合并导入</t-button>
+              <t-button theme="primary" size="small" shape="round" disabled="{{busy || scopeLocked}}" loading="{{busy}}" bind:tap="confirmImport">合并导入</t-button>
             </view>
           </view>
           <view class="settings-backup-help">
