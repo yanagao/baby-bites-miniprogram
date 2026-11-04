@@ -193,6 +193,72 @@ test('backup import replaces an older completion after the same meal was deleted
   assert.equal(target.store.getState().mealPlans[0].recipeId, b);
 });
 
+test('importing a rebuilt meal atomically adds the missing deletion boundary for its next family sync', () => {
+  const source = setup(), [a, b] = source.ids;
+  const [plan] = source.store.saveMealPlans([entry(a)]);
+  const logId = source.store.completeMeal({planId: plan.id, rating: 1});
+  const oldStorage = source.persisted();
+  oldStorage.logs[0].recordedBy = {memberId: 'a'.repeat(32), label: '妈妈'};
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  source.store.completeMeal({planId: plan.id, rating: 3});
+  const backup = source.store.exportBackup(), target = setup(oldStorage);
+  const previous = target.store.getSyncSnapshot(), persisted = target.persisted();
+  assert.deepEqual(previous.deleted.logs, []);
+  target.fail();
+  assert.throws(() => target.store.importBackup(backup), /保存失败/);
+  assert.deepEqual(target.store.getSyncSnapshot(), previous);
+  assert.deepEqual(target.persisted(), persisted);
+  target.fail(false); target.store.importBackup(backup);
+  const restored = target.store.getSyncSnapshot(), boundary = restored.deleted.logs.find(log => log.id === logId);
+  assert.ok(boundary, 'the portable backup omitted the source device deletion history');
+  assert.ok(boundary.updatedAt >= Math.max(previous.data.logs[0].createdAt, previous.data.logs[0].updatedAt));
+  assert.ok(boundary.updatedAt < restored.data.logs[0].createdAt);
+  assert.equal(mergeSnapshots(restored, previous, true).data.logs[0].recordedBy, undefined);
+  assert.deepEqual(setup(target.persisted()).store.getSyncSnapshot().deleted.logs, restored.deleted.logs);
+});
+
+test('importing a rebuilt completion of the same dish preserves its new identity and claim through family merge', () => {
+  const source = setup(), [a] = source.ids;
+  const [plan] = source.store.saveMealPlans([entry(a)]);
+  const logId = source.store.completeMeal({planId: plan.id, rating: 1});
+  const oldStorage = source.persisted();
+  oldStorage.logs[0].recordedBy = {memberId: 'a'.repeat(32), label: '妈妈'};
+  source.store.deleteLog(logId);
+  assert.equal(source.store.completeMeal({planId: plan.id, rating: 3}), logId);
+  const backup = JSON.parse(source.store.exportBackup());
+  for (const claim of [undefined, {memberId: 'b'.repeat(32), label: '爸爸'}]) {
+    const target = setup(oldStorage), authoritative = target.store.getSyncSnapshot();
+    const incoming = copy(backup);
+    if (claim) incoming.logs[0].recordedBy = claim;
+    target.store.importBackup(JSON.stringify(incoming));
+    const restored = target.store.getSyncSnapshot(), deletion = restored.deleted.logs.find(log => log.id === logId);
+    assert.ok(deletion, 'same-dish reconstruction still replaces the old stable identity');
+    assert.ok(deletion.updatedAt >= Math.max(authoritative.data.logs[0].createdAt, authoritative.data.logs[0].updatedAt));
+    assert.ok(deletion.updatedAt < incoming.logs[0].createdAt);
+    assert.deepEqual(restored.data.logs[0], incoming.logs[0]);
+    assert.deepEqual(mergeSnapshots(restored, authoritative, true).data.logs[0], incoming.logs[0],
+      'the new claim, including absence, reaches the server unchanged instead of inheriting Mom');
+  }
+});
+
+test('ordinary feedback imports preserve their generation and do not invent deletion boundaries', () => {
+  for (const planned of [false, true]) {
+    const source = setup(), [a] = source.ids;
+    const [plan] = source.store.saveMealPlans([entry(a)]);
+    const logId = planned ? source.store.completeMeal({planId: plan.id, rating: 1}) : source.store.addLog({...entry(a), rating: 1});
+    const oldStorage = source.persisted(), mother = {memberId: 'a'.repeat(32), label: '妈妈'};
+    oldStorage.logs[0].recordedBy = mother;
+    source.store.updateLog(logId, {date: DATE, rating: 3, note: '补充反馈'});
+    const backup = source.store.exportBackup(), target = setup(oldStorage), previous = target.store.getSyncSnapshot();
+    target.store.importBackup(backup);
+    const restored = target.store.getSyncSnapshot(), merged = mergeSnapshots(restored, previous, true);
+    assert.deepEqual(restored.deleted.logs, []);
+    assert.equal(merged.data.logs[0].createdAt, previous.data.logs[0].createdAt);
+    assert.equal(merged.data.logs[0].note, '补充反馈');
+    assert.deepEqual(merged.data.logs[0].recordedBy, mother);
+  }
+});
+
 for (const [name, date, meal] of [
   ['date', shiftDate(DATE, -1), 'breakfast'],
   ['meal', DATE, 'dinner'],
@@ -337,7 +403,10 @@ test('rebuilt completion imports preserve tombstones and the replacement authors
     assert.deepEqual(target.store.getLog(logId).recordedBy, author);
     assert.equal(target.store.getState().mealPlans[0].recipeId, b);
     const restored = target.store.getSyncSnapshot();
-    assert.deepEqual(restored.deleted.logs, oldSnapshot.deleted.logs);
+    assert.equal(restored.deleted.logs.length, oldSnapshot.deleted.logs.length);
+    assert.ok(restored.deleted.logs[0].updatedAt >= oldSnapshot.deleted.logs[0].updatedAt);
+    assert.ok(restored.deleted.logs[0].updatedAt >= oldSnapshot.data.logs[0].updatedAt);
+    assert.ok(restored.deleted.logs[0].updatedAt < restored.data.logs[0].createdAt);
     assert.ok(restored.data.logs[0].updatedAt > restored.deleted.logs[0].updatedAt);
     assert.equal(mergeSnapshots(restored, oldSnapshot).data.logs[0].recipeId, b);
   }

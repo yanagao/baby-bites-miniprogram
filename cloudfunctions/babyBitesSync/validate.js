@@ -145,11 +145,12 @@ function validateSnapshot(content, {env, owner, now = Date.now(), photoAllowed, 
     if (!Array.isArray(entries) || entries.length > (kind === 'recipes' ? 10000 : kind === 'mealPlans' ? 30000 : 100000)) reject('删除记录超过同步限制。');
     const ids = new Set();
     const fields = ['id', 'updatedAt'];
-    if (familyTombstones && kind !== 'mealPlans') fields.push(...(kind === 'recipes' ? ['createdBy', 'source'] : ['recordedBy']));
+    if (familyTombstones && kind !== 'mealPlans') fields.push(...(kind === 'recipes' ? ['createdBy', 'source'] : ['recordedBy', 'createdAt']));
     entries.forEach(entry => {
       if (!keys(entry, fields) || !nonempty(entry.id, 100) || ids.has(entry.id) || !timestamp(entry.updatedAt) ||
         kind === 'mealPlans' && (!/^meal-\d{4}-\d{2}-\d{2}-(?:breakfast|lunch|dinner)$/.test(entry.id) || !validDate(entry.id.slice(5, 15), now, true)) ||
-        !validAuthor(entry.createdBy) || !validSource(entry.source) || !validRecorder(entry.recordedBy)) {
+        !validAuthor(entry.createdBy) || !validSource(entry.source) || !validRecorder(entry.recordedBy) ||
+        entry.createdAt !== undefined && (!timestamp(entry.createdAt) || entry.createdAt > entry.updatedAt)) {
         reject('删除记录格式不正确。');
       }
       ids.add(entry.id);

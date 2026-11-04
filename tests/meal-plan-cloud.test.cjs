@@ -88,4 +88,22 @@ for (const [name, validate] of validators) {
       assert.throws(() => check({...data, deleted: {...data.deleted, mealPlans: entries}}), {code: 'INVALID_SNAPSHOT'});
     }
   });
+
+  test(`${name}: only family log tombstones may retain a valid deleted generation`, () => {
+    const data = snapshot();
+    data.deleted.logs = [{id: 'meal-log-meal-2026-11-04-breakfast', updatedAt: NOW, createdAt: NOW - 10,
+      recordedBy: {memberId: 'a'.repeat(32), label: '妈妈'}}];
+    const familyCheck = value => validate(Buffer.from(JSON.stringify(value)), {...context, familyTombstones: true});
+    assert.deepEqual(familyCheck(data).deleted.logs, data.deleted.logs);
+    assert.throws(() => check(data), {code: 'INVALID_SNAPSHOT'});
+    for (const createdAt of [null, -1, NOW + 1, 1.5, '0']) {
+      assert.throws(() => familyCheck({...data, deleted: {...data.deleted,
+        logs: [{...data.deleted.logs[0], createdAt}]}}), {code: 'INVALID_SNAPSHOT'});
+    }
+    for (const kind of ['recipes', 'mealPlans']) {
+      const invalid = snapshot();
+      invalid.deleted[kind] = [{id: kind === 'recipes' ? 'r1' : plan().id, updatedAt: NOW, createdAt: NOW - 10}];
+      assert.throws(() => familyCheck(invalid), {code: 'INVALID_SNAPSHOT'});
+    }
+  });
 }

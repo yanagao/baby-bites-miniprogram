@@ -398,9 +398,9 @@ function commit(mutator, recover) {
     if (persisted && persisted.__syncMigratedTo) fail('本机数据已绑定微信账号，请重新同步后再保存。');
   }
   const next = clone(state);
-  mutator(next);
-  const validated = validateData(next);
   const nextSync = clone(sync);
+  mutator(next, nextSync);
+  const validated = validateData(next);
   nextSync.sequence += 1;
   nextSync.dirty = true;
   nextSync.hasLocalData = true;
@@ -691,7 +691,7 @@ function importBackup(text, options) {
       JSON.stringify(Object.keys(b).filter(key => key !== 'photo').sort().map(key => [key, b[key]]));
   };
   const summary = {addedRecipes: 0, updatedRecipes: 0, addedLogs: 0};
-  commit(next => {
+  commit((next, nextSync) => {
     const deletedRecipes = new Map(sync.deleted.recipes.map(item => [item.id, item]));
     const deletedLogs = new Map(sync.deleted.logs.map(item => [item.id, item]));
     const restoreKnownDeletion = (item, tombstones) => {
@@ -717,10 +717,25 @@ function importBackup(text, options) {
     const logs = new Map(next.logs.map(log => [log.id, log]));
     const incomingPlans = new Map((incoming.mealPlans || []).map(plan => [plan.id, plan]));
     const rebuiltMeals = [];
+    const replaceRebuiltMeal = log => {
+      const local = logs.get(log.id), deletion = deletedLogs.get(log.id);
+      const boundary = Math.max(local.createdAt, local.updatedAt, deletion ? deletion.updatedAt : 0);
+      if (log.createdAt <= boundary) return;
+      // Portable backups omit deletions. Record the locally verified boundary
+      // with the replacement so its next sync cannot inherit the old recorder.
+      deletedLogs.set(log.id, {id: log.id, updatedAt: boundary});
+      logs.set(log.id, log);
+    };
     incoming.logs.forEach(log => {
       const local = logs.get(log.id);
       if (!local) { logs.set(log.id, restoreKnownDeletion(log, deletedLogs)); summary.addedLogs += 1; }
-      else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) logs.set(log.id, log);
+      else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) {
+        const originalPlanId = log.id.startsWith('meal-log-') ? log.id.slice('meal-log-'.length) : '';
+        const deletion = deletedLogs.get(log.id);
+        if (validPlanId(originalPlanId) && log.createdAt > Math.max(local.createdAt, local.updatedAt, deletion ? deletion.updatedAt : 0)) {
+          replaceRebuiltMeal(log);
+        } else logs.set(log.id, log);
+      }
       else if (log.recipeId !== local.recipeId && log.updatedAt > local.updatedAt &&
         log.createdAt > Math.max(local.createdAt, local.updatedAt) && log.id.startsWith('meal-log-')) {
         // The recorded date/meal may be edited; the stable ID retains its original slot.
@@ -728,7 +743,7 @@ function importBackup(text, options) {
         if (!validPlanId(originalPlanId)) return;
         if (originalPlanId !== planId(log.date, log.meal)) {
           // Moved history is independent of later changes to its original plan.
-          logs.set(log.id, log);
+          replaceRebuiltMeal(log);
           return;
         }
         const plan = incomingPlans.get(originalPlanId);
@@ -743,9 +758,10 @@ function importBackup(text, options) {
       if (localPlan && localPlan.recipeId !== plan.recipeId && (plan.updatedAt <= localPlan.updatedAt ||
         Array.from(logs.values()).some(item => item.id !== log.id && item.date === localPlan.date &&
           item.meal === localPlan.meal && item.recipeId === localPlan.recipeId))) continue;
-      logs.set(log.id, log);
+      replaceRebuiltMeal(log);
     }
     next.logs = Array.from(logs.values());
+    nextSync.deleted.logs = Array.from(deletedLogs.values());
     if (incoming.mealPlans !== undefined) {
       const deletedPlans = new Map((sync.deleted.mealPlans || []).map(item => [item.id, item]));
       const plans = new Map((next.mealPlans || []).map(plan => [plan.id, plan]));

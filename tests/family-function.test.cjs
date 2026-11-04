@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const {mergeSnapshots} = require('../utils/sync-merge');
 const {createHandler: syncHandler} = require('../cloudfunctions/babyBitesSync');
 const {createHandler: socialHandler, COLLECTIONS, recipeIdFor, profileIdFor} = require('../cloudfunctions/babyBitesSocial');
 const ENV = 'cloud1-family-test', APPID = 'wx-family-test', NOW = Date.parse('2026-11-02T03:00:00Z');
@@ -280,6 +281,180 @@ test('family commits stamp new authors and recorders without rewriting historica
   const saved=await env.commit('bob',b.scope,read.revision,read.snapshot);assert.ok(saved.snapshot,JSON.stringify(saved));assert.equal(saved.snapshot.data.recipes[0].createdBy,ownerFor('alice'));assert.equal(saved.snapshot.data.recipes[1].createdBy,ownerFor('bob'));assert.equal(saved.snapshot.data.logs[0].recordedBy,undefined);assert.deepEqual(saved.snapshot.data.logs[1].recordedBy,{memberId:b.family.memberId,label:'爸爸'});
   const forged=clone(saved.snapshot);forged.data.recipes[0].createdBy=ownerFor('bob');assert.equal((await env.commit('bob',b.scope,saved.revision,forged)).error.code,'INVALID_SNAPSHOT');
   const forgedRecorder=clone(saved.snapshot);forgedRecorder.data.logs[1].recordedBy.label='妈妈';assert.equal((await env.commit('bob',b.scope,saved.revision,forgedRecorder)).error.code,'INVALID_SNAPSHOT');
+});
+
+const completionId = 'meal-log-meal-2026-11-02-breakfast';
+async function completedFamilyMeal() {
+  const env = environment(), data = snapshot();
+  data.data.logs = []; data.data.recipes.push(recipe('r2'));
+  data.data.mealPlans = [{id: 'meal-2026-11-02-breakfast', date: '2026-11-02', meal: 'breakfast',
+    recipeId: 'r1', createdAt: NOW, updatedAt: NOW}];
+  data.deleted.mealPlans = [];
+  const alice = await env.create('alice', data), bob = await env.join();
+  const first = await env.read('alice', alice.scope);
+  first.snapshot.data.logs.push({id: completionId, recipeId: 'r1', date: '2026-11-02', meal: 'breakfast',
+    rating: 1, portion: '', note: '', createdAt: NOW + 10, updatedAt: NOW + 10});
+  const saved = await env.commit('alice', alice.scope, first.revision, first.snapshot);
+  assert.ok(saved.snapshot, JSON.stringify(saved));
+  return {env, alice, bob, saved};
+}
+
+for (const syncedDeletion of [false, true]) test(`a new family completion credits its new member after ${syncedDeletion ? 'a synchronized' : 'an offline'} deletion`, async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const mom = {memberId: alice.family.memberId, label: '妈妈'}, dad = {memberId: bob.family.memberId, label: '爸爸'};
+  assert.deepEqual(saved.snapshot.data.logs[0].recordedBy, mom);
+  const removed = clone(saved.snapshot);
+  removed.data.logs = []; removed.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  let previous = saved;
+  if (syncedDeletion) previous = await env.commit('alice', alice.scope, saved.revision, removed);
+  const next = clone(removed);
+  next.data.mealPlans[0].recipeId = 'r2'; next.data.mealPlans[0].updatedAt = NOW + 30;
+  next.data.logs = [{id: completionId, recipeId: 'r2', date: '2026-11-02', meal: 'breakfast',
+    rating: 3, portion: '', note: '', createdAt: NOW + 30, updatedAt: NOW + 30}];
+  const merged = mergeSnapshots(next, previous.snapshot, true);
+  assert.equal(merged.data.logs[0].recordedBy, undefined);
+  const result = await env.commit('bob', bob.scope, previous.revision, merged);
+  assert.ok(result.snapshot, JSON.stringify(result));
+  assert.deepEqual(result.snapshot.data.logs[0].recordedBy, dad);
+  assert.equal(result.snapshot.data.logs[0].recipeId, 'r2');
+  assert.deepEqual(result.snapshot.deleted.logs[0], {id: completionId, updatedAt: NOW + 20, createdAt: NOW + 10, recordedBy: mom});
+  assert.deepEqual((await env.read('bob', bob.scope)).snapshot.data.logs[0].recordedBy, dad);
+  const socialRead = await env.socialCall('bob', 'familyRecipeLink', bob.scope, {sourceRecipeId: 'r2'});
+  assert.equal(socialRead.error, undefined, JSON.stringify(socialRead));
+});
+
+test('same-generation concurrent completions and edits preserve the server recorder and creation time', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const original = saved.snapshot.data.logs[0], next = clone(saved.snapshot);
+  delete next.data.logs[0].recordedBy;
+  next.data.logs[0].createdAt += 5; next.data.logs[0].updatedAt += 5;
+  const concurrent = await env.commit('bob', bob.scope, saved.revision, next);
+  assert.ok(concurrent.snapshot, JSON.stringify(concurrent));
+  assert.deepEqual(concurrent.snapshot.data.logs[0].recordedBy, original.recordedBy);
+  assert.equal(concurrent.snapshot.data.logs[0].createdAt, original.createdAt);
+  const forged = clone(concurrent.snapshot);
+  forged.data.logs[0].createdAt += 100;
+  forged.data.logs[0].recordedBy = {memberId: bob.family.memberId, label: '爸爸'};
+  assert.equal((await env.commit('bob', bob.scope, concurrent.revision, forged)).error.code, 'INVALID_SNAPSHOT');
+  const edited = clone(concurrent.snapshot);
+  delete edited.data.logs[0].recordedBy;
+  edited.data.logs[0].updatedAt += 100;
+  const result = await env.commit('bob', bob.scope, concurrent.revision, edited);
+  assert.deepEqual(result.snapshot.data.logs[0].recordedBy, original.recordedBy);
+  assert.equal((await env.read('alice', alice.scope)).snapshot.data.logs[0].createdAt, original.createdAt);
+});
+
+test('new completion generations retain canonical deletion provenance and unverified backup claims stay unknown', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const next = clone(saved.snapshot), original = clone(next.data.logs[0]);
+  next.deleted.logs = [{id: completionId, updatedAt: NOW + 20, createdAt: NOW + 19,
+    recordedBy: {memberId: bob.family.memberId, label: '伪造旧归属'}}];
+  Object.assign(next.data.logs[0], {recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 30});
+  next.data.mealPlans[0].recipeId = 'r2';
+  // This is an imported claim, not a fresh completion by the uploading actor.
+  next.data.logs[0].recordedBy = {memberId: alice.family.memberId, label: '妈妈'};
+  const imported = await env.commit('bob', bob.scope, saved.revision, next);
+  assert.ok(imported.snapshot, JSON.stringify(imported));
+  assert.equal(imported.snapshot.data.logs[0].recordedBy, undefined);
+  assert.equal(imported.snapshot.deleted.logs[0].createdAt, original.createdAt);
+  assert.deepEqual(imported.snapshot.deleted.logs[0].recordedBy, original.recordedBy);
+});
+
+test('repeated completion generations restore only the recorder associated with that deleted generation', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const original = clone(saved.snapshot.data.logs[0]), next = clone(saved.snapshot);
+  next.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  Object.assign(next.data.logs[0], {recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 30});
+  delete next.data.logs[0].recordedBy;
+  next.data.mealPlans[0].recipeId = 'r2';
+  const rebuilt = await env.commit('bob', bob.scope, saved.revision, next);
+  assert.ok(rebuilt.snapshot, JSON.stringify(rebuilt));
+  const replacement = clone(rebuilt.snapshot.data.logs[0]), remove = clone(rebuilt.snapshot);
+  remove.data.logs = []; remove.deleted.logs = [{id: completionId, updatedAt: NOW + 40}];
+  const removed = await env.commit('alice', alice.scope, rebuilt.revision, remove);
+  assert.equal(removed.snapshot.deleted.logs[0].createdAt, replacement.createdAt);
+  assert.deepEqual(removed.snapshot.deleted.logs[0].recordedBy, replacement.recordedBy);
+  const sameGeneration = clone(removed.snapshot);
+  sameGeneration.data.logs = [{...replacement, updatedAt: NOW + 50, recordedBy: original.recordedBy}];
+  const restored = await env.commit('alice', alice.scope, removed.revision, sameGeneration);
+  assert.deepEqual(restored.snapshot.data.logs[0].recordedBy, replacement.recordedBy);
+  // After deleting and restoring B, the latest boundary covers both A and B.
+  // Its recorder must not silently turn an older A backup into B's generation.
+  const staleWhileLive = clone(restored.snapshot);
+  staleWhileLive.data.logs = [{...original, updatedAt: NOW + 55, recordedBy: replacement.recordedBy}];
+  const staleResult = await env.commit('bob', bob.scope, restored.revision, staleWhileLive);
+  assert.equal(staleResult.error && staleResult.error.code, 'FAMILY_CONFLICT');
+  assert.deepEqual((await env.read('alice', alice.scope)).snapshot.data.logs[0], restored.snapshot.data.logs[0]);
+  const removeAgain = clone(restored.snapshot);
+  removeAgain.data.logs = []; removeAgain.deleted.logs = [{id: completionId, updatedAt: NOW + 60}];
+  const deletedAgain = await env.commit('alice', alice.scope, restored.revision, removeAgain);
+  const olderBackup = clone(deletedAgain.snapshot);
+  olderBackup.data.logs = [{...original, updatedAt: NOW + 70, recordedBy: replacement.recordedBy}];
+  const oldRestored = await env.commit('bob', bob.scope, deletedAgain.revision, olderBackup);
+  assert.ok(oldRestored.snapshot, JSON.stringify(oldRestored));
+  assert.equal(oldRestored.snapshot.data.logs[0].recordedBy, undefined, 'the latest deleted recorder cannot attest to an earlier generation');
+});
+
+test('a late old-generation edit cannot replace a completion born after its deletion boundary', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const older = clone(saved.snapshot), updated = clone(saved.snapshot);
+  updated.data.logs[0].updatedAt = NOW + 100;
+  const oldEdited = await env.commit('alice', alice.scope, saved.revision, updated);
+  const newer = clone(older);
+  newer.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  newer.data.mealPlans[0].recipeId = 'r2';
+  Object.assign(newer.data.logs[0], {recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 30});
+  delete newer.data.logs[0].recordedBy;
+  const rebuilt = await env.commit('bob', bob.scope, oldEdited.revision, newer);
+  assert.ok(rebuilt.snapshot, JSON.stringify(rebuilt));
+  assert.equal(rebuilt.snapshot.deleted.logs[0].updatedAt, NOW + 20);
+  assert.equal(rebuilt.snapshot.data.logs[0].recordedBy.memberId, bob.family.memberId);
+  const stale = clone(rebuilt.snapshot);
+  stale.data.logs = [{...older.data.logs[0], updatedAt: NOW + 200}];
+  const rejected = await env.commit('alice', alice.scope, rebuilt.revision, stale);
+  assert.equal(rejected.error.code, 'FAMILY_CONFLICT');
+  stale.deleted.logs[0].updatedAt = NOW + 150;
+  const advancedBoundary = await env.commit('alice', alice.scope, rebuilt.revision, stale);
+  assert.equal(advancedBoundary.error.code, 'FAMILY_CONFLICT', 'a newer client marker cannot erase the older authoritative boundary');
+  assert.equal((await env.read('alice', alice.scope)).snapshot.data.logs[0].recipeId, 'r2');
+});
+
+test('canonical deletion metadata remains readable for legacy creation and edit timestamp ordering', async () => {
+  for (const createdAt of [NOW + 200, null]) {
+    const {env, alice, saved} = await completedFamilyMeal();
+    const legacy = clone(saved.snapshot);
+    legacy.data.logs[0].createdAt = createdAt; legacy.data.logs[0].updatedAt = NOW + 100;
+    env.files.set(saved.fileID, Buffer.from(JSON.stringify(legacy)));
+    const deletion = clone(legacy); deletion.data.logs = []; deletion.deleted.logs = [];
+    const result = await env.commit('alice', alice.scope, saved.revision, deletion);
+    assert.ok(result.snapshot, JSON.stringify(result));
+    const tombstone = result.snapshot.deleted.logs[0];
+    assert.ok(tombstone.updatedAt >= (createdAt || 0));
+    assert.equal(tombstone.createdAt, createdAt === null ? undefined : createdAt);
+    assert.ok((await env.read('alice', alice.scope)).snapshot);
+  }
+});
+
+test('legacy completion tombstones preserve historical attribution while ordinary log IDs cannot claim a new generation', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const remove = clone(saved.snapshot), original = clone(remove.data.logs[0]);
+  remove.data.logs = []; remove.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  const removed = await env.commit('alice', alice.scope, saved.revision, remove);
+  const legacy = clone(removed.snapshot); delete legacy.deleted.logs[0].createdAt;
+  env.files.set(removed.fileID, Buffer.from(JSON.stringify(legacy)));
+  const restore = clone(legacy);
+  restore.data.logs = [{...original, updatedAt: NOW + 30}]; delete restore.data.logs[0].recordedBy;
+  const restored = await env.commit('bob', bob.scope, removed.revision, restore);
+  assert.deepEqual(restored.snapshot.data.logs[0].recordedBy, original.recordedBy);
+  const plain = clone(restored.snapshot);
+  plain.data.logs.push({...original, id: 'ordinary-log'}); delete plain.data.logs[1].recordedBy;
+  const first = await env.commit('alice', alice.scope, restored.revision, plain);
+  const replacement = clone(first.snapshot);
+  replacement.deleted.logs.push({id: 'ordinary-log', updatedAt: NOW + 40});
+  Object.assign(replacement.data.logs[1], {recipeId: 'r2', createdAt: NOW + 50, updatedAt: NOW + 50});
+  delete replacement.data.logs[1].recordedBy;
+  const ordinary = await env.commit('bob', bob.scope, first.revision, replacement);
+  assert.deepEqual(ordinary.snapshot.data.logs[1].recordedBy, original.recordedBy);
 });
 test('concurrent family commits use one revision and stale writers receive current scope without overwriting',async()=>{
   const env=environment(),a=await env.create(),b=await env.join(),read=await env.read('alice',a.scope),one=clone(read.snapshot),two=clone(read.snapshot);one.data.recipes[0].name='甲';two.data.recipes[0].name='乙';

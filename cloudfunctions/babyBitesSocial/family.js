@@ -11,6 +11,15 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const personalScope = owner => ({kind: 'personal', id: owner});
 const scopeKey = scope => scope && scope.kind === 'family' ? 'family:' + scope.id : 'personal';
 const sameScope = (a, b) => Boolean(a && b && a.kind === b.kind && a.id === b.id && (a.kind !== 'family' || a.membershipId === b.membershipId));
+function completionId(id) {
+  const match = typeof id === 'string' && /^meal-log-meal-(\d{4})-(\d{2})-(\d{2})-(breakfast|lunch|dinner)$/.exec(id);
+  if (!match || Number(match[1]) < 1000) return false;
+  const [year, month, day] = match.slice(1, 4).map(Number), date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+const generation = log => Number.isSafeInteger(log && log.createdAt) ? log.createdAt : 0;
+const newerGeneration = (log, prior, deletion) => completionId(log.id) && deletion &&
+  generation(prior) <= deletion.updatedAt && generation(log) > deletion.updatedAt;
 function familyFile(fileID, env, familyId, kind) {
   const match = typeof fileID === 'string' && /^cloud:\/\/([A-Za-z0-9_-]+)\.([A-Za-z0-9._-]+)\/(.+)$/.exec(fileID);
   const prefix = `families/${familyId}/${kind}/`;
@@ -246,12 +255,17 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
       const old = tombstones.get(id);
       if (!old || updatedAt > old.updatedAt) tombstones.set(id, {...old, id, updatedAt});
     }
-    const live = new Set(incoming.data[kind].map(item => item.id));
+    const live = new Map(incoming.data[kind].map(item => [item.id, item]));
     for (const item of previous.data[kind] || []) {
-      if (live.has(item.id)) continue;
       const old = tombstones.get(item.id);
-      const tombstone = {id: item.id, updatedAt: Math.max(old ? old.updatedAt : now(), item.updatedAt || item.createdAt || 0)};
-      for (const field of fields) if (item[field] !== undefined) tombstone[field] = item[field];
+      const replacement = live.get(item.id);
+      const rebuilt = kind === 'logs' && replacement && newerGeneration(replacement, item, old);
+      if (replacement && !rebuilt) continue;
+      // A same-ID replacement still deletes the previous generation. Preserve
+      // the separating boundary even if that old generation was edited later.
+      const tombstone = {id: item.id, updatedAt: rebuilt ? old.updatedAt :
+        Math.max(old ? old.updatedAt : now(), item.updatedAt || 0, item.createdAt || 0)};
+      for (const field of fields) if (item[field] !== undefined && (field !== 'createdAt' || Number.isSafeInteger(item[field]))) tombstone[field] = item[field];
       tombstones.set(item.id, tombstone);
     }
     if (tombstones.size > (kind === 'recipes' ? 10000 : kind === 'mealPlans' ? 30000 : 100000)) reject('删除记录超过同步限制。', 'INVALID_SNAPSHOT');
@@ -294,14 +308,34 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
       } else if (!recipe.createdBy || recipe.createdBy === owner) recipe.createdBy = owner;
       else delete recipe.createdBy; // Imported item with no verifiable family author.
     });
-    const deletedLogs = keepDeletionHistory(previous, incoming, 'logs', ['recordedBy']);
+    const deletedLogs = keepDeletionHistory(previous, incoming, 'logs', ['recordedBy', 'createdAt']);
+    const deletionBoundaries = new Map(incoming.deleted.logs.map(item => [item.id, item]));
     const oldLogs = new Map(previous.data.logs.map(log => [log.id, log]));
     incoming.data.logs.forEach(log => {
       const existing = oldLogs.get(log.id);
       const prior = existing || deletedLogs.get(log.id);
+      const deletion = deletionBoundaries.get(log.id);
+      // A later deletion can cover several generations. Different pre-deletion
+      // creation times are not proof that a backup belongs to the live record.
+      const ambiguousGeneration = existing && completionId(log.id) && deletion && generation(existing) !== generation(log) &&
+        generation(existing) <= deletion.updatedAt && generation(log) <= deletion.updatedAt;
+      // Incoming deletion times cannot hide an already attested generation
+      // boundary and relabel an old backup with the current recorder.
+      if (existing && (ambiguousGeneration || newerGeneration(existing, log, deletion) || newerGeneration(existing, log, deletedLogs.get(log.id)))) {
+        reject('这餐已有新的完成记录，请同步后重试。', 'FAMILY_CONFLICT');
+      }
+      if (prior && newerGeneration(log, prior, deletion)) {
+        // A portable backup's recorder claim is not proof of who created this
+        // generation. Only a fresh, unclaimed completion credits this actor.
+        if (log.recordedBy) delete log.recordedBy;
+        else log.recordedBy = {memberId: state.member.id, label: state.member.label};
+        return;
+      }
       if (existing && existing.recordedBy && log.recordedBy && (log.recordedBy.memberId !== existing.recordedBy.memberId ||
         log.recordedBy.label !== existing.recordedBy.label)) reject('历史记录人不能修改。', 'INVALID_SNAPSHOT');
-      if (prior && prior.recordedBy) log.recordedBy = prior.recordedBy;
+      if (existing && completionId(log.id)) log.createdAt = existing.createdAt || 0;
+      const matchingPrior = prior && (!completionId(log.id) || existing || prior.createdAt === undefined || generation(prior) === generation(log));
+      if (matchingPrior && prior.recordedBy) log.recordedBy = prior.recordedBy;
       else if (prior || log.recordedBy) delete log.recordedBy;
       else log.recordedBy = {memberId: state.member.id, label: state.member.label};
     });
