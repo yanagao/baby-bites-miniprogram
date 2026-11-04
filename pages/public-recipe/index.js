@@ -4,6 +4,8 @@ const {findRecipeAllergens} = require('../../utils/allergies');
 const ui = require('../../utils/ui');
 const account = require('../profile/account');
 const {getProfileAvatar} = require('../../utils/profile-avatar');
+const {createShareReturn} = require('../../utils/native-share-return');
+const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 
 Page({
   data: {
@@ -13,11 +15,27 @@ Page({
     feedbackLoading: false, feedbackError: '', feedbackReady: false, saveCount: 0, cooksnapCount: 0,
     cooksnaps: [], feedbackOffset: null, feedbackMore: false, deletingCooksnap: ''
   },
-  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; account.bind(this); },
-  onShow() { if (!this.data.adding && !this.data.followBusy && !this.data.deletingCooksnap) return this.load(); },
-  onUnload() { this.request++; this.relationRequest++; account.dispose(this); },
-  reload() { return account.reload(this, {force: true}); },
+  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; this._shareReturn = createShareReturn(wx); this._recipeReadVersion = null; account.bind(this); },
+  onShow() {
+    if (!account.check(this)) return;
+    const shareReturn = this._shareReturn.show();
+    if (this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
+    if (shareReturn && shareReturn.recipeId === this.recipeId && shareReturn.request === this.request &&
+      shareReturn.version === readVersion() && !this.data.loading && !this.data.error &&
+      this.data.recipe && this.data.recipe.id === this.recipeId) {
+      this.refreshAllergies();
+      const imported = social.findImportedRecipe(this.recipeId);
+      const importedId = imported ? imported.id : '';
+      if (importedId !== this.data.importedId) this.setData({importedId});
+      return;
+    }
+    return this.load();
+  },
+  onUnload() { this._shareReturn.dispose(); this.request++; this.relationRequest++; account.dispose(this); },
+  reload() { this._shareReturn.clear(); return account.reload(this, {force: true}); },
   disposeLocalContent() {
+    this._shareReturn.clear();
+    this._recipeReadVersion = null;
     this.feedbackRequest = (this.feedbackRequest || 0) + 1;
     this.setData({allergyWarning: '', feedbackLoading: false, feedbackMore: false, feedbackReady: false,
       feedbackError: '', saveCount: 0, cooksnapCount: 0, cooksnaps: [], feedbackOffset: null, deletingCooksnap: ''});
@@ -26,9 +44,11 @@ Page({
     if (!account.check(this)) return;
     const allergies = store.getState().allergies || [];
     const matched = this.data.recipe && allergies.length ? findRecipeAllergens(this.data.recipe, allergies) : [];
-    this.setData({allergyWarning: matched.length ? '含已记录的过敏食材：' + matched.join('、') + '，请勿给宝宝食用。' : ''});
+    const allergyWarning = matched.length ? '含已记录的过敏食材：' + matched.join('、') + '，请勿给宝宝食用。' : '';
+    if (allergyWarning !== this.data.allergyWarning) this.setData({allergyWarning});
   },
   async load(options) {
+    this._shareReturn.clear();
     if (!account.check(this) || this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
     const request = ++this.request;
     this.relationRequest++;
@@ -39,6 +59,9 @@ Page({
     try {
       const result = await social.getRecipe(this.recipeId, options);
       if (!account.check(this) || request !== this.request) return;
+      // Only a completed recipe read can make this displayed recipe current.
+      // Later relationship/feedback reads and opening a share sheet cannot.
+      this._recipeReadVersion = readVersion();
       const imported = social.findImportedRecipe(this.recipeId);
       const author = result.author ? {...result.author, avatar: getProfileAvatar(result.author.id)} : result.author;
       this.setData({recipe: result.recipe, author, importedId: imported ? imported.id : '', loading: false});
@@ -78,12 +101,14 @@ Page({
   openCooksnap() {
     if (!account.check(this) || !this.data.recipe || this.data.loading || this.data.error ||
       !this.data.authorKnown || this.data.authorIsSelf || this._openingCooksnap) return;
+    this._shareReturn.clear();
     this._openingCooksnap = true;
     wx.navigateTo({url: '/pages/cooksnap-editor/index?id=' + encodeURIComponent(this.recipeId),
       complete: () => { this._openingCooksnap = false; }});
   },
   previewCooksnap(event) {
     if (!account.check(this) || this.data.loading || this.data.error) return;
+    this._shareReturn.clear();
     const item = this.data.cooksnaps.find(item => item.id === event.currentTarget.dataset.id);
     if (item && item.photoURL && !item.photoFailed) wx.previewImage({current: item.photoURL, urls: [item.photoURL]});
   },
@@ -96,6 +121,7 @@ Page({
     if (!account.check(this) || this.data.loading || this.data.error || this.data.deletingCooksnap) return;
     const item = this.data.cooksnaps.find(item => item.id === event.currentTarget.dataset.id && item.isSelf);
     if (!item) return;
+    this._shareReturn.clear();
     const request = this.request;
     // A page response requested before deletion must not restore the removed row.
     this.feedbackRequest = (this.feedbackRequest || 0) + 1;
@@ -145,6 +171,7 @@ Page({
   async toggleFollow() {
     if (!account.check(this) || this.data.loading || this.data.error || !this.data.author ||
       !this.data.relationReady || this.data.authorIsSelf || this.data.followBusy) return;
+    this._shareReturn.clear();
     const request = this.request;
     const relationRequest = ++this.relationRequest;
     const authorId = this.data.author.id;
@@ -167,6 +194,7 @@ Page({
   async add() {
     if (!account.check(this)) return;
     if (this.data.loading || this.data.adding || this.data.error || !this.data.recipe || !this.data.authorKnown || this.data.authorIsSelf) return;
+    this._shareReturn.clear();
     if (this.data.importedId) { this.openOwn(); return; }
     const request = this.request;
     this.setData({adding: true});
@@ -181,18 +209,23 @@ Page({
   openOwn() {
     if (account.check(this) && !this.data.loading && !this.data.error && this.data.recipe &&
       this.data.authorKnown && !this.data.authorIsSelf && this.data.importedId) {
+      this._shareReturn.clear();
       wx.navigateTo({url: '/pages/detail/index?id=' + encodeURIComponent(this.data.importedId)});
     }
   },
-  openAuthor() { if (account.check(this) && this.data.author) wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(this.data.author.id)}); },
-  openSource() { if (!account.check(this)) return; const source = this.data.recipe && this.data.recipe.source; if (source) wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(source.profileId)}); },
+  openAuthor() { if (account.check(this) && this.data.author) { this._shareReturn.clear(); wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(this.data.author.id)}); } },
+  openSource() { if (!account.check(this)) return; const source = this.data.recipe && this.data.recipe.source; if (source) { this._shareReturn.clear(); wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(source.profileId)}); } },
   photoError() { this.setData({photoFailed: true}); },
-  previewPhoto() { if (account.check(this) && this.data.recipe && this.data.recipe.photoURL && !this.data.photoFailed) wx.previewImage({current: this.data.recipe.photoURL, urls: [this.data.recipe.photoURL]}); },
+  previewPhoto() { this._shareReturn.clear(); if (account.check(this) && this.data.recipe && this.data.recipe.photoURL && !this.data.photoFailed) wx.previewImage({current: this.data.recipe.photoURL, urls: [this.data.recipe.photoURL]}); },
   onShareAppMessage() {
     const recipe = account.check(this) && !this.data.loading && !this.data.error && this.data.recipe;
+    // The native share sheet can hide the page before or after this callback.
+    // Reuse this view only for its next return, unless another action changes it.
+    this._shareReturn.clear();
+    if (recipe) this._shareReturn.share({recipeId: this.recipeId, request: this.request, version: this._recipeReadVersion});
     return recipe ? {title: recipe.name + ' · 口袋食谱',
       path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id), imageUrl: '/assets/cute/pocket-mascot.png'} :
       {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
-  back: ui.back
+  back() { this._shareReturn.clear(); ui.back(); }
 });

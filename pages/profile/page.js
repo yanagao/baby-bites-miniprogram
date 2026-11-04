@@ -9,7 +9,8 @@ const config = require('../../config/cloud');
 const {syncTabBar} = require('../../utils/tab-bar');
 const {getProfileAvatar} = require('../../utils/profile-avatar');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : 0;
-const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
+const readVersion = isTab => isTab && typeof social.getMineReadVersion === 'function' ? social.getMineReadVersion() :
+  typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 const normalizeBabyNickname = value => typeof value === 'string' && value.trim() ? value.trim() : '宝宝';
 const babyNicknameFields = state => {
   const nickname = state ? normalizeBabyNickname(state.nickname) : '';
@@ -54,9 +55,13 @@ module.exports = function createProfilePage(isTab = false) { return {
   },
   onShow() {
     if (isTab) syncTabBar(this);
-    if (!account.check(this) || this.data.editing || this.data.followBusy || this.data.shareVisible) return;
-    if (!this.data.loading && !this.data.error && !this.data.publicationError && !this.setupRequested && !this.shareRequested &&
-      this._loadedAt && Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === readVersion()) {
+    if (!account.check(this) || this.data.editing || this.data.saving || this.data.followBusy || this.data.shareVisible) return;
+    if (this._loadFlight && this._loadFlight.request === this.request) return this._loadFlight.work;
+    const version = readVersion(isTab);
+    const reusable = isTab ? this._loadAttempted && this._loadedVersion === version :
+      !this.data.loading && !this.data.error && !this.data.publicationError && this._loadedAt &&
+      Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === version;
+    if (reusable && (isTab || (!this.setupRequested && !this.shareRequested))) {
       this.refresh(); return;
     }
     return this.load();
@@ -64,10 +69,34 @@ module.exports = function createProfilePage(isTab = false) { return {
   onReady() { if (isTab) syncTabBar(this); },
   onUnload() { this.request++; this.disposeShare(); account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
-  async load(options) {
+  onPullDownRefresh() {
+    if (this.data.editing || this.data.saving || this.data.followBusy || this.data.shareVisible) {
+      if (typeof wx.stopPullDownRefresh === 'function') wx.stopPullDownRefresh();
+      return;
+    }
+    if (this._pullDownFlight) return this._pullDownFlight;
+    const work = Promise.resolve(this.reload()).finally(() => {
+      if (this._pullDownFlight === work) this._pullDownFlight = null;
+      if (typeof wx.stopPullDownRefresh === 'function') wx.stopPullDownRefresh();
+    });
+    this._pullDownFlight = work;
+    return work;
+  },
+  load(options) {
+    if (!account.check(this)) return;
+    const work = this.loadProfile(options);
+    const flight = {request: this.request, work};
+    this._loadFlight = flight;
+    const complete = () => { if (this._loadFlight === flight) this._loadFlight = null; };
+    work.then(complete, complete);
+    return work;
+  },
+  async loadProfile(options) {
     if (!account.check(this)) return;
     const request = ++this.request;
-    const version = readVersion();
+    const version = readVersion(isTab);
+    this._loadAttempted = true;
+    this._loadedVersion = version;
     this.publicSavedForEdit = false;
     this.published = [];
     const currentProfileId = this.data.profile && this.data.profile.id;
@@ -95,7 +124,9 @@ module.exports = function createProfilePage(isTab = false) { return {
       const publicationReady = !!mine && Array.isArray(mine.published) &&
         mine.published.every(item => item && typeof item.sourceRecipeId === 'string' && item.sourceRecipeId.trim());
       this.published = publicationReady ? mine.published : [];
-      this._loadedAt = Date.now(); this._loadedVersion = version;
+      this._loadedAt = Date.now();
+      const resultVersion = isTab && mine && typeof social.getMineReadVersion === 'function' ? social.getMineReadVersion(mine) : undefined;
+      this._loadedVersion = resultVersion === undefined ? version : resultVersion;
       this.setData({
         profile, avatarPath: getProfileAvatar(profile.id), isSelf: !!result.isSelf, following: !!result.following, followedBy: !!result.followedBy,
         publishedCount: Number.isSafeInteger(result.publishedCount) ? count(result.publishedCount) :
@@ -113,6 +144,9 @@ module.exports = function createProfilePage(isTab = false) { return {
       if (this.shareRequested && profile.exists !== false) { this.shareRequested = false; this.openShare(); }
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
+      // Identity failures invalidate the service cache during this attempt.
+      // Returning to the tab should not immediately repeat the same failure.
+      if (isTab) this._loadedVersion = readVersion(true);
       if (error.code === 'ACCOUNT_CHANGED') { account.invalidate(this); return; }
       if (isTab) {
         this.setData({loading: false, profile: null, avatarPath: getProfileAvatar(), ...babyAgeFields(null), ...babyNicknameFields(null), isSelf: true, publicationReady: false,
@@ -126,13 +160,18 @@ module.exports = function createProfilePage(isTab = false) { return {
     if (!account.check(this) || !this.data.isSelf) return;
     try {
       const state = store.getState();
-      this.setData({...content.build(state, {tab: this.data.contentTab}),
+      const update = {...content.build(state, {tab: this.data.contentTab}),
         familyActive: inFamily(),
         ...(!this.data.editing || !this.data.birthdayDirty ? babyAgeFields(this.data.profile, true) : {}),
-        ...(this.data.editing && !this.data.babyNicknameDirty ? babyNicknameFields(state) : {})});
+        ...(this.data.editing && !this.data.babyNicknameDirty ? babyNicknameFields(state) : {})};
+      const changed = {};
+      Object.keys(update).forEach(key => {
+        if (JSON.stringify(this.data[key]) !== JSON.stringify(update[key])) changed[key] = update[key];
+      });
+      if (Object.keys(changed).length) this.setData(changed);
     } catch (error) { ui.error(error); }
   },
-  disposeLocalContent() { this.published = []; this._loadedAt = 0; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
+  disposeLocalContent() { this.published = []; this._loadedAt = 0; this._loadAttempted = false; this._loadFlight = null; this._pullDownFlight = null; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
   changeContentTab(event) {
     if (!account.check(this)) return;
     const value = event.currentTarget && event.currentTarget.dataset.value || event.detail && event.detail.value;

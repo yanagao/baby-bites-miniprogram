@@ -4,6 +4,7 @@ const config = require('../config/cloud');
 const store = require('./store');
 const {mergeSnapshots} = require('./sync-merge');
 const publicationSync = require('./publication-sync');
+const {prepareRecipePhoto} = require('./recipe-photo');
 const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const FOREGROUND_CHECK_INTERVAL = 30 * 1000;
@@ -246,12 +247,22 @@ async function uploadPhotos(snapshot, owner, uploadedPhotos) {
     if (!uploadedPhotos.has(localPath)) {
       assertOwner(owner);
       const unreadableMessage = '「' + recipe.name + '」的本机照片已失效或无法读取。请重新选择照片，或导入含照片的备份后重试；菜谱和记录已保留。';
-      await checkSize(localPath, MAX_PHOTO_BYTES, unreadableMessage);
-      let result;
-      try { result = await call(fs(), 'readFile', {filePath: localPath}); }
-      catch (_) { fail(unreadableMessage); }
-      const type = photoType(result && result.data, unreadableMessage);
-      uploadedPhotos.set(localPath, await uploadOwned(localPath, owner, 'photos', type));
+      let prepared;
+      try {
+        try { prepared = await prepareRecipePhoto(localPath, {assertCurrent: () => assertOwner(owner)}); }
+        catch (error) {
+          if (error && error.code === 'PHOTO_UNREADABLE') fail(unreadableMessage);
+          throw error;
+        }
+        await checkSize(prepared.filePath, MAX_PHOTO_BYTES, unreadableMessage);
+        assertOwner(owner);
+        let result;
+        try { result = await call(fs(), 'readFile', {filePath: prepared.filePath}); }
+        catch (_) { fail(unreadableMessage); }
+        const type = photoType(result && result.data, unreadableMessage);
+        // Keep the original key across conflict retries and shared photo paths.
+        uploadedPhotos.set(localPath, await uploadOwned(prepared.filePath, owner, 'photos', type));
+      } finally { if (prepared) await prepared.cleanup(); }
     }
     recipe.photo = uploadedPhotos.get(localPath);
   }

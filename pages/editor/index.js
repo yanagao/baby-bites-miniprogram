@@ -1,4 +1,5 @@
 const familyPhotos = require('../../utils/family-photos');
+const {prepareRecipePhoto} = require('../../utils/recipe-photo');
 const store = require('../../utils/store');
 const { categories, textures } = require('../../utils/selectors');
 const recipeAges = require('../../utils/recipe-ages');
@@ -24,7 +25,7 @@ Page({
     recordMeal: false, rating: 0,
     ratingOptions: [{ label: '不太喜欢', value: 1 }, { label: '还不错', value: 2 }, { label: '很喜欢', value: 3 }],
     form: { name: '', minutes: '20', ingredients: '', steps: '', note: '' },
-    photo: '', photoDisplay: '', saving: false, error: '', editing: false, builtIn: false, sourceRecipe: false, missingRecipe: false,
+    photo: '', photoDisplay: '', choosingPhoto: false, saving: false, error: '', editing: false, builtIn: false, sourceRecipe: false, missingRecipe: false,
     nameError: '', minutesError: '', ingredientsError: '', stepsError: '', ratingError: '',
     discardVisible: false
   },
@@ -61,8 +62,14 @@ Page({
     this.disposeDraftSession();
     if (this._unsubscribeAccount) this._unsubscribeAccount();
     this.discardStagedPhoto();
+    this.releasePreparedPhoto();
   },
-  clearDraftForScopeChange() { this.original = null; this.setData({form: {name: '', minutes: '20', ingredients: '', steps: '', note: ''}, photo: '', photoDisplay: '', error: '家庭或账号已变化，请重新打开菜谱。', discardVisible: false}); },
+  clearDraftForScopeChange() {
+    this._photoRequest = (this._photoRequest || 0) + 1;
+    this.discardStagedPhoto(); this.releasePreparedPhoto(); this.pendingPhoto = null;
+    this.original = null;
+    this.setData({form: {name: '', minutes: '20', ingredients: '', steps: '', note: ''}, photo: '', photoDisplay: '', choosingPhoto: false, error: '家庭或账号已变化，请重新打开菜谱。', discardVisible: false});
+  },
   assertDraftAccount() {
     if (this._pageUnloaded) throw Error('页面已关闭，请重新打开后操作。');
     if (this._draftLocked) throw Error('微信账号已切换，或家庭已变化，请重新打开后操作。');
@@ -97,6 +104,11 @@ Page({
     if (!this.stagedPhotoPath) return;
     wx.getFileSystemManager().unlink({ filePath: this.stagedPhotoPath, fail() {} });
     this.stagedPhotoPath = '';
+  },
+  releasePreparedPhoto() {
+    const prepared = this._preparedPhoto;
+    this._preparedPhoto = null;
+    if (prepared) prepared.cleanup().catch(() => {});
   },
   input(event) {
     if (this.data.saving || this.data.savedComplete) return;
@@ -149,22 +161,40 @@ Page({
     this.setData({ rating, ratingError: '', error: '' });
     this.updateUnsavedAlert();
   },
-  choosePhoto() {
-    if (this.data.saving || this.data.savedComplete) return;
-    wx.chooseMedia({
-      count: 1, mediaType: ['image'], sourceType: ['album', 'camera'], sizeType: ['compressed'],
-      success: result => {
-        if (!this.draftCurrent()) return;
-        const file = result.tempFiles && result.tempFiles[0];
-        if (!file) return;
-        if (file.size > 2 * 1024 * 1024) { ui.error(Error('请选择小于 2 MB 的照片')); return; }
-        this.discardStagedPhoto();
-        this.pendingPhoto = file.tempFilePath;
-        this.setData({ photo: file.tempFilePath, photoDisplay: file.tempFilePath, error: '' });
-        this.updateUnsavedAlert();
-      },
-      fail: error => { if (!String(error.errMsg).includes('cancel')) ui.error(Error('未能选择照片，请检查相册权限后重试')); }
-    });
+  async choosePhoto() {
+    if (this.data.saving || this.data.savedComplete || this.data.choosingPhoto || this.data.missingRecipe) return;
+    try { this.assertDraftAccount(); } catch (error) { ui.error(error); return; }
+    const request = this._photoRequest = (this._photoRequest || 0) + 1;
+    const assertCurrent = () => {
+      this.assertDraftAccount();
+      if (request !== this._photoRequest) throw Error('照片选择已取消，请重新选择。');
+    };
+    this.setData({choosingPhoto: true});
+    let prepared;
+    try {
+      const result = await new Promise((resolve, reject) => wx.chooseMedia({
+        count: 1, mediaType: ['image'], sourceType: ['album', 'camera'], sizeType: ['compressed'],
+        success: resolve, fail: reject
+      }));
+      assertCurrent();
+      const file = result.tempFiles && result.tempFiles[0];
+      if (!file) return;
+      prepared = await prepareRecipePhoto(file.tempFilePath, {assertCurrent});
+      assertCurrent();
+      // Replace the old draft only after the new image has been processed.
+      this.discardStagedPhoto(); this.releasePreparedPhoto();
+      this._preparedPhoto = prepared; prepared = null;
+      this.pendingPhoto = this._preparedPhoto.filePath;
+      this.setData({photo: this.pendingPhoto, photoDisplay: this.pendingPhoto, error: ''});
+      this.updateUnsavedAlert();
+    } catch (error) {
+      if (this.draftCurrent() && request === this._photoRequest && !/cancel/.test(String(error.errMsg || ''))) {
+        ui.error(Error(error.message || '未能处理照片，请检查相册权限或换一张照片重试。'));
+      }
+    } finally {
+      if (prepared) await prepared.cleanup();
+      if (this.draftCurrent() && request === this._photoRequest) this.setData({choosingPhoto: false});
+    }
   },
   previewPhoto() {
     if (!this.draftCurrent()) return;
@@ -172,14 +202,15 @@ Page({
     if (photo) wx.previewImage({ current: photo, urls: [photo] });
   },
   clearPhoto() {
-    if (this.data.saving || this.data.savedComplete) return;
+    if (this.data.saving || this.data.savedComplete || this.data.choosingPhoto || !this.draftCurrent()) return;
     this.discardStagedPhoto();
+    this.releasePreparedPhoto();
     this.pendingPhoto = null;
     this.setData({ photo: '', photoDisplay: '', error: '' });
     this.updateUnsavedAlert();
   },
   async save() {
-    if (this.data.saving || this.data.savedComplete || this.data.missingRecipe) return;
+    if (this.data.saving || this.data.savedComplete || this.data.choosingPhoto || this.data.missingRecipe) return;
     try { this.assertDraftAccount(); }
     catch (error) { this.setData({error: error.message}); return; }
     const form = this.data.form;
@@ -205,12 +236,15 @@ Page({
         const savedPath = await new Promise((resolve, reject) => wx.getFileSystemManager().saveFile({
           tempFilePath: this.pendingPhoto, success: result => resolve(result.savedFilePath), fail: reject
         }));
-        if (this._pageUnloaded) {
+        if (!savedPath || savedPath === this.pendingPhoto) throw Error('照片未能保存，请重新选择后重试。');
+        if (this._pageUnloaded || !this.draftCurrent()) {
           wx.getFileSystemManager().unlink({filePath: savedPath, fail() {}});
+          this.assertDraftAccount();
           return;
         }
         this.stagedPhotoPath = savedPath;
         this.pendingPhoto = null;
+        this.releasePreparedPhoto();
         photo = savedPath;
         this.setData({ photo: savedPath, photoDisplay: savedPath });
       }

@@ -1,0 +1,3 @@
+@import "../detail/index.wxss";
+
+.detail-body {padding-bottom:calc(32rpx + env(safe-area-inset-bottom));}

@@ -141,6 +141,49 @@ test('concurrent and repeated social reads share identity and request work with 
   assert.equal(app.calls.length, 3);
 });
 
+test('mine results retain their actual read version across cache copies and a later mutation', async () => {
+  const app = setup();
+  app.hooks.request = args => args.data.action === 'mine' ? {profile: {name: '小厨房'}, published: []} : {following: true};
+  const first = await app.social.getMine();
+  const cached = await app.social.getMine();
+  const version = app.social.getMineReadVersion();
+  assert.equal(app.social.getMineReadVersion(first), version);
+  assert.equal(app.social.getMineReadVersion(cached), version);
+  assert.notEqual(first, cached);
+  assert.equal(app.social.getMineReadVersion(copy(first)), undefined);
+  assert.equal(app.social.getMineReadVersion(undefined), undefined);
+  assert.equal(app.social.getMineReadVersion(null), undefined);
+  assert.deepEqual(Object.keys(first), ['profile', 'published']);
+
+  let mutation;
+  const result = await app.social.getMine().then(value => {
+    // Another microtask can begin a write before the page consumes its result.
+    mutation = app.social.setFollowing(PROFILE_ID, true);
+    return value;
+  });
+  assert.equal(app.social.getMineReadVersion(result), version);
+  assert.ok(app.social.getMineReadVersion() > version);
+  await mutation;
+  const updated = await app.social.getMine();
+  assert.equal(app.social.getMineReadVersion(updated), app.social.getMineReadVersion());
+  assert.equal(app.social.getMineReadVersion(first), version);
+});
+
+test('profile, following and publication writes invalidate mine metadata', async t => {
+  for (const action of ['profile', 'follow', 'publish', 'unpublish']) await t.test(action, async () => {
+    const app = setup(), id = readyUserRecipe(app);
+    await app.social.getMine();
+    const version = app.social.getMineReadVersion();
+    if (action === 'profile') await app.social.saveProfile({name: '新的昵称', bio: ''});
+    if (action === 'follow') await app.social.setFollowing(PROFILE_ID, true);
+    if (action === 'publish') await app.social.publishRecipe(id);
+    if (action === 'unpublish') await app.social.unpublishRecipe(id);
+    assert.ok(app.social.getMineReadVersion() > version);
+    await app.social.getMine();
+    assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+  });
+});
+
 test('read caches expire after 30 seconds and explicit refresh bypasses cached data', async () => {
   const app = setup();
   let count = 0;
@@ -186,7 +229,9 @@ test('writes invalidate cached relationships and publication state even when the
   assert.ok(app.social.getReadVersion() > before);
   await app.social.getMine();
   app.hooks.request = args => args.data.action === 'unpublish' ? Promise.reject(Error('lost response after write')) : undefined;
+  const mineVersion = app.social.getMineReadVersion();
   await assert.rejects(app.social.unpublishRecipe('own'), /连接不上/);
+  assert.ok(app.social.getMineReadVersion() > mineVersion);
   await app.social.getMine();
   assert.equal(app.calls.filter(item => item.action === 'mine').length, 3);
 });
@@ -207,25 +252,60 @@ test('a read finishing after a write cannot restore its older result', async () 
   await received;
   await app.social.unpublishRecipe('own');
   release();
-  assert.deepEqual(copy((await oldRead).published), []);
+  const result = await oldRead;
+  assert.deepEqual(copy(result.published), []);
+  assert.equal(app.social.getMineReadVersion(result), app.social.getMineReadVersion());
   assert.deepEqual(copy((await app.social.getMine()).published), []);
   assert.equal(count, 2);
 });
 
-test('actual sync revisions and partial public updates invalidate reads but idle timestamps do not', async () => {
+test('private revisions invalidate other reads while publication updates also invalidate mine', async () => {
   const app = setup();
   await app.social.getMine();
+  await app.social.getFollowing();
   app.emitSync({owner: OWNER, revision: app.store.getSyncInfo().revision, lastSyncedAt: app.now()});
   const before = app.social.getReadVersion();
   app.emitSync({lastSyncedAt: app.now() + 1});
   await app.social.getMine();
   assert.equal(app.social.getReadVersion(), before);
   assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  const mineVersion = app.social.getMineReadVersion();
   app.emitSync({revision: app.store.getSyncInfo().revision + 1});
+  assert.ok(app.social.getReadVersion() > before);
+  assert.equal(app.social.getMineReadVersion(), mineVersion);
   await app.social.getMine();
+  await app.social.getFollowing();
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  assert.equal(app.calls.filter(item => item.action === 'following').length, 2);
   app.emitSync({state: 'pending', publicationVersion: 1});
+  assert.ok(app.social.getMineReadVersion() > mineVersion);
   await app.social.getMine();
-  assert.equal(app.calls.filter(item => item.action === 'mine').length, 3);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+});
+
+test('private sync and unrelated missing recipes do not restart or duplicate an in-flight mine read', async () => {
+  const app = setup();
+  let release, started;
+  const pending = new Promise(resolve => { release = resolve; });
+  const received = new Promise(resolve => { started = resolve; });
+  app.hooks.request = async args => {
+    if (args.data.action === 'recipe') return {error: {code: 'NOT_PUBLIC'}};
+    if (args.data.action === 'mine') { started(); await pending; return {profile: {name: '小厨房'}, published: []}; }
+  };
+  const first = app.social.getMine();
+  await received;
+  const mineVersion = app.social.getMineReadVersion();
+  app.emitSync({owner: OWNER, revision: app.store.getSyncInfo().revision + 1});
+  await assert.rejects(app.social.getRecipe(PUBLIC_ID), error => error.code === 'NOT_PUBLIC');
+  assert.equal(app.social.getMineReadVersion(), mineVersion);
+  const second = app.social.getMine();
+  release();
+  const results = await Promise.all([first, second]);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  assert.deepEqual(copy(results[0]), copy(results[1]));
+  assert.ok(results.every(result => app.social.getMineReadVersion(result) === mineVersion));
+  await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
 });
 
 test('a recent private identity check removes redundant social preflight without skipping server owner checks', async () => {
@@ -241,19 +321,37 @@ test('a recent private identity check removes redundant social preflight without
 test('account changes clear cached data and identity including switching away and back', async () => {
   const app = setup();
   await app.social.getMine();
+  const mineVersion = app.social.getMineReadVersion();
   app.store.bindAccount(OTHER);
   app.store.bindAccount(OWNER);
+  assert.ok(app.social.getMineReadVersion() > mineVersion);
   await app.social.getMine();
   assert.equal(app.calls.filter(item => item.action === 'identity').length, 2);
   assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+});
+
+test('same-account family switches advance mine metadata version and discard the previous result cache', async () => {
+  const scope = {kind: 'family', id: 'e'.repeat(64), membershipId: 'f'.repeat(32)};
+  const app = setup({scope});
+  const first = await app.social.getMine();
+  const version = app.social.getMineReadVersion(first);
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+  app.store.bindScope(OWNER, scope);
+  assert.ok(app.social.getMineReadVersion() > version);
+  const current = await app.social.getMine();
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
+  assert.equal(app.social.getMineReadVersion(current), app.social.getMineReadVersion());
+  assert.equal(app.social.getMineReadVersion(first), version);
 });
 
 test('a private sync identity failure immediately clears social identity and cached reads', async () => {
   const app = setup();
   await app.social.getMine();
   const version = app.social.getReadVersion();
+  const mineVersion = app.social.getMineReadVersion();
   app.emitSync({owner: OWNER, identityCheckedAt: 0, identityInvalid: true, state: 'error'});
   assert.ok(app.social.getReadVersion() > version);
+  assert.ok(app.social.getMineReadVersion() > mineVersion);
   app.hooks.identity = () => ({error: {code: 'UNAUTHENTICATED'}});
   await assert.rejects(app.social.getMine(), /确认当前微信账号/);
   assert.equal(app.calls.filter(item => item.action === 'identity').length, 2);
@@ -1080,6 +1178,35 @@ test('deleting a cooksnap validates success and invalidates cached feedback', as
   assert.deepEqual(copy(await app.social.deleteCooksnap(COOKSNAP_ID)), {deleted: true});
   await app.social.getRecipeFeedback(PUBLIC_ID);
   assert.equal(app.calls.filter(item => item.action === 'recipeFeedback').length, 2);
+});
+
+test('cooksnap changes and save receipts invalidate feedback without discarding mine metadata', async () => {
+  const app = setup(), input = cooksnapInput();
+  app.files.set(input.photoPath, PNG);
+  app.hooks.request = args => {
+    if (args.data.action === 'mine') return {profile: {name: '小厨房'}, published: []};
+    if (args.data.action === 'addCooksnap') return {cooksnap: cooksnapView()};
+    if (args.data.action === 'deleteCooksnap') return {deleted: true};
+    if (args.data.action === 'recipeFeedback') return feedbackResult();
+    if (args.data.action === 'recordSave') return {recorded: true};
+  };
+  await app.social.getMine();
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  const mineVersion = app.social.getMineReadVersion(), globalVersion = app.social.getReadVersion();
+  await app.social.addCooksnap(PUBLIC_ID, input);
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  await app.social.deleteCooksnap(COOKSNAP_ID);
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  await app.social.addToCookbook(PUBLIC_ID);
+  await flushTasks();
+  assert.equal(app.calls.filter(item => item.action === 'recordSave').length, 1);
+  assert.deepEqual(app.storage.get('baby-bites-save-receipts:' + OWNER), []);
+  await app.social.getRecipeFeedback(PUBLIC_ID);
+  await app.social.getMine();
+  assert.ok(app.social.getReadVersion() > globalVersion);
+  assert.equal(app.social.getMineReadVersion(), mineVersion);
+  assert.equal(app.calls.filter(item => item.action === 'mine').length, 1);
+  assert.equal(app.calls.filter(item => item.action === 'recipeFeedback').length, 4);
 });
 
 test('local cookbook save succeeds immediately while an offline receipt remains for the next successful sync', async () => {

@@ -6,7 +6,7 @@
 
 上线须按 [family-database.json](./family-database.json) 创建三个 deny-all 集合及公开菜谱的家庭清单索引，并按 [反馈配置](../babyBitesSocial/feedback-database.json) 创建配套集合/索引，再部署 `babyBitesSync` 与 `babyBitesSocial`、上传新版客户端。新身份读取会查询成员映射，不能漏建集合后直接部署；配置清单不会自行应用。真实部署证据与多账号真机验收另记，不以本地源码或单元测试通过宣称已上线。
 
-2026-11-03 部署记录：已在既有环境创建上述 4 个 deny-all 集合与 4 个复合索引，并部署 Sync/Social；两支函数均 Active、30 秒超时，线上源码与本地全部 JS 的 SHA-256 一致。保持原存储规则及其他业务函数不变。证据见[部署核验](../../../output/family-sharing/device-2026-11-03/deployed/verification.json)。此记录不代表客户端正式发布或多账号真机验收。
+2026-11-03 部署记录：已在既有环境创建上述 4 个 deny-all 集合与 4 个复合索引，并部署 Sync/Social；两支函数均 Active、30 秒超时，线上源码与本地全部 JS 的 SHA-256 一致。保持原存储规则及其他业务函数不变。证据见[部署核验](../../../output/family-sharing/device-2026-11-03/deployed/verification.json)。同日 1.5.0 发布准备已按 Social → Sync 顺序更新截至 `003e39e` 的审查修复，下载核验全部 JS 与运行配置一致，真实身份、家庭状态及社交读取成功，见[1.5.0 部署核验](../../../output/release-1.5.0/verification.json)。客户端 1.5.0 已上传开发版本，尚未提审或正式发布；这些记录不代表多账号真机验收。
 
 - `identity({protocolVersion:2})` 返回 `{owner,scope,revision,fileID}`，scope 为 `{kind:'personal',id:owner}` 或 `{kind:'family',id,membershipId}`。家庭成员使用旧客户端读取或提交均返回 `CLIENT_UPDATE_REQUIRED`。
 - `familyState` 返回 `{owner,scope,family}`；family 包含 `id/name/isManager/memberId/membershipId/memberCount/members`，成员仅含 `{id,label,isManager,isSelf}`，不暴露成员微信 owner。
@@ -23,6 +23,10 @@
 快照提交后，配套 `babyBitesSocial.syncPublications` 自动公开用户自有非内置菜谱，分享不需要预览，也没有公开/私密选择。策略 v3 会处理仍在权威快照中的历史自有菜谱，包括旧策略未分享记录；已删除菜谱不恢复，内置及其来源副本不进入推荐，保存他人的菜谱沿用原作者链接、不重复发布。首次公开家庭菜谱仅由 `createdBy` 本人的同步触发；其他现成员可以更新和删除当前家庭已公开版本，保留原作者与链接。当前添加者自己的同步可把其原 personal 菜谱关联到当前家庭，保留作者、公开 ID 与排序；其他成员不能代迁，不允许其他家庭自动迁入或退出后自动回个人。家庭切换不会把其他 scope 的菜谱判为已删除，写入仍验证成员、revision 和 generation。宝宝生日、过敏、心得和用餐记录不进入公开菜谱。详见[社交函数文档](../babyBitesSocial/README.md)。
 
 家庭快照的删除记录由服务端保留原菜谱作者、来源和用餐记录人。从备份恢复时以服务端历史为准，无法核实的归属留空。最后一位成员退出前，服务端会检查已删除的菜谱是否仍然公开。如果返回 `PUBLICATION_PENDING`，家庭仍有效，下一次退出会先重试同步。升级时先部署能读取新删除记录的 `babyBitesSocial`，再部署写入这些记录的 `babyBitesSync`。
+
+餐单完成记录使用固定 `meal-log-meal-<日期>-<餐次>` ID。只有删除边界满足 `旧 createdAt <= 删除时间 < 新 createdAt` 时，才将重新完成视为新一代，并为没有历史署名声明的新记录标记当前成员。客户端合并也保留这一边界，旧记录的晚到编辑不能覆盖新一代。两台设备同时首次完成、修改反馈或恢复同代记录不会重新署名。家庭日志删除标记增加可选、仅由服务端维护的 `createdAt`（不晚于删除时间），用于核实恢复的是哪一代；客户端提交的历史归属不作为证据。两支云函数的读取校验与家庭处理逻辑须一起更新，个人快照不接受这些服务端历史字段。
+
+同次提交中的「删除当前记录，再恢复旧代」要求删除时间覆盖当前记录的创建与最后修改时间，且恢复记录的 `updatedAt` 晚于删除时间。服务端保留恢复记录的 `createdAt`，只用提交前、创建时间完全匹配的删除历史核实署名；无法核实则留空，不套用被替换记录或导入者的署名。新删除历史保存被替换记录的归属。对于未覆盖当前版本的旧代或歧义记录，服务端保留当前记录并回传 canonical 快照，其他修改继续提交，客户端应用后结束待同步状态，不再返回无法通过重试解决的 `FAMILY_CONFLICT`。
 
 旧家庭第一次由成员访问时会校验快照中的菜谱署名。初始快照由建家人提供。已有多人编辑的旧快照里，只有存在建家前独立公开记录并已关联本家庭的菜谱才保留其他成员的署名。缺少证据时保留菜谱内容，署名留空，原始快照文件保留供核对。
 
@@ -68,6 +72,8 @@
 - 失败返回 `{error:{code,message}}`，不暴露底层存储路径或第三方账号标识。
 - 照片路径为 `users/<owner>/photos/<unique>.jpg|png|webp`；快照为 `users/<owner>/snapshots/<unique>.json`。每次上传必须使用新文件名，后续不要覆盖已经发布的快照。客户端负责上传、下载，服务端只读取属于当前环境、当前账号目录下的快照。
 - 快照结构为 `{version:1,data:{version:1,nickname,profileUpdatedAt,recipes,logs},deleted:{recipes:[{id,updatedAt}],logs:[{id,updatedAt}]}}`。最多 5 MiB、1000 道菜谱、20000 条用餐记录；删除历史上限为 10000 道菜谱、100000 条记录。
+- 餐单启用后，`data.mealPlans` 与 `deleted.mealPlans` 同时出现，即使为空也保留。每项为 `{id:"meal-YYYY-MM-DD-breakfast",date,meal,recipeId,createdAt,updatedAt}`，`meal` 为 `breakfast/lunch/dinner`，同日同餐次唯一；最多 3000 项及 30000 条餐单删除历史，允许安排未来日期。计划仅在个人或家庭私有快照内同步，不进入公开菜谱。
+- 启用餐单的快照允许日志 `rating:0` 表示已做但未填写喜好，并允许可选 `meal`；用餐日期仍不得晚于中国日期的今天。个人索引保存 `mealPlansSchema:1`，家庭按上一快照检查能力字段，拒绝旧客户端丢弃餐单和新日志信息；清空所有餐单也不解除保护。家庭服务端保留餐单删除历史，避免后续提交忘记墓碑。须先部署本次 `babyBitesSync` 与 `babyBitesSocial`，再发布餐单客户端；旧云函数不能接收新快照。
 
 个人索引每账号一个文档，保存 `revision/fileID/updatedAt`；家庭数据使用独立家庭文档及成员映射，按当前成员身份读取同一家庭快照。大体积快照与照片放云存储。服务端 SDK 不受客户端安全规则约束，必须保留成员、scope、归属和文件路径校验，不提供任意 fileID 的下载代理。
 

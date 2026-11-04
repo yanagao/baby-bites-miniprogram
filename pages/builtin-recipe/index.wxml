@@ -1,0 +1,19 @@
+<t-navbar z-index="100" class="{{recipe ? 'detail-navbar' : ''}}" t-class-left="{{recipe ? 'detail-back' : ''}}" title="{{recipe ? '' : '菜谱详情'}}" placeholder="{{!recipe}}" left-arrow delta="{{0}}" bind:go-back="back" />
+<t-empty wx:if="{{error}}" icon="file-unknown" description="{{error}}" />
+<view wx:elif="{{recipe}}" class="detail-page">
+  <view class="detail-cover">
+    <image wx:if="{{recipe.displayPhoto && !photoFailed}}" class="detail-photo" src="{{recipe.displayPhoto}}" mode="aspectFill" binderror="photoError" aria-label="{{recipe.name + '成品示意图'}}" />
+    <view wx:else class="detail-art"><food-art name="{{recipe.ingredients[0].name}}" size="200" /></view>
+  </view>
+  <view class="detail-body">
+    <view class="detail-heading"><view class="detail-title">{{recipe.name}}</view><t-button theme="primary" variant="text" size="small" icon="share" open-type="share">分享</t-button></view>
+    <view class="detail-meta"><view class="detail-category">{{recipe.category}}</view><view><t-icon name="time" size="22rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="22rpx" />{{recipe.texture}}</view><text class="example-label">内置菜谱 · 原版做法</text></view>
+    <view wx:if="{{allergyWarning}}" class="publication-error" role="alert">{{allergyWarning}}</view>
+    <view class="ingredients-panel">
+      <view class="ingredients-heading"><text class="brush">需要准备</text><text>示例用量</text></view>
+      <view wx:for="{{recipe.ingredients}}" wx:key="name" class="ingredient-row"><food-art name="{{item.name}}" size="48" /><text class="ingredient-name">{{item.name}}</text><text class="ingredient-amount">{{item.amount || '适量'}}</text></view>
+    </view>
+    <view class="steps-section"><view class="section-title">怎么做</view><view wx:for="{{recipe.steps}}" wx:key="index" class="step-row"><text class="step-number">{{index + 1}}</text><text class="step-text">{{item}}</text></view></view>
+    <view wx:if="{{recipe.note}}" class="detail-note"><view class="section-title">小提示</view><text>{{recipe.note}}</text></view>
+  </view>
+</view>

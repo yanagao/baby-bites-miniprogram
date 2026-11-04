@@ -38,6 +38,7 @@ function setup() {
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
       if (name === './baby-age') return require('../utils/baby-age');
+      if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -57,6 +58,7 @@ function setup() {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages/record-editor/index.js'), 'utf8'), {
       wx, Page(value) { definition = value; },
       require(name) {
+        if (name === '../../utils/meal-plans') return require('../utils/meal-plans');
         if (name === '../../utils/store') return store;
         if (name === '../../utils/social') return {getMine: async () => ({published: []})};
         if (name === '../../utils/recipe-origin') return require('../utils/recipe-origin');

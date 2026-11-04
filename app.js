@@ -15,7 +15,9 @@ function coverPageAllowed(page, owner, scopeKey) {
   if (page._sessionOwner && page._sessionOwner !== owner) return false;
   if (page.data.recommendationOwner && page.data.recommendationOwner !== scopeKey) return false;
   if (page._draftScope && page._draftScope !== scopeKey || page._sessionScope && page._sessionScope !== scopeKey) return false;
-  return /^pages\/(home|recipes|ingredients|ingredient-results|records|detail|random|editor|record-editor|mine|profile|discover|following|public-recipe)\/index$/.test(page.route);
+  if (page.route === 'pages/records/index' && page._scope !== undefined && page._scope !== scopeKey) return false;
+  if (page.route === 'pages/meal-plan/index') return !page._locked && !page._disposed && page._scope === scopeKey;
+  return /^pages\/(home|recipes|ingredients|ingredient-results|records|detail|random|editor|record-editor|mine|profile|discover|following|public-recipe|builtin-recipe)\/index$/.test(page.route);
 }
 
 function refreshCoverView(event) {
@@ -36,7 +38,7 @@ function refreshCoverView(event) {
     if (decorated && typeof decorated.displayPhoto === 'string' && decorated.displayPhoto !== recipe.displayPhoto) {
       changes[key + '.displayPhoto'] = decorated.displayPhoto;
       if (recipe.photo && recipe.photo.indexOf('/families/') !== -1) changes[key + '.photoSrc'] = decorated.displayPhoto;
-      if (page.route === 'pages/public-recipe/index' && key === 'recipe' && decorated.displayPhoto &&
+      if ((page.route === 'pages/public-recipe/index' || page.route === 'pages/builtin-recipe/index') && key === 'recipe' && decorated.displayPhoto &&
         !recipe.photoURL && !recipe.photo && getCoverKey(recipe) && page.data.photoFailed) changes.photoFailed = false;
     }
   }
@@ -46,18 +48,26 @@ function refreshCoverView(event) {
   }
   decorate(page.data.recipe, 'recipe');
   decorate(page.data.result, 'result');
-  for (const name of ['recommendations', 'recipes', 'matches', 'previewMatches', 'completeMatches', 'partialMatches']) {
+  for (const name of ['recommendations', 'recipes', 'pickerRecipes', 'matches', 'previewMatches', 'completeMatches', 'partialMatches']) {
     if (Array.isArray(page.data[name])) page.data[name].forEach((recipe, index) => decorate(recipe, `${name}[${index}]`));
   }
-  if (Array.isArray(page.data.logs) && typeof store.getRecipe === 'function' &&
+  if (page.route === 'pages/records/index') {
+    (page.data.rows || []).forEach((row, i) => row.cards.forEach((card, j) => decorate(card.recipe, `rows[${i}].cards[${j}].recipe`)));
+    if (page.data.completion) decorate(page.data.completion.recipe, 'completion.recipe');
+  }
+  if (page.route === 'pages/meal-plan/index') {
+    for (const name of ['days', 'visibleDays']) (page.data[name] || []).forEach((day, i) =>
+      day.meals.forEach((meal, j) => decorate(meal.recipe, `${name}[${i}].meals[${j}].recipe`)));
+  }
+  for (const name of ['logs', 'legacyLogs']) if (Array.isArray(page.data[name]) && typeof store.getRecipe === 'function' &&
     (page.route === 'pages/records/index' || page.data.isSelf)) {
-    page.data.logs.forEach((log, index) => {
+    page.data[name].forEach((log, index) => {
       if (!log || typeof log.recipeId !== 'string') return;
       const recipe = store.getRecipe(log.recipeId);
       if (recipe && recipe.photo && recipe.photo.indexOf('/families/') !== -1) {
         const source = familyPhotos.photoURL(recipe.photo);
-        if (source !== log.displayPhoto) changes[`logs[${index}].displayPhoto`] = source;
-        if (source !== log.photoSrc) changes[`logs[${index}].photoSrc`] = source;
+        if (source !== log.displayPhoto) changes[`${name}[${index}].displayPhoto`] = source;
+        if (source !== log.photoSrc) changes[`${name}[${index}].photoSrc`] = source;
         return;
       }
       if (log.photoSrc) return;
@@ -66,7 +76,7 @@ function refreshCoverView(event) {
       if (!recipe || recipe.photo || recipe.photoURL || !getCoverKey(recipe) ||
         changedKey && getCoverKey(recipe) !== changedKey) return;
       const source = getCover(recipe);
-      if (source !== log.displayPhoto) changes[`logs[${index}].displayPhoto`] = source;
+      if (source !== log.displayPhoto) changes[`${name}[${index}].displayPhoto`] = source;
     });
   }
   const currentPages = getCurrentPages();

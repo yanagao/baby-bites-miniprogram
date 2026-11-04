@@ -7,7 +7,7 @@ Component({
       {value:'/pages/home/index',label:'首页',icon:'home'},
       {value:'/pages/discover/index',label:'发现',icon:'book-open'},
       {value:'add',label:'添加',icon:{name:'add-circle-filled',size:'56rpx',color:'#73c6e8'}},
-      {value:'/pages/records/index',label:'记录',icon:'calendar'},
+      {value:'/pages/records/index',label:'餐单',icon:'calendar'},
       {value:'/pages/mine/index',label:'我的',icon:'user'}
     ]
   },

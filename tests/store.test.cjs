@@ -149,7 +149,7 @@ test('feedback rejects impossible/future dates and invalid ratings', () => {
   for (const date of ['2024-02-30', '2023-02-29', '2024-13-01', '9999-12-31']) {
     assert.throws(() => app.store.addLog({recipeId, rating: 3, date}), /用餐记录/);
   }
-  assert.throws(() => app.store.addLog({recipeId, rating: 0}), /用餐记录/);
+  assert.throws(() => app.store.addLog({recipeId, rating: 4}), /用餐记录/);
   assert.throws(() => app.store.addLog({recipeId, rating: 3, note: '字'.repeat(501)}), /用餐记录/);
   assert.equal(app.store.getState().logs.length, 0);
   app.store.addLog({recipeId, rating: 2, date: '2024-02-29'});
@@ -393,7 +393,7 @@ test('invalid and failed meal edits keep persisted data and memory unchanged', (
   const before = app.store.getState();
   const savedBefore = app.saved();
   for (const input of [
-    {rating: 0, date: '2024-04-02'}, {rating: 3, date: '2024-02-30'},
+    {rating: 4, date: '2024-04-02'}, {rating: 3, date: '2024-02-30'},
     {rating: 3, date: '2024-04-02', recipeId: 'another-recipe'}
   ]) assert.throws(() => app.store.updateLog(id, input));
   assert.throws(() => app.store.updateLog('missing', {rating: 3, date: '2024-04-02'}), /不存在/);
