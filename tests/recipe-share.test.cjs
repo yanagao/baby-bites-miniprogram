@@ -31,13 +31,110 @@ test('sharing and returning retain verified recipe data without another request 
         await page.onShow();
       }
       // A canceled share chooser has the same hide/show lifecycle.
-      page.onHide(); await page.onShow();
+      page.onShareAppMessage(); page.onHide(); await page.onShow();
       assert.equal(app.calls.shareLinks.length, 1);
       assert.equal(app.calls.updates, updates);
       assert.equal(app.calls.shareMenu.length, menuCalls);
       assert.deepEqual(clone(page.data), snapshot);
     });
   }
+});
+
+test('ordinary returns revalidate saved copies when the original author renames or withdraws the recipe', async t => {
+  for (const change of ['rename', 'NOT_PUBLIC']) await t.test(change, async () => {
+    const source = {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'};
+    const app = setup({recipe: {source}}), page = await app.open();
+    const localBefore = clone(app.store.getRecipe(LOCAL_ID));
+    page.onHide();
+    if (change === 'rename') app.updatePublicSnapshot('原作者的新菜名');
+    else app.hooks.recipe = () => { throw Object.assign(Error('原作者已取消公开'), {code: 'NOT_PUBLIC'}); };
+    await page.onShow();
+    assert.equal(app.calls.shareLinks.length, 2);
+    assert.deepEqual(clone(app.store.getRecipe(LOCAL_ID)), localBefore);
+    if (change === 'rename') assert.equal(page.onShareAppMessage().title, '原作者的新菜名 · 口袋食谱');
+    else { assertUnshareable(page); assert.match(page.data.shareError, /取消公开/); }
+  });
+});
+
+test('one share return does not suppress a later ordinary background refresh', async () => {
+  const app = setup(), page = await app.open();
+  page.onShareAppMessage(); page.onHide(); await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
+  page.onHide(); app.updatePublicSnapshot('后台更新的菜名'); await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(page.data.shareRecipe.name, '后台更新的菜名');
+});
+
+test('a share cancelled without hiding cannot suppress a later normal navigation return', async t => {
+  for (const action of ['previewPhoto', 'edit', 'record', 'openLastLog', 'openProfile', 'openPublicRecipe', 'openCooksnap']) {
+    await t.test(action, async () => {
+      const app = setup({recipe: {photo: 'wxfile://usr/photo.jpg', source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}});
+      const page = await app.open(); page.onShareAppMessage();
+      page[action](); page.onHide(); app.updatePublicSnapshot('导航后的新菜名'); await page.onShow();
+      assert.equal(app.calls.shareLinks.length, 2);
+      assert.equal(page.data.shareRecipe.name, '导航后的新菜名');
+    });
+  }
+});
+
+test('social invalidation before or during native sharing requires a new verified link', async t => {
+  for (const when of ['before share', 'during share']) await t.test(when, async () => {
+    const app = setup(), page = await app.open();
+    if (when === 'before share') app.invalidateReads();
+    page.onShareAppMessage(); page.onHide();
+    if (when === 'during share') app.invalidateReads();
+    app.updatePublicSnapshot('社交更新后的菜名'); await page.onShow();
+    assert.equal(app.calls.shareLinks.length, 2);
+    assert.equal(page.data.shareRecipe.name, '社交更新后的菜名');
+  });
+});
+
+test('a response crossing social invalidation cannot mark its share-return metadata as current', async () => {
+  const app = setup();
+  app.hooks.link = () => {
+    const result = linkResult(app, '失效前的菜名');
+    app.invalidateReads();
+    return result;
+  };
+  const page = await app.open(); delete app.hooks.link;
+  page.onShareAppMessage(); page.onHide(); app.updatePublicSnapshot('重新确认的菜名');
+  await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(page.data.shareRecipe.name, '重新确认的菜名');
+});
+
+test('manual preparation consumes an old native-share exemption and still forces its request', async () => {
+  const app = setup(), page = await app.open(); page.onShareAppMessage();
+  await page.requestShare(); assert.equal(app.calls.shareLinks.at(-1).force, true);
+  page.onHide(); await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 3);
+});
+
+test('a social change during pending preparation starts a fresh read on return and ignores the older response', async () => {
+  const app = setup(), gate = pending(), stale = linkResult(app, '失效菜名');
+  app.hooks.link = () => gate.promise;
+  const first = app.page.onShow(); app.page.onHide(); app.invalidateReads();
+  app.hooks.link = () => linkResult(app, '重新校验后的菜名');
+  const second = app.page.onShow();
+  // Do not await a mistakenly reused old promise before reporting the regression.
+  assert.equal(app.calls.shareLinks.length, 2);
+  await second;
+  const updates = app.calls.updates; gate.resolve(stale); await first;
+  assert.equal(app.calls.updates, updates);
+  assert.equal(app.page.data.shareRecipe.name, '重新校验后的菜名');
+});
+
+test('an unconsumed native-share return cannot survive account or family changes or unload', async t => {
+  for (const change of ['account', 'family', 'unload']) await t.test(change, async () => {
+    const app = setup(), page = await app.open(); page.onShareAppMessage(); page.onHide();
+    if (change === 'account') { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); }
+    else if (change === 'family') {
+      app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+      app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+    } else page.onUnload();
+    const reads = app.calls.shareLinks.length;
+    await page.onShow(); assert.equal(app.calls.shareLinks.length, reads); assertUnshareable(page);
+  });
 });
 
 test('returning during share preparation reuses the current request', async () => {

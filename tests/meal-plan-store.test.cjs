@@ -174,6 +174,86 @@ test('backup restore preserves meal plans, optional feedback and older backups w
   assert.equal(restored.store.getState().mealPlans.length, 1); assert.equal(restored.store.getState().logs.length, 1);
 });
 
+test('backup import replaces an older completion after the same meal was deleted and completed with another dish', () => {
+  const source = setup(), [a, b] = source.ids;
+  const [plan] = source.store.saveMealPlans([entry(a)]);
+  const logId = source.store.completeMeal({planId: plan.id, rating: 1});
+  const oldStorage = source.persisted(), oldBackup = source.store.exportBackup();
+  source.store.deleteLog(logId);
+  source.store.saveMealPlans([entry(b)]);
+  assert.equal(source.store.completeMeal({planId: plan.id, rating: 3}), logId);
+  const newBackup = source.store.exportBackup(), replacement = source.store.getLog(logId);
+  const target = setup(oldStorage);
+  target.store.importBackup(newBackup);
+  assert.deepEqual(target.store.getLog(logId), replacement);
+  assert.equal(target.store.getState().mealPlans[0].recipeId, b);
+  assert.equal(target.store.getState().logs.length, 1);
+  target.store.importBackup(oldBackup);
+  assert.deepEqual(target.store.getLog(logId), replacement, 'an older backup cannot undo the rebuilt completion');
+  assert.equal(target.store.getState().mealPlans[0].recipeId, b);
+});
+
+test('a rebuilt completion cannot displace a newer local plan or its moved historical record', t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const original = setup(), [a, b, c] = original.ids;
+  const [plan] = original.store.saveMealPlans([entry(a)]);
+  const logId = original.store.completeMeal({planId: plan.id, rating: 1});
+  const originalStorage = original.persisted();
+  now += 100;
+  original.store.updateLog(logId, {date: shiftDate(DATE, -1), rating: 1});
+  const movedStorage = original.persisted();
+  now += 100;
+  const source = setup(originalStorage);
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  source.store.completeMeal({planId: plan.id, rating: 3});
+  const backup = source.store.exportBackup();
+  now += 100;
+  const target = setup(movedStorage);
+  target.store.saveMealPlans([entry(c)]);
+  const before = target.store.getState();
+  assert.ok(JSON.parse(backup).logs[0].updatedAt > target.store.getLog(logId).updatedAt);
+  target.store.importBackup(backup);
+  assert.deepEqual(target.store.getState(), before, 'the completion and plan must not be partially imported');
+});
+
+test('backup import still rejects ordinary log ID collisions across recipes', () => {
+  const app = setup(), [a, b] = app.ids;
+  const logId = app.store.addLog({...entry(a), rating: 1});
+  app.store.saveMealPlans([entry(a)]);
+  const before = app.store.getState(), backup = JSON.parse(app.store.exportBackup());
+  Object.assign(backup.logs[0], {recipeId: b, rating: 3, createdAt: Date.now() + 100, updatedAt: Date.now() + 100});
+  Object.assign(backup.mealPlans[0], {recipeId: b, updatedAt: Date.now() + 100});
+  assert.ok(!logId.startsWith('meal-log-'));
+  app.store.importBackup(JSON.stringify(backup));
+  assert.deepEqual(app.store.getState(), before);
+});
+
+test('rebuilt completion imports preserve tombstones and the replacement authorship without inheriting its predecessor', () => {
+  const original = setup(), [a, b] = original.ids;
+  const [plan] = original.store.saveMealPlans([entry(a)]);
+  const logId = original.store.completeMeal({planId: plan.id, rating: 1});
+  original.store.deleteLog(logId);
+  original.store.completeMeal({planId: plan.id, rating: 2});
+  const oldStorage = original.persisted();
+  oldStorage.logs[0].recordedBy = {memberId: 'a'.repeat(32), label: '妈妈'};
+  const source = setup(oldStorage), oldSnapshot = source.store.getSyncSnapshot();
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  source.store.completeMeal({planId: plan.id, rating: 3});
+  const backup = JSON.parse(source.store.exportBackup());
+  for (const author of [undefined, {memberId: 'b'.repeat(32), label: '爸爸'}]) {
+    const target = setup(oldStorage);
+    if (author) backup.logs[0].recordedBy = author;
+    target.store.importBackup(JSON.stringify(backup));
+    assert.deepEqual(target.store.getLog(logId).recordedBy, author);
+    assert.equal(target.store.getState().mealPlans[0].recipeId, b);
+    const restored = target.store.getSyncSnapshot();
+    assert.deepEqual(restored.deleted.logs, oldSnapshot.deleted.logs);
+    assert.ok(restored.data.logs[0].updatedAt > restored.deleted.logs[0].updatedAt);
+    assert.equal(mergeSnapshots(restored, oldSnapshot).data.logs[0].recipeId, b);
+  }
+});
+
 test('explicit restoration advances a known plan deletion and retains its tombstone', () => {
   const app = setup(), [a] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]), backup = app.store.exportBackup();

@@ -715,11 +715,28 @@ function importBackup(text, options) {
     });
     next.recipes = Array.from(recipes.values());
     const logs = new Map(next.logs.map(log => [log.id, log]));
+    const incomingPlans = new Map((incoming.mealPlans || []).map(plan => [plan.id, plan]));
+    const rebuiltMeals = [];
     incoming.logs.forEach(log => {
       const local = logs.get(log.id);
       if (!local) { logs.set(log.id, restoreKnownDeletion(log, deletedLogs)); summary.addedLogs += 1; }
       else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) logs.set(log.id, log);
+      else if (log.recipeId !== local.recipeId && log.updatedAt > local.updatedAt &&
+        log.createdAt > Math.max(local.createdAt, local.updatedAt) && log.id === 'meal-log-' + planId(log.date, log.meal)) {
+        const plan = incomingPlans.get(planId(log.date, log.meal));
+        if (plan && plan.recipeId === log.recipeId) rebuiltMeals.push({log, plan});
+      }
     });
+    // A deleted completion can be rebuilt with another dish under the same
+    // stable slot ID. Accept that new generation only together with its plan;
+    // ordinary log IDs still cannot change recipes during backup import.
+    for (const {log, plan} of rebuiltMeals) {
+      const localPlan = (next.mealPlans || []).find(item => item.id === plan.id);
+      if (localPlan && localPlan.recipeId !== plan.recipeId && (plan.updatedAt <= localPlan.updatedAt ||
+        Array.from(logs.values()).some(item => item.id !== log.id && item.date === localPlan.date &&
+          item.meal === localPlan.meal && item.recipeId === localPlan.recipeId))) continue;
+      logs.set(log.id, log);
+    }
     next.logs = Array.from(logs.values());
     if (incoming.mealPlans !== undefined) {
       const deletedPlans = new Map((sync.deleted.mealPlans || []).map(item => [item.id, item]));

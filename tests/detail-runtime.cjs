@@ -31,6 +31,7 @@ function setup(options = {}) {
     recipes: [localRecipe], logs: [{id: 'private-meal', recipeId: sourceID, rating: 2,
       date: '2020-01-01', portion: '', note: '私密用餐记录', createdAt: 1}]}]]);
   const hooks = {};
+  let readVersion = 0;
   const syncListeners = new Set();
   const calls = {shareLinks: [], mine: 0, recipe: [], publish: [], unpublish: [], navigation: [], toasts: [], errors: [],
     shareMenu: [], updates: 0, backs: 0, sync: 0};
@@ -56,6 +57,7 @@ function setup(options = {}) {
   const store = storeModule.exports;
   if (!options.unbound) store.bindAccount(OWNER);
   const social = {
+    getReadVersion: () => readVersion,
     async getRecipeShareLink(id, options) {
       calls.shareLinks.push({id, ...options});
       const localVersion = JSON.stringify(store.getRecipe(id));
@@ -115,6 +117,7 @@ function setup(options = {}) {
   }};
   page.onLoad({id: sourceID});
   return {page, store, calls, hooks, options, syncListeners, sourceID, isPublished: () => published,
+    invalidateReads() { readVersion++; },
     emitSync(status) { syncListeners.forEach(listener => listener({state: 'synced', owner: OWNER, lastSyncedAt: 10, revision: 1, publicationVersion: 1, ...status})); },
     updatePublicSnapshot(name) { publicRecipe = {...publicRecipe, name}; sourceUpdatedAt = store.getRecipe(sourceID).updatedAt; },
     async open() { await page.onShow(); await turn(); return page; }};
