@@ -7,6 +7,7 @@
     "pages/ingredients/index",
     "pages/ingredient-results/index",
     "pages/records/index",
+    "pages/meal-plan/index",
     "pages/detail/index",
     "pages/editor/index",
     "pages/record-editor/index",
@@ -16,6 +17,7 @@
     "pages/profile/index",
     "pages/following/index",
     "pages/public-recipe/index",
+    "pages/builtin-recipe/index",
     "pages/share-preview/index",
     "pages/feedback/index",
     "pages/cooksnap-editor/index",
@@ -39,7 +41,7 @@
       },
       {
         "pagePath": "pages/records/index",
-        "text": "记录"
+        "text": "餐单"
       },
       {
         "pagePath": "pages/mine/index",

@@ -276,3 +276,27 @@ test('already cached results can resolve immediately but foreground still calls 
   assert.equal(h.calls.loads, 2);
   assert.equal(current.changes.length, 1);
 });
+
+test('meal planning and completion receive image patches without resetting drafts or reading another scope', async () => {
+  for (const route of ['records', 'meal-plan']) {
+    const h = appFixture();
+    const recipe = {id: 'pumpkin-millet', displayPhoto: ''};
+    const data = route === 'records' ? {rows: [{cards: [{recipe}]}], completion: {recipe},
+      completeVisible: true, completionRating: 3, completionPortion: '吃了一些', pickerRecipes: [recipe]} :
+      {days: [{meals: [{recipe}]}], visibleDays: [{meals: [{recipe}]}], pickerRecipes: [recipe],
+        count: 1, search: '南瓜', pickerVisible: true};
+    const current = page(route, data, {_scope: 'account-a', _draft: [{recipeId: 'pumpkin-millet'}]});
+    const before = clone(current.data), draft = clone(current._draft);
+    h.show(current); h.app.onLaunch(); await flush(); h.emit(pumpkin);
+    assert.ok(current.changes.length);
+    assert.ok(Object.keys(current.changes[0]).every(key => key.endsWith('.displayPhoto')));
+    assert.equal(current.data.pickerRecipes[0].displayPhoto, localSource(pumpkin));
+    assert.deepEqual(current._draft, draft);
+    h.emit(pumpkin, '');
+    assert.deepEqual(current.data, before);
+    const updates = current.changes.length;
+    h.owner('account-b'); h.emit(pumpkin);
+    assert.equal(current.changes.length, updates);
+    h.show(null); await h.complete();
+  }
+});

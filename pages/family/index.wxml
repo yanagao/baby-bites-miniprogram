@@ -1,9 +1,48 @@
-<t-navbar title="宝宝的家庭" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<t-navbar title="{{inviteMode ? '加入家庭' : '宝宝的家庭'}}" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
 <view class="family-page">
   <view wx:if="{{loading}}" class="empty-note">正在打开家庭…</view>
   <view wx:elif="{{error}}" class="family-state"><text>{{error}}</text><t-button theme="primary" variant="text" bind:tap="reload">重新加载</t-button></view>
   <block wx:else>
-    <block wx:if="{{!family}}">
+    <view wx:if="{{inviteMode}}" class="family-invitation">
+      <block wx:if="{{family}}">
+        <view class="family-heading">你已加入一个家庭</view>
+        <view class="muted family-intro">当前正在和「{{family.name}}」的家人一起记录。</view>
+        <view class="family-card"><view class="family-note">每次只能加入一个家庭。如果这就是受邀的家庭，可以直接查看家庭资料。</view></view>
+        <t-button theme="primary" block shape="round" bind:tap="openCurrentFamily">查看我的家庭</t-button>
+      </block>
+      <block wx:elif="{{preview}}">
+        <view class="family-invite-step">{{inviteStep === 'confirm' ? '第 1 步 · 确认家庭' : '第 2 步 · 填写身份'}}</view>
+        <view class="family-heading">{{inviteStep === 'confirm' ? '家人邀请你一起记录' : '你与宝宝的关系'}}</view>
+        <view class="muted family-intro">{{inviteStep === 'confirm' ? '一起照顾宝宝，分享每一餐。' : '选择你的身份，也可以填写其他称谓。'}}</view>
+        <view class="family-card family-invite-summary">
+          <view class="family-title">{{preview.name}}</view>
+          <view class="family-baby-summary">{{preview.nickname}} · {{preview.memberCount}} 位家人</view>
+          <view wx:if="{{inviteStep === 'confirm'}}" class="family-note family-invite-expiry">{{inviteExpiry}}</view>
+        </view>
+        <block wx:if="{{inviteStep === 'confirm'}}">
+          <view class="family-note family-invite-explanation">加入后和家人共用宝宝的辅食记录。原来的个人数据会保留，不会自动合并。</view>
+          <t-button class="family-invite-primary" theme="primary" block shape="round" disabled="{{busy}}" bind:tap="confirmInvitation">确认加入这个家庭</t-button>
+          <t-button class="family-invite-secondary" theme="default" variant="text" block disabled="{{busy}}" bind:tap="back">暂不加入</t-button>
+        </block>
+        <block wx:else>
+          <view class="family-card family-invite-role">
+            <view class="family-title">我的身份</view>
+            <view class="family-roles"><button wx:for="{{roleOptions}}" wx:key="*this" class="family-role {{roleLabel === item ? 'family-role-selected' : ''}}" data-label="{{item}}" bindtap="chooseRole" disabled="{{busy}}">{{item}}</button></view>
+            <view class="family-field"><t-input value="{{roleLabel}}" maxlength="20" borderless disabled="{{busy}}" placeholder="也可以填写其他称谓" bind:change="changeRole" /></view>
+          </view>
+          <t-button class="family-invite-primary" theme="primary" block shape="round" loading="{{busy}}" disabled="{{busy}}" bind:tap="join">{{busy ? '正在加入…' : '完成加入'}}</t-button>
+          <t-button class="family-invite-secondary" theme="default" variant="text" block disabled="{{busy}}" bind:tap="backToInvitation">上一步</t-button>
+        </block>
+      </block>
+      <view wx:elif="{{busy}}" class="family-state">正在查看家庭邀请…</view>
+      <view wx:else class="family-state">
+        <view class="family-title">{{inviteUnavailable ? '邀请已失效' : '暂时无法查看邀请'}}</view>
+        <view class="family-note">{{inviteError || '请重新打开家人发来的邀请。'}}</view>
+        <t-button wx:if="{{!inviteUnavailable && token}}" theme="primary" block shape="round" bind:tap="previewInvite">重新查看</t-button>
+        <t-button theme="default" variant="text" block bind:tap="back">返回</t-button>
+      </view>
+    </view>
+    <block wx:elif="{{!family}}">
       <view class="family-heading">一家人，一起记</view>
       <view class="muted family-intro">爸爸妈妈和祖辈共用一份宝宝辅食记录。每个家庭先照顾一个宝宝，无需完善个人主页资料。</view>
       <view class="family-card">
@@ -21,7 +60,6 @@
         <view class="family-title">已有家人创建了家庭？</view>
         <view class="family-field"><t-input label="邀请码" layout="vertical" value="{{token}}" maxlength="128" borderless disabled="{{busy}}" placeholder="填写家人发来的邀请码" bind:change="changeToken" /></view>
         <t-button theme="primary" variant="outline" block shape="round" disabled="{{busy}}" bind:tap="previewInvite">查看邀请</t-button>
-        <view wx:if="{{preview}}" class="family-preview"><view class="family-title">{{preview.name}}</view><view>{{preview.nickname}} · {{preview.memberCount}} 位家人</view><text class="family-note">{{inviteExpiry}}</text><view class="family-note">加入后切换到这个宝宝的记录，原来的个人数据保留，不会自动合并。</view><t-button theme="primary" block shape="round" disabled="{{busy}}" bind:tap="join">加入这个家庭</t-button></view>
       </view>
     </block>
     <block wx:else>
@@ -54,7 +92,7 @@
       <view wx:else class="family-note">需要邀请其他家人时，请联系家庭管理员生成邀请。</view>
       <t-button class="family-leave" theme="default" variant="text" block disabled="{{busy}}" bind:tap="leave">{{family.memberCount === 1 ? '解散家庭' : '退出家庭'}}</t-button>
     </block>
-    <view wx:if="{{busy}}" class="family-status">{{busyText}}</view>
+    <view wx:if="{{busy && !inviteMode}}" class="family-status">{{busyText}}</view>
     <view wx:if="{{actionError}}" class="family-error" role="alert">{{actionError}}</view>
   </block>
 </view>

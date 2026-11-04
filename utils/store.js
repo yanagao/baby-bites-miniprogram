@@ -8,6 +8,7 @@ const {normalizeAllergies} = require('./allergies');
 const {isBuiltInRecipe} = require('./recipe-origin');
 const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const {isValidBirthDate} = require('./baby-age');
+const {validMeal, validPlanDate, validPlanId, planId} = require('./meal-plans');
 const STORAGE_KEY = 'baby-bites-v1';
 const ACTIVE_OWNER_KEY = 'baby-bites-active-owner';
 const ACCOUNT_PREFIX = 'baby-bites-account-';
@@ -16,7 +17,7 @@ const FAMILY_PREFIX = 'baby-bites-family-cache-';
 const ALLERGY_FILTER_PREFIX = 'baby-bites-allergy-filter-v1:';
 // Bump when snapshot parsing gains fields older clients discarded. Keep this
 // beside the data in __sync: older writers drop unknown metadata on persistence.
-const SNAPSHOT_SCHEMA_VERSION = 2;
+const SNAPSHOT_SCHEMA_VERSION = 3;
 const validOwner = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 let owner = null;
 let scope = null;
@@ -137,22 +138,38 @@ function validateData(data) {
         authorName: recipe.source.authorName.trim()}} : {})
     };
   });
+  const hasMealPlans = data.mealPlans !== undefined;
+  if (hasMealPlans && (!Array.isArray(data.mealPlans) || data.mealPlans.length > 3000)) fail('餐单格式不正确或超过 3000 餐。');
+  const mealIds = new Set();
+  const mealPlans = hasMealPlans ? data.mealPlans.map(plan => {
+    if (!isObject(plan) || !validPlanDate(plan.date) || !validMeal(plan.meal) || plan.id !== planId(plan.date, plan.meal) ||
+      mealIds.has(plan.id) || !recipeIds.has(plan.recipeId) ||
+      ![plan.createdAt, plan.updatedAt].every(value => value == null || Number.isSafeInteger(value) && value >= 0)) {
+      fail('餐单信息不完整：请检查日期、餐次和对应菜谱。');
+    }
+    mealIds.add(plan.id);
+    return {id: plan.id, date: plan.date, meal: plan.meal, recipeId: plan.recipeId,
+      createdAt: plan.createdAt || 0, updatedAt: plan.updatedAt || 0};
+  }) : undefined;
   const logIds = new Set();
   const logs = data.logs.map(log => {
     if (!isObject(log) || !validString(log.id, 100) || !log.id.trim() || logIds.has(log.id) ||
-      !recipeIds.has(log.recipeId) || ![1, 2, 3].includes(log.rating) || !validDate(log.date) ||
+      !recipeIds.has(log.recipeId) || !(hasMealPlans ? [0, 1, 2, 3] : [1, 2, 3]).includes(log.rating) || !validDate(log.date) ||
+      (log.meal !== undefined && (!hasMealPlans || !validMeal(log.meal))) ||
       (log.note != null && !validString(log.note, 500)) || (log.portion != null && !validString(log.portion, 40)) ||
       !validTimestamp(log.createdAt) || !validTimestamp(log.updatedAt) ||
       log.recordedBy !== undefined && (!isObject(log.recordedBy) || !/^[a-f0-9]{32}$/.test(log.recordedBy.memberId || '') ||
         !validString(log.recordedBy.label, 20) || !log.recordedBy.label.trim() || /[\u0000-\u001f\u007f]/.test(log.recordedBy.label))) fail('用餐记录不完整：请检查对应菜谱、本次喜好和用餐日期。');
     logIds.add(log.id);
     return {id: log.id, recipeId: log.recipeId, rating: log.rating, date: log.date,
+      ...(log.meal === undefined ? {} : {meal: log.meal}),
       portion: log.portion || '', note: log.note || '', createdAt: log.createdAt || 0, updatedAt: log.updatedAt || 0,
       ...(log.recordedBy === undefined ? {} : {recordedBy: {memberId: log.recordedBy.memberId, label: log.recordedBy.label.trim()}})};
   });
   return {version: 1, nickname: nickname.trim(), profileUpdatedAt: data.profileUpdatedAt || 0,
     ...(hasBirthDate ? {babyBirthDate: data.babyBirthDate, babyBirthDateUpdatedAt: data.babyBirthDateUpdatedAt || 0} : {}),
-    ...(allergies === undefined ? {} : {allergies, allergiesUpdatedAt: data.allergiesUpdatedAt || 0}), recipes, logs};
+    ...(allergies === undefined ? {} : {allergies, allergiesUpdatedAt: data.allergiesUpdatedAt || 0}),
+    ...(hasMealPlans ? {mealPlans} : {}), recipes, logs};
 }
 
 function freshSync() {
@@ -168,11 +185,13 @@ function readValue(key) {
 function validateDeleted(deleted) {
   if (!isObject(deleted) || !Array.isArray(deleted.recipes) || !Array.isArray(deleted.logs)) fail('云同步删除记录格式不正确。');
   const clean = {};
-  ['recipes', 'logs'].forEach(type => {
+  ['recipes', 'logs', ...(deleted.mealPlans === undefined ? [] : ['mealPlans'])].forEach(type => {
+    if (!Array.isArray(deleted[type]) || type === 'mealPlans' && deleted[type].length > 30000) fail('云同步删除记录格式不正确。');
     const ids = new Set();
     clean[type] = deleted[type].map(item => {
       if (!isObject(item) || !validString(item.id, 100) || !item.id.trim() || ids.has(item.id) ||
-        !Number.isFinite(item.updatedAt) || item.updatedAt < 0) fail('云同步删除记录格式不正确。');
+        !Number.isFinite(item.updatedAt) || item.updatedAt < 0 ||
+        type === 'mealPlans' && (!validPlanId(item.id) || !Number.isSafeInteger(item.updatedAt))) fail('云同步删除记录格式不正确。');
       ids.add(item.id);
       return {id: item.id, updatedAt: item.updatedAt};
     });
@@ -181,7 +200,10 @@ function validateDeleted(deleted) {
 }
 function validateSnapshot(snapshot) {
   if (!isObject(snapshot) || snapshot.version !== 1) fail('云同步数据版本不正确。');
-  return {version: 1, data: validateData(snapshot.data), deleted: validateDeleted(snapshot.deleted)};
+  const data = validateData(snapshot.data), deleted = validateDeleted(snapshot.deleted);
+  if (data.mealPlans !== undefined && deleted.mealPlans === undefined) deleted.mealPlans = [];
+  if (deleted.mealPlans !== undefined && data.mealPlans === undefined) fail('云同步餐单信息不完整。');
+  return {version: 1, data, deleted};
 }
 function validateSync(value, fallbackHasData) {
   if (value == null) return Object.assign(freshSync(), {dirty: Boolean(fallbackHasData), hasLocalData: Boolean(fallbackHasData)});
@@ -268,7 +290,9 @@ function getSyncInfo() {
 function getSyncSnapshot() {
   init();
   if (readBlocked) fail(warning);
-  return clone({version: 1, data: sync.hasLocalData ? state : emptyState(), deleted: sync.deleted});
+  const data = sync.hasLocalData ? state : emptyState();
+  return clone({version: 1, data, deleted: {...sync.deleted,
+    ...(data.mealPlans === undefined ? {} : {mealPlans: sync.deleted.mealPlans || []})}});
 }
 
 function pendingFamilyPhotoIds(afterSequence = 0) {
@@ -374,9 +398,9 @@ function commit(mutator, recover) {
     if (persisted && persisted.__syncMigratedTo) fail('本机数据已绑定微信账号，请重新同步后再保存。');
   }
   const next = clone(state);
-  mutator(next);
-  const validated = validateData(next);
   const nextSync = clone(sync);
+  mutator(next, nextSync);
+  const validated = validateData(next);
   nextSync.sequence += 1;
   nextSync.dirty = true;
   nextSync.hasLocalData = true;
@@ -391,16 +415,17 @@ function commit(mutator, recover) {
       if (sequence) nextSync.photoEdits.push({id: recipe.id, sequence});
     }
   }
-  ['recipes', 'logs'].forEach(type => {
-    const ids = new Set(validated[type].map(item => item.id));
-    const tombstones = new Map(nextSync.deleted[type].map(item => [item.id, item]));
-    state[type].forEach(item => {
+  ['recipes', 'logs', ...(validated.mealPlans === undefined ? [] : ['mealPlans'])].forEach(type => {
+    const ids = new Set((validated[type] || []).map(item => item.id));
+    const tombstones = new Map((nextSync.deleted[type] || []).map(item => [item.id, item]));
+    (state[type] || []).forEach(item => {
       if (!ids.has(item.id)) {
         const old = tombstones.get(item.id);
         tombstones.set(item.id, {id: item.id, updatedAt: timestamp(Math.max(item.updatedAt || item.createdAt || 0, old ? old.updatedAt : 0))});
       }
     });
     nextSync.deleted[type] = Array.from(tombstones.values());
+    if (type === 'mealPlans' && nextSync.deleted[type].length > 30000) fail('餐单删除记录超过同步限制，本次未保存。');
   });
   writeState(validated, nextSync, owner);
   state = validated;
@@ -476,6 +501,7 @@ function deleteRecipe(recipeId) {
   commit(next => {
     next.recipes = next.recipes.filter(recipe => recipe.id !== recipeId);
     next.logs = next.logs.filter(log => log.recipeId !== recipeId);
+    if (next.mealPlans) next.mealPlans = next.mealPlans.filter(plan => plan.recipeId !== recipeId);
   });
   return true;
 }
@@ -517,8 +543,12 @@ function addLog(input) {
   const logId = makeId('log');
   const log = {id: logId, recipeId: input.recipeId, rating: Number(input.rating),
     date: input.date || selectors.today(), portion: input.portion == null ? '' : input.portion,
-    note: input.note == null ? '' : input.note, createdAt: Date.now()};
-  commit(next => { next.logs.push(log); });
+    note: input.note == null ? '' : input.note, createdAt: Date.now(),
+    ...(input.meal === undefined ? {} : {meal: input.meal})};
+  commit(next => {
+    if (log.rating === 0 || log.meal !== undefined) next.mealPlans = next.mealPlans || [];
+    next.logs.push(log);
+  });
   return logId;
 }
 
@@ -531,9 +561,78 @@ function updateLog(logId, input) {
     rating: Number(input.rating), date: input.date,
     portion: input.portion == null ? '' : input.portion,
     note: input.note == null ? '' : input.note,
-    updatedAt: timestamp(existing.updatedAt)
+    updatedAt: timestamp(existing.updatedAt),
+    ...(input.meal === undefined ? {} : {meal: input.meal})
   });
-  commit(next => { next.logs = next.logs.map(log => log.id === logId ? updated : log); });
+  commit(next => {
+    if (updated.rating === 0 || updated.meal !== undefined) next.mealPlans = next.mealPlans || [];
+    next.logs = next.logs.map(log => log.id === logId ? updated : log);
+  });
+  return logId;
+}
+
+function matchingMealLog(plan) {
+  return state.logs.find(log => log.date === plan.date && log.meal === plan.meal && log.recipeId === plan.recipeId);
+}
+
+function saveMealPlans(entries, options = {}) {
+  init();
+  if (!Array.isArray(entries) || entries.length > 3000 || !isObject(options) ||
+    options.expected !== undefined && !Array.isArray(options.expected)) fail('餐单格式不正确，请重新选菜。');
+  const current = new Map((state.mealPlans || []).map(plan => [plan.id, plan]));
+  const expected = options.expected && new Map(options.expected.map(plan => [plan.id, plan]));
+  const comparable = plan => plan ? JSON.stringify([plan.id, plan.date, plan.meal, plan.recipeId, plan.createdAt || 0, plan.updatedAt || 0]) : '';
+  const ids = new Set(), updates = [];
+  for (const entry of entries) {
+    if (!isObject(entry) || !validPlanDate(entry.date) || !validMeal(entry.meal) ||
+      !state.recipes.some(recipe => recipe.id === entry.recipeId)) fail('餐单中的菜谱或日期已失效，请重新选菜。');
+    const id = planId(entry.date, entry.meal), previous = current.get(id);
+    if (ids.has(id)) fail('同一餐只能安排一道菜，请检查餐单。');
+    ids.add(id);
+    if (expected && comparable(previous) !== comparable(expected.get(id))) fail('这份餐单已被更新，请重新打开后再安排。');
+    if (previous && previous.recipeId === entry.recipeId) continue;
+    if (previous && matchingMealLog(previous)) fail('这餐已有用餐记录，请先修改或删除记录后再换菜。');
+    const tombstone = (sync.deleted.mealPlans || []).find(item => item.id === id);
+    const now = timestamp(Math.max(previous && (previous.updatedAt || previous.createdAt) || 0, tombstone && tombstone.updatedAt || 0));
+    updates.push({id, date: entry.date, meal: entry.meal, recipeId: entry.recipeId,
+      createdAt: previous ? previous.createdAt : now, updatedAt: now});
+  }
+  if (!updates.length) return entries.map(entry => clone(current.get(planId(entry.date, entry.meal))));
+  commit(next => {
+    const plans = new Map((next.mealPlans || []).map(plan => [plan.id, plan]));
+    updates.forEach(plan => plans.set(plan.id, plan));
+    next.mealPlans = Array.from(plans.values());
+  });
+  return entries.map(entry => clone(state.mealPlans.find(plan => plan.id === planId(entry.date, entry.meal))));
+}
+
+function removeMealPlan(id) {
+  init();
+  const plan = (state.mealPlans || []).find(item => item.id === id);
+  if (!plan) fail('这餐安排已不存在，请重新查看餐单。');
+  if (matchingMealLog(plan)) fail('这餐已有用餐记录，请先修改或删除记录后再移除安排。');
+  commit(next => { next.mealPlans = next.mealPlans.filter(item => item.id !== id); });
+  return true;
+}
+
+function completeMeal(input) {
+  init();
+  if (!isObject(input)) fail('请选择要完成的一餐。');
+  const plan = (state.mealPlans || []).find(item => item.id === input.planId);
+  if (!plan || input.recipeId !== undefined && input.recipeId !== plan.recipeId) fail('这餐安排已有变化，请重新打开后记录。');
+  if (!validDate(plan.date)) fail('只能完成今天或之前的一餐。');
+  const existing = matchingMealLog(plan);
+  if (existing) return existing.id;
+  // Every device must use exactly the same completion ID. Choosing a suffix
+  // from its local history would duplicate meals when two offline views differ.
+  const logId = 'meal-log-' + plan.id;
+  if (state.logs.some(log => log.id === logId)) fail('这餐原来的记录已被调整，请修改原记录，或通过「记一餐」补充。');
+  const deletion = sync.deleted.logs.find(item => item.id === logId);
+  const now = timestamp(deletion && deletion.updatedAt);
+  const log = {id: logId, recipeId: plan.recipeId, date: plan.date, meal: plan.meal,
+    rating: input.rating === undefined ? 0 : Number(input.rating), portion: input.portion == null ? '' : input.portion,
+    note: input.note == null ? '' : input.note, createdAt: now, updatedAt: now};
+  commit(next => { next.logs.push(log); });
   return logId;
 }
 
@@ -592,7 +691,7 @@ function importBackup(text, options) {
       JSON.stringify(Object.keys(b).filter(key => key !== 'photo').sort().map(key => [key, b[key]]));
   };
   const summary = {addedRecipes: 0, updatedRecipes: 0, addedLogs: 0};
-  commit(next => {
+  commit((next, nextSync) => {
     const deletedRecipes = new Map(sync.deleted.recipes.map(item => [item.id, item]));
     const deletedLogs = new Map(sync.deleted.logs.map(item => [item.id, item]));
     const restoreKnownDeletion = (item, tombstones) => {
@@ -616,12 +715,64 @@ function importBackup(text, options) {
     });
     next.recipes = Array.from(recipes.values());
     const logs = new Map(next.logs.map(log => [log.id, log]));
+    const incomingPlans = new Map((incoming.mealPlans || []).map(plan => [plan.id, plan]));
+    const rebuiltMeals = [];
+    const replaceRebuiltMeal = log => {
+      const local = logs.get(log.id), deletion = deletedLogs.get(log.id);
+      const boundary = Math.max(local.createdAt, local.updatedAt, deletion ? deletion.updatedAt : 0);
+      if (log.createdAt <= boundary) return;
+      // Portable backups omit deletions. Record the locally verified boundary
+      // with the replacement so its next sync cannot inherit the old recorder.
+      deletedLogs.set(log.id, {id: log.id, updatedAt: boundary});
+      logs.set(log.id, log);
+    };
     incoming.logs.forEach(log => {
       const local = logs.get(log.id);
       if (!local) { logs.set(log.id, restoreKnownDeletion(log, deletedLogs)); summary.addedLogs += 1; }
-      else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) logs.set(log.id, log);
+      else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) {
+        const originalPlanId = log.id.startsWith('meal-log-') ? log.id.slice('meal-log-'.length) : '';
+        const deletion = deletedLogs.get(log.id);
+        if (validPlanId(originalPlanId) && log.createdAt > Math.max(local.createdAt, local.updatedAt, deletion ? deletion.updatedAt : 0)) {
+          replaceRebuiltMeal(log);
+        } else logs.set(log.id, log);
+      }
+      else if (log.recipeId !== local.recipeId && log.updatedAt > local.updatedAt &&
+        log.createdAt > Math.max(local.createdAt, local.updatedAt) && log.id.startsWith('meal-log-')) {
+        // The recorded date/meal may be edited; the stable ID retains its original slot.
+        const originalPlanId = log.id.slice('meal-log-'.length);
+        if (!validPlanId(originalPlanId)) return;
+        if (originalPlanId !== planId(log.date, log.meal)) {
+          // Moved history is independent of later changes to its original plan.
+          replaceRebuiltMeal(log);
+          return;
+        }
+        const plan = incomingPlans.get(originalPlanId);
+        if (plan && plan.recipeId === log.recipeId) rebuiltMeals.push({log, plan});
+      }
     });
+    // A deleted completion can be rebuilt with another dish under the same
+    // stable slot ID. Accept an unmoved generation only together with its plan;
+    // ordinary log IDs still cannot change recipes during backup import.
+    for (const {log, plan} of rebuiltMeals) {
+      const localPlan = (next.mealPlans || []).find(item => item.id === plan.id);
+      if (localPlan && localPlan.recipeId !== plan.recipeId && (plan.updatedAt <= localPlan.updatedAt ||
+        Array.from(logs.values()).some(item => item.id !== log.id && item.date === localPlan.date &&
+          item.meal === localPlan.meal && item.recipeId === localPlan.recipeId))) continue;
+      replaceRebuiltMeal(log);
+    }
     next.logs = Array.from(logs.values());
+    nextSync.deleted.logs = Array.from(deletedLogs.values());
+    if (incoming.mealPlans !== undefined) {
+      const deletedPlans = new Map((sync.deleted.mealPlans || []).map(item => [item.id, item]));
+      const plans = new Map((next.mealPlans || []).map(plan => [plan.id, plan]));
+      for (const plan of incoming.mealPlans) {
+        const local = plans.get(plan.id);
+        if (!local) plans.set(plan.id, restoreKnownDeletion(plan, deletedPlans));
+        else if (plan.updatedAt > local.updatedAt && !next.logs.some(log =>
+          log.date === local.date && log.meal === local.meal && log.recipeId === local.recipeId)) plans.set(plan.id, plan);
+      }
+      next.mealPlans = Array.from(plans.values());
+    }
     if (incoming.profileUpdatedAt > next.profileUpdatedAt || (!next.profileUpdatedAt && next.nickname === '宝宝')) {
       next.nickname = incoming.nickname;
       next.profileUpdatedAt = incoming.profileUpdatedAt;
@@ -643,7 +794,8 @@ function exportBackup() {
 
 module.exports = {
   STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
-  toggleFavorite, addLog, updateLog, deleteLog, setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
+  toggleFavorite, addLog, updateLog, deleteLog, saveMealPlans, removeMealPlan, completeMeal,
+  setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, pendingFamilyPhotoIds, applySyncedSnapshot,
   subscribe, validateData, validateSnapshot, bindScope, getScopeKey, normalizeScope, beginScopeChange, ACTIVE_SCOPE_KEY, FAMILY_PREFIX
 };

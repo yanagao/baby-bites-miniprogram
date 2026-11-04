@@ -34,6 +34,7 @@ function setup(overrides = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/public-recipe/index.js'), 'utf8'), {
     Page(value) { definition = value; }, wx,
     require(dep) {
+      if (dep.endsWith('/native-share-return')) return require('../utils/native-share-return');
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/allergies')) return require('../utils/allergies');
       if (dep.endsWith('/social')) return social;

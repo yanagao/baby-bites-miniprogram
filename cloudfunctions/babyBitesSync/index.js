@@ -61,9 +61,15 @@ function createHandler({cloud, now = Date.now, random}) {
           snapshot.data.allergiesUpdatedAt < record.data.allergiesUpdatedAt) return Object.assign({conflict: true}, current);
         if (record.data && record.data.babyBirthDateUpdatedAt !== undefined && snapshot.data.babyBirthDate === undefined) reject('请更新小程序后同步，宝宝生日已保留。', 'CLIENT_UPDATE_REQUIRED');
         if (record.data && Number.isSafeInteger(record.data.babyBirthDateUpdatedAt) && snapshot.data.babyBirthDateUpdatedAt < record.data.babyBirthDateUpdatedAt) return Object.assign({conflict: true}, current);
+        // Presence, including an empty list, advertises support for meal slots
+        // and unrated completions. Older serializers drop this field.
+        if (record.data && record.data.mealPlansSchema === 1 && snapshot.data.mealPlans === undefined) {
+          reject('请更新小程序后同步，餐单和用餐记录已保留。', 'CLIENT_UPDATE_REQUIRED');
+        }
         const revision = current.revision + 1;
         await reference.set({data: {revision, fileID: event.fileID, updatedAt: now(),
           ...(snapshot.data.allergies === undefined ? {} : {allergiesUpdatedAt: snapshot.data.allergiesUpdatedAt}),
+          ...(snapshot.data.mealPlans === undefined ? {} : {mealPlansSchema: 1}),
           ...(snapshot.data.babyBirthDate === undefined ? {} : {babyBirthDateUpdatedAt: snapshot.data.babyBirthDateUpdatedAt})}});
         return {owner, revision, fileID: event.fileID};
       });

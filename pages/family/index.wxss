@@ -50,3 +50,13 @@
 .family-error {color:#b36f55;}
 .family-state {padding:40rpx 12rpx;display:flex;flex-direction:column;text-align:center;gap:20rpx;}
 .family-leave {display:block;margin:24rpx 0 16rpx;--td-button-medium-font:500 var(--font-secondary) / var(--line-height-body) var(--td-font-family);}
+.family-invitation {padding-top:20rpx;}
+.family-invite-step {margin-bottom:16rpx;font-size:var(--font-caption);line-height:var(--line-height-body);color:#577479;}
+.family-invite-summary {padding:28rpx;}
+.family-invite-summary .family-baby-summary {margin-top:12rpx;}
+.family-invite-expiry {margin-top:16rpx;}
+.family-invite-explanation {margin:24rpx 4rpx 32rpx;}
+.family-invite-primary {display:block;margin-top:28rpx;}
+.family-invite-secondary {display:block;margin-top:16rpx;}
+.family-invite-role .family-roles {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16rpx;margin:24rpx 0;}
+.family-invite-role .family-role {width:100%;padding:14rpx 0;}

@@ -1,0 +1,34 @@
+<t-navbar title="安排餐单" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="plan-page">
+  <block wx:if="{{!locked}}">
+    <view class="page-title">一周餐单</view>
+    <view class="plan-intro">{{familyActive ? '确认并同步后，家人即可一起查看和记录。' : '先选好每一餐，确认后保存在你的餐单里。'}}</view>
+    <picker mode="date" value="{{start}}" start="{{today}}" disabled="{{saving}}" bindchange="changeStart">
+      <view class="plan-range"><t-icon name="calendar" size="22" /><text>{{rangeLabel}}</text><text class="plan-range-action">调整日期</text><t-icon name="chevron-right" size="18" /></view>
+    </picker>
+    <view class="plan-days">
+      <button wx:for="{{days}}" wx:key="date" class="plan-day {{item.selected && !wholeWeek ? 'plan-day-selected' : ''}}" data-date="{{item.date}}" disabled="{{saving}}" bindtap="chooseDay" aria-selected="{{item.selected && !wholeWeek}}"><text class="plan-weekday">{{item.weekday}}</text><text class="plan-day-number">{{item.day}}</text><view class="plan-dot {{item.count ? 'plan-dot-filled' : ''}}" /></button>
+    </view>
+    <view class="plan-date-heading"><view class="plan-date-title">{{wholeWeek ? '整周安排' : selectedLabel}}</view><button class="plan-text-button" bindtap="toggleWeek" disabled="{{saving}}">{{wholeWeek ? '按天看' : '整周看'}}<t-icon name="chevron-right" size="18" /></button></view>
+    <view wx:if="{{!count}}" class="plan-empty-note">从早餐、午餐或晚餐开始选菜，也可以只安排需要的几餐。</view>
+    <view wx:for="{{visibleDays}}" wx:for-item="day" wx:key="date" class="plan-day-group">
+      <view wx:if="{{wholeWeek}}" class="plan-group-title">{{day.label}}</view>
+      <view wx:for="{{day.meals}}" wx:for-item="meal" wx:key="id" class="plan-meal">
+        <image wx:if="{{meal.recipe && meal.recipe.displayPhoto}}" class="plan-photo" src="{{meal.recipe.displayPhoto}}" mode="aspectFill" />
+        <view wx:else class="plan-photo plan-photo-empty"><t-icon name="rice" size="32" /></view>
+        <view class="plan-meal-body"><view class="plan-meal-label">{{meal.label}}</view><view class="plan-recipe-name">{{meal.recipe ? meal.recipe.name : (meal.missing ? '菜谱已移除，请重新选择' : '未安排')}}</view><view wx:if="{{meal.recipe}}" class="plan-recipe-meta">{{meal.recipe.minutes}} 分钟 · {{meal.recipe.texture}}</view><view wx:if="{{meal.recipe && meal.recipe.allergyWarning}}" class="plan-allergy">{{meal.recipe.allergyWarning}}</view><view wx:if="{{meal.completed}}" class="plan-completed"><t-icon name="check" size="16" />已做 · 可在餐单中修改记录</view></view>
+        <button wx:if="{{!meal.completed}}" class="plan-choose" data-date="{{meal.date}}" data-meal="{{meal.meal}}" bindtap="openPicker" disabled="{{saving}}">{{meal.recipe ? '换菜' : '选菜'}}<t-icon name="chevron-right" size="18" /></button>
+      </view>
+    </view>
+  </block>
+  <view wx:if="{{error}}" class="plan-error" role="alert">{{error}}</view>
+  <t-button wx:if="{{locked}}" theme="primary" variant="text" block bind:tap="back">返回餐单</t-button>
+</view>
+<view wx:if="{{!locked}}" class="plan-footer"><view class="plan-count">已安排 <text>{{count}}</text> / 21 餐</view><view class="plan-confirm"><t-button theme="primary" block shape="round" loading="{{saving}}" disabled="{{saving || !count}}" bind:tap="save">确认餐单</t-button></view></view>
+<t-popup visible="{{pickerVisible}}" placement="bottom" bind:visible-change="pickerChange">
+  <view class="plan-picker"><view class="plan-picker-heading"><view><view class="plan-picker-title">选一道菜</view><view class="plan-picker-subtitle">{{pickerTitle}}</view></view><button class="plan-close" bindtap="closePicker" aria-label="关闭选菜"><t-icon name="close" size="22" /></button></view>
+    <view class="plan-search"><t-icon name="search" size="20" /><input value="{{search}}" maxlength="60" placeholder="搜索菜名或食材" bindinput="searchRecipes" /></view>
+    <scroll-view scroll-y class="plan-picker-list"><button wx:for="{{pickerRecipes}}" wx:key="id" class="plan-picker-recipe" data-id="{{item.id}}" bindtap="selectRecipe"><image wx:if="{{item.displayPhoto}}" class="plan-picker-photo" src="{{item.displayPhoto}}" mode="aspectFill" /><view wx:else class="plan-picker-photo plan-photo-empty"><t-icon name="rice" size="24" /></view><view class="plan-picker-body"><view class="plan-picker-name">{{item.name}}</view><view class="plan-recipe-meta">{{item.minutes}} 分钟 · {{item.ageLabel}}</view><view wx:if="{{item.allergyWarning}}" class="plan-allergy">{{item.allergyWarning}}</view></view><t-icon name="chevron-right" size="18" /></button><view wx:if="{{!pickerRecipes.length}}" class="plan-picker-empty">{{search ? '没有找到匹配的菜谱，换个关键词试试。' : '食谱里还没有菜谱，可以先返回添加。'}}</view></scroll-view>
+  </view>
+</t-popup>
+<t-dialog visible="{{discardVisible}}" title="{{discardTitle}}" content="{{discardText}}" confirm-btn="放弃安排" cancel-btn="继续安排" bind:confirm="confirmDiscard" bind:cancel="cancelDiscard" />

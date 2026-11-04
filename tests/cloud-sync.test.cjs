@@ -45,12 +45,13 @@ function deferred() {
 }
 function setup(options = {}) {
   const localFiles = new Map(Object.entries(options.files || {}));
+  const imageSizes = new Map(Object.entries(options.imageSizes || {}));
   const cloudFiles = new Map();
   const records = new Map();
   const storage = new Map(Array.from(options.storage || [], ([key, value]) => [key, copy(value)]));
   if (options.initial != null) storage.set('baby-bites-v1', copy(options.initial));
   const hooks = {};
-  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], urlDownload: [], unlink: [], read: [], social: [], requests: []};
+  const calls = {init: [], identity: 0, commit: 0, upload: [], download: [], urlDownload: [], unlink: [], read: [], social: [], requests: [], compress: []};
   let currentOwner = OWNER;
   let networkListener;
   let timerId = 0;
@@ -95,6 +96,18 @@ function setup(options = {}) {
     setStorageSync(key, value) { if (hooks.storage) hooks.storage(key, value); storage.set(key, copy(value)); },
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
     getFileSystemManager() { return manager; },
+    getImageInfo(args) { dispatch(args, () => {
+      if (!localFiles.has(args.src)) throw Error('Image missing');
+      return imageSizes.get(args.src) || {width: 1024, height: 768};
+    }); },
+    compressImage(args) { dispatch(args, async () => {
+      calls.compress.push({src: args.src, quality: args.quality, compressedWidth: args.compressedWidth, compressedHeight: args.compressedHeight});
+      if (hooks.compress) { const result = await hooks.compress(args); if (result !== undefined) return result; }
+      const tempFilePath = 'wxfile://tmp/compressed-' + calls.compress.length + '.png';
+      localFiles.set(tempFilePath, PNG);
+      imageSizes.set(tempFilePath, {width: args.compressedWidth, height: args.compressedHeight});
+      return {tempFilePath};
+    }); },
     onNetworkStatusChange(listener) { networkListener = listener; },
     downloadFile(args) { dispatch(args, async () => {
       calls.urlDownload.push(args.url);
@@ -165,6 +178,8 @@ function setup(options = {}) {
   vm.runInNewContext(code('publication-sync.js'), {module: publicationModule, wx,
     require(name) { if (name === './store') return store; if (name === '../config/cloud') return config; throw Error(name); }
   });
+  const recipePhotoModule = {exports: {}};
+  vm.runInNewContext(code('recipe-photo.js'), {module: recipePhotoModule, wx, require: requireStore});
   const syncModule = {exports: {}};
   const context = {module: syncModule, wx, console, ArrayBuffer, Uint8Array,
     Date: class extends Date { static now() { return now; } },
@@ -173,6 +188,7 @@ function setup(options = {}) {
       if (name === './store') return store;
       if (name === './publication-sync') return publicationModule.exports;
       if (name === './family-photos') return familyPhotosModule.exports;
+      if (name === './recipe-photo') return recipePhotoModule.exports;
       return requireStore(name);
     },
     setTimeout(callback) { timerId += 1; timers.set(timerId, callback); return timerId; },
@@ -180,7 +196,7 @@ function setup(options = {}) {
   };
   vm.runInNewContext(code('cloud-sync.js'), context, {filename: 'cloud-sync.js'});
   const sync = syncModule.exports;
-  return {wx, sync, store, photos: familyPhotosModule.exports, calls, hooks, records, localFiles, cloudFiles, storage, putRemote, getRemote,
+  return {wx, sync, store, photos: familyPhotosModule.exports, calls, hooks, records, localFiles, imageSizes, cloudFiles, storage, putRemote, getRemote,
     setOwner(value) { currentOwner = value; },
     advanceTime(milliseconds) { now += milliseconds; },
     network(isConnected) { if (networkListener) networkListener({isConnected}); },
@@ -492,6 +508,103 @@ test('local photos are checked, uploaded to the current owner, and replaced by c
   assert.match(app.store.getRecipe('local').photo, /^cloud:\/\//);
   assert.ok(app.localFiles.has(localPhoto));
   assert.ok(![...app.localFiles.keys()].some(name => name.includes('/sync-')));
+  assert.equal(app.calls.compress.length, 0, 'already small photos are not recompressed');
+});
+
+test('large and high-resolution imported local photos are compressed before upload while their source remains intact', async () => {
+  for (const bytes of [PNG, Buffer.concat([PNG, Buffer.alloc(3 * 1024 * 1024)])]) {
+    const localPhoto = 'wxfile://usr/imported-photo.png';
+    const app = setup({initial: state([recipe('local', {photo: localPhoto})]), files: {[localPhoto]: bytes},
+      imageSizes: {[localPhoto]: {width: 4000, height: 3000}}});
+    await app.sync.syncNow();
+    assert.equal(app.sync.getStatus().state, 'synced');
+    assert.equal(app.calls.compress.length, 1);
+    assert.equal(app.calls.compress[0].compressedWidth, 1600);
+    assert.equal(app.calls.compress[0].compressedHeight, 1200);
+    const upload = app.calls.upload.find(item => item.cloudPath.includes('/photos/'));
+    assert.notEqual(upload.filePath, localPhoto);
+    assert.deepEqual(app.cloudFiles.get(app.store.getRecipe('local').photo), PNG);
+    assert.deepEqual(app.localFiles.get(localPhoto), bytes);
+    assert.ok(app.calls.unlink.includes(upload.filePath));
+    assert.equal(app.localFiles.has(upload.filePath), false);
+  }
+});
+
+test('shared photo paths and a commit conflict reuse one compressed upload keyed by the original file', async () => {
+  const localPhoto = 'wxfile://usr/shared-large.png';
+  const app = setup({initial: state([recipe('one', {photo: localPhoto}), recipe('two', {photo: localPhoto})]),
+    files: {[localPhoto]: PNG}, imageSizes: {[localPhoto]: {width: 3000, height: 4000}}});
+  app.hooks.beforeCommit = () => {
+    if (app.calls.commit === 1) app.putRemote(OWNER, snapshot(state([recipe('remote')])), 1);
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.calls.compress.length, 1);
+  assert.equal(app.calls.upload.filter(item => item.cloudPath.includes('/photos/')).length, 1);
+  assert.equal(app.store.getRecipe('one').photo, app.store.getRecipe('two').photo);
+  assert.ok(app.localFiles.has(localPhoto));
+});
+
+test('already synchronized cloud photos never download or recompress when another recipe field changes', async () => {
+  const photo = fileID(OWNER, 'photos', 'existing.png');
+  const app = setup({initial: state([recipe('local', {photo})])});
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.compress.length, 0);
+  assert.equal(app.calls.upload.filter(item => item.cloudPath.includes('/photos/')).length, 0);
+  assert.equal(app.calls.download.includes(photo), false);
+  assert.equal(app.store.getRecipe('local').photo, photo);
+});
+
+test('failed compressed uploads clean only temporary output and leave the original photo retryable', async () => {
+  const localPhoto = 'wxfile://usr/retry-large.png';
+  const app = setup({initial: state([recipe('local', {photo: localPhoto})]), files: {[localPhoto]: PNG},
+    imageSizes: {[localPhoto]: {width: 4000, height: 3000}}});
+  app.hooks.upload = args => { if (args.cloudPath.includes('/photos/')) throw Error('storage rejected upload'); };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'error');
+  assert.equal(app.calls.commit, 0);
+  assert.equal(app.store.getRecipe('local').photo, localPhoto);
+  assert.ok(app.localFiles.has(localPhoto));
+  const output = app.calls.upload[0].filePath;
+  assert.ok(app.calls.unlink.includes(output)); assert.equal(app.localFiles.has(output), false);
+  app.hooks.upload = null;
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.match(app.store.getRecipe('local').photo, /^cloud:\/\//);
+});
+
+test('an account ABA during compression prevents upload and removes the late temporary output', async () => {
+  const localPhoto = 'wxfile://usr/late-large.png', temporary = 'wxfile://tmp/late-compressed.png';
+  const app = setup({initial: state([recipe('local', {photo: localPhoto})]), files: {[localPhoto]: PNG},
+    imageSizes: {[localPhoto]: {width: 4000, height: 3000}}});
+  const entered = deferred(), release = deferred();
+  app.hooks.compress = async () => {
+    entered.resolve(); await release.promise;
+    app.localFiles.set(temporary, PNG); app.imageSizes.set(temporary, {width: 1600, height: 1200});
+    return {tempFilePath: temporary};
+  };
+  const work = app.sync.syncNow(); await entered.promise;
+  app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); release.resolve(); await work;
+  assert.equal(app.calls.upload.length, 0); assert.equal(app.calls.commit, 0);
+  assert.ok(app.localFiles.has(localPhoto)); assert.equal(app.localFiles.has(temporary), false);
+  assert.ok(app.calls.unlink.includes(temporary));
+  assert.equal(app.store.getRecipe('local').photo, localPhoto);
+});
+
+test('compressed bytes still require a supported image signature before uploading', async () => {
+  const localPhoto = 'wxfile://usr/bad-output-source.png', temporary = 'wxfile://tmp/bad-output.png';
+  const app = setup({initial: state([recipe('local', {photo: localPhoto})]), files: {[localPhoto]: PNG},
+    imageSizes: {[localPhoto]: {width: 4000, height: 3000}}});
+  app.hooks.compress = () => {
+    app.localFiles.set(temporary, Buffer.from('not-an-image'));
+    app.imageSizes.set(temporary, {width: 1600, height: 1200});
+    return {tempFilePath: temporary};
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'error'); assert.equal(app.calls.upload.length, 0);
+  assert.ok(app.localFiles.has(localPhoto)); assert.equal(app.localFiles.has(temporary), false);
 });
 
 test('WeChat ArrayBuffers from another JS realm are recognized without instanceof', async () => {
@@ -731,8 +844,8 @@ test('start observes local edits and reconnects, and status observers can unsubs
   assert.equal(app.sync.getStatus().state, 'synced');
 });
 
-test('bad photo signatures and oversized photos fail without uploading source bytes', async () => {
-  for (const [bytes, size] of [[Buffer.from('not-an-image'), 12], [PNG, 2 * 1024 * 1024 + 1]]) {
+test('bad photo signatures and photos over the source limit fail without uploading source bytes', async () => {
+  for (const [bytes, size] of [[Buffer.from('not-an-image'), 12], [PNG, 20 * 1024 * 1024 + 1]]) {
     const localPhoto = 'wxfile://usr/food.jpg';
     const app = setup({initial: state([recipe('local', {photo: localPhoto})]), files: {[localPhoto]: bytes}});
     app.hooks.fileSize = () => size;

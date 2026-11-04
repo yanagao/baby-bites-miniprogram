@@ -35,6 +35,7 @@ function setup(name, social = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
     Page(value) {definition = value;}, wx, getApp: () => ({globalData: {pantry: ['鸡蛋', '大米']}}),
     require(dep) {
+      if (dep.endsWith('/native-share-return')) return require('../utils/native-share-return');
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/selectors')) return selectors;
       if (dep.endsWith('/allergies')) return allergies;

@@ -62,6 +62,93 @@ test('a newer local family edit cannot put an unverifiable cached author or reco
   assert.equal(merged.data.logs[0].note, '吃了两口');
 });
 
+function plannedLogSnapshot(log, deletion) {
+  return snapshot({...dataWith([oneRecipe('dish-a', 1), oneRecipe('dish-b', 1)]), mealPlans: [],
+    logs: [{id: 'meal-log-meal-2024-04-02-breakfast', recipeId: 'dish-a', date: '2024-04-02', meal: 'breakfast',
+      rating: 2, portion: '', note: '', createdAt: 10, updatedAt: 10, ...log}]},
+  {recipes: [], logs: deletion === undefined ? [] : [{id: log.id || 'meal-log-meal-2024-04-02-breakfast', updatedAt: deletion}], mealPlans: []});
+}
+
+test('a deletion boundary separates rebuilt meal attribution even when the old generation was edited later', () => {
+  const mother = {memberId: 'a'.repeat(32), label: '妈妈'}, imported = {memberId: 'c'.repeat(32), label: '阿姨'};
+  for (const oldUpdatedAt of [15, 30, 100]) for (const claim of [undefined, imported]) {
+    const local = plannedLogSnapshot({recipeId: 'dish-b', createdAt: 30, updatedAt: 30,
+      ...(claim ? {recordedBy: claim} : {})}, 20);
+    const remote = plannedLogSnapshot({updatedAt: oldUpdatedAt, recordedBy: mother});
+    const merged = mergeSnapshots(local, remote, true);
+    assert.equal(merged.data.logs.length, 1);
+    assert.deepEqual(merged.data.logs[0], local.data.logs[0], 'old attribution cannot move onto a new generation');
+    assert.deepEqual(mergeSnapshots(local, remote).data.logs, mergeSnapshots(remote, local).data.logs);
+  }
+});
+
+test('an authoritative rebuilt meal survives an older generation backup restore and retains its recorder', () => {
+  const father = {memberId: 'b'.repeat(32), label: '爸爸'};
+  const restore = plannedLogSnapshot({createdAt: 10, updatedAt: 100}, 20);
+  const remote = plannedLogSnapshot({recipeId: 'dish-b', createdAt: 30, updatedAt: 30, recordedBy: father}, 20);
+  assert.deepEqual(mergeSnapshots(restore, remote, true).data.logs, remote.data.logs);
+  const oldRemote = plannedLogSnapshot({recordedBy: father}, 20);
+  const sameGeneration = mergeSnapshots(restore, oldRemote, true).data.logs[0];
+  assert.equal(sameGeneration.updatedAt, 100);
+  assert.equal(sameGeneration.createdAt, 10, 'restoring a backup does not create a generation');
+  assert.deepEqual(sameGeneration.recordedBy, father);
+});
+
+test('a later deletion cannot erase an observed generation boundary and turn restored old content into a newer recorder', () => {
+  const mother = {memberId: 'a'.repeat(32), label: '妈妈'}, father = {memberId: 'b'.repeat(32), label: '爸爸'};
+  for (const claim of [undefined, mother]) {
+    const restored = plannedLogSnapshot({createdAt: 10, updatedAt: 100,
+      ...(claim ? {recordedBy: claim} : {})}, 40);
+    const remote = plannedLogSnapshot({recipeId: 'dish-b', createdAt: 30, updatedAt: 30, recordedBy: father}, 20);
+    const merged = mergeSnapshots(restored, remote, true);
+    assert.deepEqual(merged.data.logs, restored.data.logs,
+      'the explicitly restored old history survives; the newer generation was itself deleted');
+    assert.deepEqual(merged.deleted.logs, restored.deleted.logs);
+    assert.deepEqual(mergeSnapshots(remote, restored, true).data.logs, restored.data.logs);
+  }
+});
+
+test('a newer surviving meal generation still wins when a later deletion covers both creation times', () => {
+  const restored = plannedLogSnapshot({createdAt: 10, updatedAt: 100}, 40);
+  const remote = plannedLogSnapshot({recipeId: 'dish-b', createdAt: 30, updatedAt: 60,
+    recordedBy: {memberId: 'b'.repeat(32), label: '爸爸'}}, 20);
+  assert.deepEqual(mergeSnapshots(restored, remote, true).data.logs, remote.data.logs);
+  assert.deepEqual(mergeSnapshots(remote, restored, true).data.logs, remote.data.logs);
+});
+
+test('ambiguous pre-deletion meal generations keep the selected history intact for server arbitration', () => {
+  const mother = {memberId: 'a'.repeat(32), label: '妈妈'}, father = {memberId: 'b'.repeat(32), label: '爸爸'};
+  for (const claim of [undefined, mother]) {
+    const restored = plannedLogSnapshot({createdAt: 10, updatedAt: 100,
+      ...(claim ? {recordedBy: claim} : {})}, 40);
+    const remote = plannedLogSnapshot({recipeId: 'dish-b', createdAt: 30, updatedAt: 60, recordedBy: father}, 40);
+    assert.deepEqual(mergeSnapshots(restored, remote, true).data.logs, restored.data.logs,
+      'without an observed separating boundary the original selected identity must reach the server');
+    assert.deepEqual(mergeSnapshots(remote, restored, true).data.logs, restored.data.logs);
+  }
+});
+
+test('concurrent first meal completions retain one cloud identity and recorder within the same generation', () => {
+  const mother = {memberId: 'a'.repeat(32), label: '妈妈'};
+  for (const deletion of [undefined, 5]) for (const author of [undefined, mother]) {
+    const local = plannedLogSnapshot({createdAt: 11, updatedAt: 40, note: '本机反馈',
+      recordedBy: {memberId: 'b'.repeat(32), label: '爸爸'}}, deletion);
+    const remote = plannedLogSnapshot(author ? {recordedBy: author} : {}, deletion);
+    const log = mergeSnapshots(local, remote, true).data.logs[0];
+    assert.equal(log.note, '本机反馈'); assert.equal(log.createdAt, 10);
+    assert.deepEqual(log.recordedBy, author);
+  }
+});
+
+test('generation preference never applies to ordinary or malformed completion IDs', () => {
+  for (const id of ['ordinary-log', 'prefix-meal-log-meal-2024-04-02-breakfast',
+    'meal-log-meal-2024-04-02-breakfast-extra', 'meal-log-meal-2024-02-30-breakfast']) {
+    const local = plannedLogSnapshot({id, recipeId: 'dish-b', createdAt: 30, updatedAt: 30}, 20);
+    const remote = plannedLogSnapshot({id, createdAt: 10, updatedAt: 100});
+    assert.deepEqual(mergeSnapshots(local, remote, true).data.logs, remote.data.logs);
+  }
+});
+
 test('reading, binding and ordinary edits do not certify legacy snapshot caches', () => {
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, false);
@@ -160,7 +247,7 @@ test('only a successfully persisted complete snapshot certifies its account cach
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
   assert.deepEqual(app.reload().getState().allergies, ['鸡蛋']);
   const restarted = app.reload();
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
@@ -196,11 +283,11 @@ test('failed snapshot persistence keeps the unverified marker and data atomic un
   restarted.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
   assert.deepEqual(restarted.getState().allergies, ['牛奶']);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
 });
 
 test('missing, unknown and malformed parser versions remain readable but cannot certify completeness', () => {
-  for (const version of [undefined, 0, 1, 3, '2', null, -1, true, {}]) {
+  for (const version of [undefined, 0, 1, 2, 4, '3', null, -1, true, {}]) {
     const data = {...empty(), allergies: ['花生'], allergiesUpdatedAt: 100};
     const app = setup({[ACTIVE]: A, [key(A)]: accountCache(data, version)});
     assert.equal(app.store.getSyncInfo().blocked, false);

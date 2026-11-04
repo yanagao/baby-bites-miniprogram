@@ -46,6 +46,7 @@ function logOrder(a, b) {
 function latestRatings(state) {
   const latest = new Map();
   state.logs.forEach(log => {
+    if (![1, 2, 3].includes(log.rating)) return;
     const previous = latest.get(log.recipeId);
     if (!previous || logOrder(log, previous) < 0) latest.set(log.recipeId, log);
   });
@@ -55,7 +56,7 @@ function latestRatings(state) {
 function ratingOf(state, recipeId) {
   let latest = null;
   state.logs.forEach(log => {
-    if (log.recipeId === recipeId && (!latest || logOrder(log, latest) < 0)) latest = log;
+    if ([1, 2, 3].includes(log.rating) && log.recipeId === recipeId && (!latest || logOrder(log, latest) < 0)) latest = log;
   });
   return latest ? latest.rating : 0;
 }
@@ -163,8 +164,8 @@ function listLogs(state, filter) {
     .slice().sort(logOrder).map(log => {
       const recipe = recipes.get(log.recipeId);
       return Object.assign({}, log, {
-        recipeName: recipe.name, ratingName: ratings[log.rating].name,
-        ratingIcon: ratings[log.rating].icon, photoSrc: familyPhotos.photoURL(recipe.photo || ''),
+        recipeName: recipe.name, ratingName: ratings[log.rating] ? ratings[log.rating].name : '已做，待补充',
+        ratingIcon: ratings[log.rating] ? ratings[log.rating].icon : 'check', photoSrc: familyPhotos.photoURL(recipe.photo || ''),
     displayPhoto: displayPhoto(recipe),
         placeholderIcon: Object.prototype.hasOwnProperty.call(dishIcons, recipe.imageKey) ? dishIcons[recipe.imageKey] : 'bowl'
       });

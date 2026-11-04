@@ -47,7 +47,6 @@
 .journal-portion { background: #eff8f8; color: #439e86; }
 .journal-note { margin-top: 10rpx; color: #82969a; font-size:var(--font-body); white-space: pre-wrap; overflow-wrap: break-word; line-height:var(--line-height-body);}
 .journal-note-empty { color: #9aadb1; font-size:var(--font-secondary); line-height:var(--line-height-body);}
-.journal-add { display: flex; align-items: center; justify-content: center; gap: 12rpx; margin-top: 24rpx; line-height:var(--line-height-body);}
 .journal-empty { padding: 30rpx 18rpx; text-align: center; border-radius: 20rpx; background: #ffffff; color: #73c6e8; }
 .empty-title { margin-top: 16rpx; font-size:var(--font-card-title); font-weight: 600; color: #607d83; line-height:1.4;}
 .empty-description { margin-top: 10rpx; font-size:var(--font-secondary); line-height:var(--line-height-body); color: #82969a; }
@@ -71,4 +70,48 @@
 
 .journal-recipe-name,.picker-recipe-name {min-width:0;overflow-wrap:anywhere;line-height:1.4;}
 
-.journal-add {min-height:88rpx;line-height:var(--line-height-body);font-size:var(--font-body);font-weight:500;background:#55bba4;color:#153f37;border-radius:999rpx;}
+.calendar-month {display:flex;align-items:center;gap:10rpx;font-size:var(--font-body);}
+.day-today {font-size:20rpx;line-height:1.3;}
+.record-day-add,.meal-pick-link,.meal-day-toolbar button {display:flex;align-items:center;justify-content:center;gap:8rpx;padding:8rpx 0;margin:0 0 0 auto;background:transparent;color:#276e60;font-size:var(--font-secondary);line-height:1.5;}
+.record-day-add::after,.meal-pick-link::after,.meal-card-actions button::after,.meal-choice::after,.meal-day-toolbar button::after {border:0;}
+.record-day-add[disabled] {color:#a7b7bb;}
+.meal-day-hint {padding:20rpx 24rpx;margin:0 0 20rpx;border-radius:20rpx;background:#eff8f8;font-size:var(--font-secondary);color:#577479;text-align:center;}
+.meal-hint-title {font-size:var(--font-body);font-weight:600;margin-bottom:4rpx;color:#345158;}
+.meal-day-toolbar {display:flex;gap:16rpx;align-items:center;margin:0 0 16rpx;font-size:var(--font-caption);color:#82969a;}
+.meal-empty-slot,.meal-plan-card {padding:20rpx 22rpx;margin-bottom:18rpx;border:2rpx solid #d5e9ec;border-radius:20rpx;background:#eff8f8;}
+.meal-empty-slot {display:flex;align-items:center;gap:18rpx;}
+.meal-slot-icon {display:flex;align-items:center;justify-content:center;width:82rpx;height:82rpx;flex:none;background:#fff;border-radius:50%;color:#577479;}
+.meal-empty-copy {flex:1;min-width:0;}
+.meal-slot-title {font-size:var(--font-body);line-height:1.5;font-weight:600;}
+.meal-card-main {display:flex;align-items:flex-start;gap:20rpx;}
+.meal-card-photo {width:128rpx;height:128rpx;flex:none;border-radius:16rpx;background:#fff;}
+.meal-photo-empty {display:flex;align-items:center;justify-content:center;color:#73c6e8;}
+.meal-card-copy {flex:1;min-width:0;}
+.meal-card-heading {display:flex;align-items:center;justify-content:space-between;gap:8rpx;margin-bottom:6rpx;}
+.meal-slot-tag,.meal-done-tag {padding:1rpx 12rpx;border-radius:999rpx;font-size:var(--font-caption);line-height:1.5;}
+.meal-slot-tag {background:#fff;color:#577479;}
+.meal-done-tag {display:flex;align-items:center;gap:4rpx;background:#55bba4;color:#153f37;}
+.meal-card-name {font-size:var(--font-card-title);font-weight:600;line-height:1.4;overflow-wrap:anywhere;}
+.meal-card-meta {margin-top:6rpx;font-size:var(--font-secondary);color:#577479;line-height:1.5;}
+.meal-allergy {margin-top:6rpx;font-size:var(--font-caption);line-height:1.5;color:#aa6a45;overflow-wrap:anywhere;}
+.meal-card-actions {display:flex;gap:12rpx;margin-top:18rpx;}
+.meal-card-actions button {flex:1;min-width:0;margin:0;padding:9rpx 8rpx;border-radius:999rpx;border:1rpx solid #d5e9ec;background:#fff;color:#276e60;font-size:var(--font-secondary);line-height:1.5;}
+.meal-card-actions .meal-done-button {background:#55bba4;border-color:#55bba4;color:#153f37;}
+.meal-card-actions button[disabled] {color:#82969a;background:#e1eeee;border-color:#e1eeee;}
+.meal-recorder {margin-top:12rpx;font-size:var(--font-caption);color:#82969a;text-align:right;}
+.meal-plan-footnote {margin:14rpx 0 20rpx;color:#82969a;font-size:var(--font-caption);line-height:1.6;}
+.meal-family-note {display:flex;align-items:center;gap:12rpx;margin:22rpx 0;padding:18rpx;border-radius:16rpx;background:#eff8f8;color:#577479;font-size:var(--font-caption);}
+.meal-history-heading {display:flex;align-items:center;justify-content:space-between;margin:32rpx 0 14rpx;}
+.weekly-summary {gap:24rpx;justify-content:space-between;font-size:var(--font-caption);color:#82969a;}
+.meal-choice-row {display:flex;gap:14rpx;margin:18rpx 0 26rpx;}
+.meal-choice {flex:1;min-width:0;margin:0;padding:18rpx 8rpx;border:2rpx solid #d5e9ec;border-radius:18rpx;background:#eff8f8;color:#577479;font-size:var(--font-secondary);line-height:1.5;}
+.meal-choice-selected {border-color:#55bba4;background:#55bba4;color:#153f37;}
+.meal-picker-search {height:76rpx;box-sizing:border-box;padding:14rpx 22rpx;margin-bottom:18rpx;border:2rpx solid #d5e9ec;border-radius:18rpx;background:#eff8f8;font-size:var(--font-secondary);}
+.recipe-picker-list {height:40vh;}
+.picker-recipe {border:2rpx solid transparent;}
+.picker-recipe-selected {border-color:#55bba4;}
+.meal-page-error {margin:14rpx 0;color:#b36f55;font-size:var(--font-secondary);line-height:1.6;}
+.completion-recipe {display:flex;align-items:center;gap:20rpx;padding:18rpx;border-radius:18rpx;background:#eff8f8;}
+.completion-recipe image {width:116rpx;height:116rpx;flex:none;border-radius:14rpx;}
+.completion-recipe > view {flex:1;min-width:0;}
+.completion-sheet {max-height:88vh;overflow-y:auto;}
