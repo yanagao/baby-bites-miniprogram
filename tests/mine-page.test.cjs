@@ -13,11 +13,14 @@ const tap = value => ({currentTarget: {dataset: {value}}});
 const recipe = (id, favorite = false) => ({id, name: '菜谱' + id, favorite, ingredients: [{name: '南瓜', amount: '20克'}], steps: ['煮熟'], minutes: 20, texture: '软烂颗粒', category: '粥饭', createdAt: 1, updatedAt: 1});
 function setup(overrides = {}) {
   let owner = 'owner-a', state = {recipes: [recipe('1', true), recipe('2')], logs: [{id: 'log', recipeId: '1', date: '2026-10-28', rating: 3, note: 'PRIVATE NOTE', createdAt: 1}]};
+  let now = Date.now(), scopeKey = overrides.scopeKey || '';
+  class ClockDate extends Date { static now() { return now; } }
   const listeners = new Set();
-  const calls = {routes: [], tabs: [], updates: 0, syncs: 0, mine: 0, profiles: 0, errors: [], codes: [], saved: []};
+  const calls = {routes: [], tabs: [], updates: 0, syncs: 0, mine: 0, profiles: 0, errors: [], codes: [], saved: [], pullStops: 0};
   const wx = {navigateTo(options) { calls.routes.push(options.url); }, switchTab(options) { calls.tabs.push(options.url); },
+    stopPullDownRefresh() { calls.pullStops++; },
     hideShareMenu() {}, showShareMenu() {}, showToast() {}, getAccountInfoSync: () => ({miniProgram: {envVersion: 'develop'}})};
-  const store = {getSyncInfo: () => ({owner}), getState: () => state, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
+  const store = {getSyncInfo: () => ({owner, scopeKey: scopeKey || owner}), getState: () => state, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const social = {getMine: async () => { calls.mine++; return {profile, published: [{sourceRecipeId: '1', sourceUpdatedAt: 1}], publishedCount: 1, followingCount: 5, followerCount: 6}; },
     getProfile: async () => { calls.profiles++; throw Error('Own tab should not load public recipe pages'); },
     getShareCode: async (id, env) => { calls.codes.push({id, env}); return {codeURL: 'https://example.test/code'}; },
@@ -25,7 +28,7 @@ function setup(overrides = {}) {
   const accountModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/profile/account.js'), 'utf8'), {module: accountModule, wx, require: () => store});
   let definition;
-  evaluatePage(overrides.pageName || 'mine', {wx, socialEnabled: overrides.socialEnabled, onSyncTabBar() { calls.syncs++; }, Page(value) { definition = value; }, require(dep) {
+  evaluatePage(overrides.pageName || 'mine', {wx, Date: ClockDate, socialEnabled: overrides.socialEnabled, onSyncTabBar() { calls.syncs++; }, Page(value) { definition = value; }, require(dep) {
     if (dep.endsWith('/social')) return social;
     if (dep.endsWith('/account')) return accountModule.exports;
     if (dep.endsWith('/store')) return store;
@@ -35,7 +38,9 @@ function setup(overrides = {}) {
   }});
   const page = {...definition, data: clone(definition.data), setData(value) { calls.updates++; Object.assign(this.data, clone(value)); }};
   page.onLoad(overrides.loadOptions);
-  return {page, calls, listeners, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }, changeState(value) { state = value; }};
+  return {page, calls, listeners, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); },
+    changeScope(value, notify = true) { scopeKey = value; if (notify) listeners.forEach(fn => fn()); },
+    advance(milliseconds) { now += milliseconds; }, changeState(value) { state = value; }};
 }
 
 test('mine is the own profile with a local cookbook, authoritative relationship totals and no second profile request', async () => {
@@ -272,7 +277,7 @@ test('refreshing the same confirmed profile keeps its avatar while the response 
     const f = setup({pageName: visitor ? 'profile' : 'mine', loadOptions: visitor ? {id: current.id} : {}, social: visitor ? {getProfile: read} : {getMine: read}});
     await f.page.load();
     const avatar = f.page.data.avatarPath; assert.notEqual(avatar, getProfileAvatar());
-    const refreshing = f.page.onShow();
+    const refreshing = visitor ? f.page.onShow() : f.page.reload();
     assert.equal(f.page.data.loading, true); assert.equal(f.page.data.avatarPath, avatar);
     pending.resolve(response({...current, name: '更新后的公开昵称'})); await refreshing;
     assert.equal(f.page.data.loading, false); assert.equal(f.page.data.avatarPath, avatar);
@@ -280,20 +285,201 @@ test('refreshing the same confirmed profile keeps its avatar while the response 
   });
 });
 
-test('mine reuses recent public metadata while refreshing its private cookbook, but manual reload is fresh', async () => {
+test('mine reuses public metadata beyond the read TTL while updating local content, but relevant changes and manual reload are fresh', async () => {
   let version = 1; const reads = [];
   const fixture = setup({social: {getReadVersion: () => version, getMine: async options => {
     reads.push(options); return {profile, published: []};
   }}});
   await fixture.page.onShow();
   fixture.changeState({recipes: [recipe('new')], logs: []});
-  await fixture.page.onShow();
+  for (const elapsed of [30001, 3600000, 86400000]) {
+    fixture.advance(elapsed); await fixture.page.onShow();
+  }
   assert.equal(reads.length, 1); assert.equal(fixture.page.data.loading, false);
   assert.deepEqual(fixture.page.data.recipes.map(item => item.id), ['new']);
   version++; await fixture.page.onShow(); assert.equal(reads.length, 2);
   await fixture.page.reload(); assert.equal(reads.length, 3); assert.equal(reads[2].force, true);
   fixture.changeOwner('owner-b', false); await fixture.page.onShow();
   assert.equal(reads.length, 3); assert.equal(fixture.page.data.profile, null);
+});
+
+test('ordinary mine revisits retain the selected local tab even without a version API', async () => {
+  const fixture = setup();
+  await fixture.page.onShow();
+  fixture.page.changeContentTab(tap('records'));
+  fixture.changeState({recipes: [recipe('new', true)], logs: [{id: 'new-log', recipeId: 'new', date: '2026-11-04', rating: 2, note: '本地更新', createdAt: 2}]});
+  fixture.advance(3600000); await fixture.page.onShow();
+  const updates = fixture.calls.updates;
+  await fixture.page.onShow();
+  assert.equal(fixture.calls.mine, 1);
+  assert.equal(fixture.calls.updates, updates, 'unchanged returns must not redraw the local content');
+  assert.equal(fixture.page.data.contentTab, 'records');
+  assert.equal(fixture.page.data.logs[0].id, 'new-log');
+  assert.equal(fixture.page.data.recipeCount, 1); assert.equal(fixture.page.data.favoriteCount, 1);
+});
+
+test('mine ignores unrelated social invalidation and reads once for a mine-specific change', async () => {
+  let globalVersion = 1, mineVersion = 1, reads = 0;
+  const fixture = setup({social: {
+    getReadVersion: () => globalVersion,
+    getMineReadVersion: result => result ? undefined : mineVersion,
+    getMine: async () => { reads++; return {profile, published: []}; }
+  }});
+  await fixture.page.onShow();
+  globalVersion++; fixture.advance(3600000); await fixture.page.onShow();
+  assert.equal(reads, 1);
+  mineVersion++; await fixture.page.onShow(); await fixture.page.onShow();
+  assert.equal(reads, 2);
+  assert.equal(fixture.page.data.loading, false);
+});
+
+test('concurrent mine shows reuse one pending request and all await the populated view', async () => {
+  const pending = deferred(); let reads = 0;
+  const fixture = setup({social: {getMine: () => { reads++; return pending.promise; }}});
+  const first = fixture.page.onShow(), second = fixture.page.onShow(), third = fixture.page.onShow();
+  assert.equal(reads, 1); assert.equal(fixture.page.data.loading, true);
+  pending.resolve({profile, published: [], followingCount: 9});
+  await Promise.all([first, second, third]);
+  assert.equal(fixture.page.data.loading, false); assert.equal(fixture.page.data.followingCount, 9);
+  await fixture.page.onShow(); assert.equal(reads, 1);
+});
+
+test('mine records the returned read version when a request internally catches up with a newer version', async () => {
+  const pending = deferred(); let version = 1, reads = 0;
+  const fixture = setup({social: {
+    getMineReadVersion: result => result ? result.mineVersion : version,
+    getMine: () => { reads++; return pending.promise; }
+  }});
+  const first = fixture.page.onShow(); version++;
+  const second = fixture.page.onShow(); assert.equal(reads, 1);
+  pending.resolve({profile, published: [], mineVersion: version});
+  await Promise.all([first, second]);
+  await fixture.page.onShow(); assert.equal(reads, 1);
+});
+
+test('an explicitly older mine response remains stale and the next show reads the current version once', async () => {
+  const pending = deferred(); let version = 1, reads = 0;
+  const fixture = setup({social: {
+    getMineReadVersion: result => result ? result.mineVersion : version,
+    getMine: () => ++reads === 1 ? pending.promise : Promise.resolve({profile: {...profile, name: '最新主页'}, published: [], mineVersion: version})
+  }});
+  const first = fixture.page.onShow(); version++;
+  pending.resolve({profile, published: [], mineVersion: version - 1}); await first;
+  await fixture.page.onShow(); await fixture.page.onShow();
+  assert.equal(reads, 2); assert.equal(fixture.page.data.profile.name, '最新主页');
+});
+
+test('failed mine reads do not retry on each return but an explicit reload can recover', async () => {
+  let reads = 0; const options = [];
+  const fixture = setup({social: {getMine: async value => {
+    options.push(value); if (++reads === 1) throw Error('暂时离线'); return {profile, published: []};
+  }}});
+  await fixture.page.onShow(); assert.equal(fixture.page.data.publicationError, '暂时离线');
+  fixture.advance(86400000); await fixture.page.onShow(); await fixture.page.onShow();
+  assert.equal(reads, 1); assert.equal(fixture.page.data.recipes.length, 2);
+  await fixture.page.reload(); assert.equal(reads, 2); assert.equal(options[1].force, true);
+  assert.equal(fixture.page.data.publicationError, '');
+});
+
+test('identity failures that invalidate mine reads do not restart on every return and remain explicitly retryable', async t => {
+  for (const code of ['SYNC_REQUIRED', 'UNAUTHENTICATED', 'FAMILY_CHANGED']) await t.test(code, async () => {
+    let version = 1; const reads = [];
+    const fixture = setup({social: {
+      getMineReadVersion: result => result ? undefined : version,
+      getMine: async options => {
+        reads.push(options);
+        if (reads.length === 1) {
+          version++;
+          throw Object.assign(Error('请重新确认身份'), {code});
+        }
+        return {profile, published: []};
+      }
+    }});
+    await fixture.page.onShow(); assert.equal(fixture.page.data.publicationError, '请重新确认身份');
+    fixture.advance(3600000); await fixture.page.onShow(); await fixture.page.onShow();
+    assert.equal(reads.length, 1);
+    await fixture.page.reload(); assert.equal(reads.length, 2); assert.equal(reads[1].force, true);
+    assert.equal(fixture.page.data.publicationError, ''); assert.equal(fixture.page.data.profile.name, profile.name);
+    await fixture.page.onShow(); assert.equal(reads.length, 2);
+  });
+});
+
+test('explicit reload supersedes a pending initial mine request and ordinary returns reuse the newer request', async () => {
+  const initial = deferred(), fresh = deferred(); const reads = [];
+  const fixture = setup({social: {getMine: options => {
+    reads.push(options); return reads.length === 1 ? initial.promise : fresh.promise;
+  }}});
+  const first = fixture.page.onShow(), refresh = fixture.page.reload(), revisit = fixture.page.onShow();
+  assert.equal(reads.length, 2); assert.equal(reads[1].force, true);
+  fresh.resolve({profile: {...profile, name: '主动刷新的主页'}, published: []});
+  await Promise.all([refresh, revisit]);
+  initial.resolve({profile: {...profile, name: '过期主页'}, published: []}); await first;
+  assert.equal(fixture.page.data.profile.name, '主动刷新的主页');
+  await fixture.page.onShow(); assert.equal(reads.length, 2);
+});
+
+test('editing, saving and sharing defer mine invalidation until the page is idle', async t => {
+  for (const key of ['editing', 'saving', 'shareVisible']) await t.test(key, async () => {
+    let version = 1, reads = 0;
+    const fixture = setup({social: {getMineReadVersion: result => result ? undefined : version,
+      getMine: async () => { reads++; return {profile, published: []}; }}});
+    await fixture.page.onShow(); fixture.page.setData({[key]: true}); version++;
+    await fixture.page.onShow(); assert.equal(reads, 1);
+    fixture.page.setData({[key]: false}); await fixture.page.onShow(); assert.equal(reads, 2);
+  });
+});
+
+test('concurrent pull-to-refresh events share one forced mine request and always stop their indicators', async t => {
+  for (const fails of [false, true]) await t.test(fails ? 'failure' : 'success', async () => {
+    const pending = deferred(); const reads = [];
+    const fixture = setup({social: {getMine: options => {
+      reads.push(options); return reads.length === 1 ? Promise.resolve({profile, published: []}) : pending.promise;
+    }}});
+    await fixture.page.onShow();
+    const first = fixture.page.onPullDownRefresh(), second = fixture.page.onPullDownRefresh();
+    assert.equal(reads.length, 2); assert.equal(reads[1].force, true); assert.equal(fixture.calls.pullStops, 0);
+    if (fails) pending.reject(Error('暂时离线')); else pending.resolve({profile: {...profile, name: '下拉刷新'}, published: []});
+    await Promise.all([first, second]);
+    assert.ok(fixture.calls.pullStops >= 1);
+    assert.equal(fixture.page.data.loading, false);
+    if (fails) assert.equal(fixture.page.data.publicationError, '暂时离线');
+    else assert.equal(fixture.page.data.profile.name, '下拉刷新');
+    await fixture.page.onShow(); assert.equal(reads.length, 2);
+  });
+});
+
+test('pull-to-refresh while editing, saving or sharing stops without replacing the draft or issuing a read', async t => {
+  for (const key of ['editing', 'saving', 'shareVisible']) await t.test(key, async () => {
+    const fixture = setup(); await fixture.page.onShow();
+    fixture.page.setData({[key]: true, name: '未保存的昵称'});
+    await fixture.page.onPullDownRefresh();
+    assert.equal(fixture.calls.mine, 1); assert.equal(fixture.calls.pullStops, 1);
+    assert.equal(fixture.page.data[key], true); assert.equal(fixture.page.data.name, '未保存的昵称');
+  });
+});
+
+test('pending mine reuse cannot revive an account or family ABA session and reload explicitly unlocks it', async t => {
+  for (const mode of ['account', 'family']) await t.test(mode, async () => {
+    const pending = deferred(); let reads = 0;
+    const fixture = setup({scopeKey: mode === 'family' ? 'family-a' : '', social: {getMine: () => ++reads === 1 ? pending.promise : Promise.resolve({profile, published: []})}});
+    const first = fixture.page.onShow(), second = fixture.page.onShow();
+    if (mode === 'account') { fixture.changeOwner('owner-b'); fixture.changeOwner('owner-a'); }
+    else { fixture.changeScope('family-b'); fixture.changeScope('family-a'); }
+    await fixture.page.onShow(); assert.equal(reads, 1);
+    pending.resolve({profile, published: []}); await Promise.all([first, second]);
+    assert.equal(fixture.page.data.profile, null); assert.equal(fixture.page.accountSession.changed, true);
+    await fixture.page.reload(); assert.equal(reads, 2); assert.equal(fixture.page.accountSession.changed, false);
+    assert.equal(fixture.page.data.profile.name, profile.name);
+  });
+});
+
+test('unloading a mine page prevents reused pending work from updating the disposed view', async () => {
+  const pending = deferred(); let reads = 0;
+  const fixture = setup({social: {getMine: () => { reads++; return pending.promise; }}});
+  const first = fixture.page.onShow(), second = fixture.page.onShow();
+  fixture.page.onUnload(); const updates = fixture.calls.updates;
+  pending.resolve({profile, published: []}); await Promise.all([first, second]);
+  assert.equal(reads, 1); assert.equal(fixture.calls.updates, updates); assert.equal(fixture.listeners.size, 0);
 });
 
 test('a confirmed own profile link reads only mine on subsequent loads', async () => {

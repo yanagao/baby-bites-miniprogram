@@ -4,7 +4,7 @@ const ui = require('../../utils/ui');
 const social = require('../../utils/social');
 const cloudSync = require('../../utils/cloud-sync');
 const config = require('../../config/cloud');
-const {isBuiltInRecipe} = require('../../utils/recipe-origin');
+const {isBuiltInRecipe, getBuiltInRecipe} = require('../../utils/recipe-origin');
 const syncVersion = status => status && Number.isSafeInteger(status.revision) && Number.isSafeInteger(status.publicationVersion) ?
   status.owner + ':' + status.revision + ':' + status.publicationVersion : '';
 
@@ -44,7 +44,11 @@ Page({
     if (!this.accountOK(false)) return;
     this._visible = true;
     this.refresh();
-    if (this.data.socialEnabled) await this.refreshPublication();
+    if (!this.data.socialEnabled) return;
+    if (this._publicFlight && this._publicFlight.request === this._publicRequest &&
+      this._publicFlight.localVersion === JSON.stringify(store.getRecipe(this.recipeId))) return this._publicFlight.work;
+    if (this.shareAvailable() && !this._syncRefreshPending) return;
+    await this.refreshPublication();
   },
   onHide() { this._visible = false; },
   onUnload() {
@@ -87,8 +91,13 @@ Page({
     try {
       const state = store.getState();
       const recipe = state.recipes.find(item => item.id === this.recipeId);
-      this.setData({familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
-        publicChanged: !!(recipe && this.data.publicInfo && this.data.publicInfo.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))});
+      const update = {familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
+        publicChanged: !!(recipe && this.data.publicInfo && this.data.publicInfo.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))};
+      const changed = {};
+      Object.keys(update).forEach(key => {
+        if (JSON.stringify(this.data[key]) !== JSON.stringify(update[key])) changed[key] = update[key];
+      });
+      if (Object.keys(changed).length) this.setData(changed);
       if (!recipe || this._shareVersion && this._shareVersion !== JSON.stringify(recipe)) {
         this._shareVersion = '';
         this.setData({shareRecipe: null, shareReady: false, publicReady: false, publicChanged: Boolean(recipe)});
@@ -119,7 +128,16 @@ Page({
       this.data.deleteVisible) return;
     return this.refreshPublication();
   },
-  async refreshPublication(fromOperation) {
+  refreshPublication(fromOperation) {
+    const localVersion = JSON.stringify(store.getRecipe(this.recipeId));
+    const work = this.loadPublication(fromOperation);
+    const flight = {request: this._publicRequest, localVersion, work};
+    this._publicFlight = flight;
+    const complete = () => { if (this._publicFlight === flight) this._publicFlight = null; };
+    work.then(complete, complete);
+    return work;
+  },
+  async loadPublication(fromOperation) {
     if (!this.data.socialEnabled || !this.accountOK(false) || !this.data.recipe || this.data.deleting || this.data.publicBusy) return false;
     this._syncRefreshPending = false;
     if (this.data.builtIn) {
@@ -170,7 +188,7 @@ Page({
     const data = this.data;
     return !this._unloaded && !this._accountLocked && data.socialEnabled && !!data.recipe &&
       !data.publicBusy && !data.deleting && !data.deleteVisible &&
-      (data.builtIn || (data.publicReady && !data.publicLoading && !data.shareLoading &&
+      (data.builtIn ? Boolean(getBuiltInRecipe(this.recipeId)) : (data.publicReady && !data.publicLoading && !data.shareLoading &&
       !!data.publicInfo && !!data.shareRecipe && data.shareRecipe.id === data.publicInfo.id &&
       this._shareVersion === JSON.stringify(store.getRecipe(this.recipeId))));
   },
@@ -187,7 +205,12 @@ Page({
     return this.refreshPublication(true);
   },
   onShareAppMessage() {
-    if (this.accountOK(false) && !this.data.builtIn && this.shareAvailable()) {
+    if (this.accountOK(false) && this.shareAvailable()) {
+      if (this.data.builtIn) {
+        const recipe = getBuiltInRecipe(this.recipeId);
+        return {title: recipe.name + ' · 口袋食谱', path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id),
+          imageUrl: '/assets/cute/pocket-mascot.png'};
+      }
       const recipe = this.data.shareRecipe;
       return {title: recipe.name + ' · 口袋食谱', path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id),
         imageUrl: '/assets/cute/pocket-mascot.png'};

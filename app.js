@@ -15,7 +15,7 @@ function coverPageAllowed(page, owner, scopeKey) {
   if (page._sessionOwner && page._sessionOwner !== owner) return false;
   if (page.data.recommendationOwner && page.data.recommendationOwner !== scopeKey) return false;
   if (page._draftScope && page._draftScope !== scopeKey || page._sessionScope && page._sessionScope !== scopeKey) return false;
-  return /^pages\/(home|recipes|ingredients|ingredient-results|records|detail|random|editor|record-editor|mine|profile|discover|following|public-recipe)\/index$/.test(page.route);
+  return /^pages\/(home|recipes|ingredients|ingredient-results|records|detail|random|editor|record-editor|mine|profile|discover|following|public-recipe|builtin-recipe)\/index$/.test(page.route);
 }
 
 function refreshCoverView(event) {
@@ -36,7 +36,7 @@ function refreshCoverView(event) {
     if (decorated && typeof decorated.displayPhoto === 'string' && decorated.displayPhoto !== recipe.displayPhoto) {
       changes[key + '.displayPhoto'] = decorated.displayPhoto;
       if (recipe.photo && recipe.photo.indexOf('/families/') !== -1) changes[key + '.photoSrc'] = decorated.displayPhoto;
-      if (page.route === 'pages/public-recipe/index' && key === 'recipe' && decorated.displayPhoto &&
+      if ((page.route === 'pages/public-recipe/index' || page.route === 'pages/builtin-recipe/index') && key === 'recipe' && decorated.displayPhoto &&
         !recipe.photoURL && !recipe.photo && getCoverKey(recipe) && page.data.photoFailed) changes.photoFailed = false;
     }
   }

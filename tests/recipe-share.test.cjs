@@ -17,6 +17,75 @@ test('own recipes prepare a synchronized link without a preview or profile-setup
   }
 });
 
+test('sharing and returning retain verified recipe data without another request or redraw', async t => {
+  for (const recipe of [{}, {createdBy: OTHER}, {source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}]) {
+    for (const hideFirst of [false, true]) await t.test((recipe.source ? 'saved copy' : recipe.createdBy ? 'family recipe' : 'own recipe') + (hideFirst ? ' hide first' : ' share first'), async () => {
+      const app = setup({recipe}), page = await app.open();
+      const snapshot = clone(page.data), updates = app.calls.updates;
+      const menuCalls = app.calls.shareMenu.length;
+      for (let i = 0; i < 3; i++) {
+        if (hideFirst) page.onHide();
+        const shared = page.onShareAppMessage();
+        assert.match(shared.path, /^\/pages\/public-recipe\/index\?id=/);
+        if (!hideFirst) page.onHide();
+        await page.onShow();
+      }
+      // A canceled share chooser has the same hide/show lifecycle.
+      page.onHide(); await page.onShow();
+      assert.equal(app.calls.shareLinks.length, 1);
+      assert.equal(app.calls.updates, updates);
+      assert.equal(app.calls.shareMenu.length, menuCalls);
+      assert.deepEqual(clone(page.data), snapshot);
+    });
+  }
+});
+
+test('returning during share preparation reuses the current request', async () => {
+  const app = setup(), gate = pending();
+  app.hooks.link = () => gate.promise;
+  const first = app.page.onShow(); app.page.onHide();
+  const second = app.page.onShow(), third = app.page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
+  gate.resolve(linkResult(app)); await Promise.all([first, second, third]);
+  assert.equal(app.page.data.shareReady, true);
+  assert.equal(app.page.onShareAppMessage().title, '同步后的南瓜粥 · 口袋食谱');
+});
+
+test('a real local edit while away still refreshes sharing on return', async () => {
+  const app = setup(), page = await app.open();
+  page.onShareAppMessage(); page.onHide();
+  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '编辑后的菜名'});
+  app.hooks.link = () => linkResult(app, '编辑后的菜名');
+  await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(page.data.recipe.name, '编辑后的菜名');
+  assert.equal(page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
+});
+
+test('an edit while preparation is pending starts a fresh read on return and rejects the old response', async () => {
+  const app = setup(), gate = pending(), stale = linkResult(app, '编辑前的菜名');
+  app.hooks.link = () => gate.promise;
+  const first = app.page.onShow(); app.page.onHide();
+  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '编辑后的菜名'});
+  app.hooks.link = () => linkResult(app, '编辑后的菜名');
+  await app.page.onShow();
+  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(app.page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
+  const updates = app.calls.updates;
+  gate.resolve(stale); await first;
+  assert.equal(app.calls.updates, updates);
+  assert.equal(app.page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
+});
+
+test('local-only meal changes refresh displayed content without preparing the same share again', async () => {
+  const app = setup(), page = await app.open();
+  page.onShareAppMessage(); page.onHide();
+  const logId = app.store.addLog({recipeId: LOCAL_ID, date: '2026-11-04', rating: 3, note: ''});
+  await page.onShow();
+  assert.equal(page.data.lastLog.id, logId);
+  assert.equal(app.calls.shareLinks.length, 1);
+});
+
 test('the ready entry uses native sharing directly and has no preview or publish confirmation', () => {
   const markup = fs.readFileSync(path.join(__dirname, '../pages/detail/index.wxml'), 'utf8');
   assert.match(markup, /wx:if="\{\{shareReady\}\}"[^>]*open-type="share"/);
@@ -25,14 +94,24 @@ test('the ready entry uses native sharing directly and has no preview or publish
   assert.doesNotMatch(code, /share-preview|previewPublication|publishRecipe/);
 });
 
-test('starter recipes only share the fixed app card and never prepare a publication', async () => {
-  for (const recipe of [{isExample: true}, {id: 'pumpkin-millet', isExample: false}]) {
+test('starter recipes share their bundled original without preparing a publication or sending local edits', async () => {
+  for (const isExample of [true, false]) {
+    const recipe = {id: 'pumpkin-millet', isExample, name: '私人的修改菜名', note: '私人心得', photo: 'wxfile://usr/private-photo.jpg'};
     const app = setup({recipe}), page = await app.open();
     await page.requestShare(); app.emitSync(); await turn();
-    assert.equal(page.onShareAppMessage().path, '/pages/home/index');
+    assert.equal(page.onShareAppMessage().path, '/pages/builtin-recipe/index?id=pumpkin-millet');
+    assert.equal(page.onShareAppMessage().title, '南瓜小米粥 · 口袋食谱');
+    assert.doesNotMatch(JSON.stringify(page.onShareAppMessage()), /私人|private-photo/);
     assert.deepEqual(app.calls.shareLinks, []); assert.deepEqual(app.calls.publish, []);
     assert.equal(app.calls.shareMenu.at(-1).show, true);
   }
+});
+
+test('an unknown imported sample cannot masquerade as a bundled recipe or offer a misleading share entry', async () => {
+  const app = setup({recipe: {isExample: true}}), page = await app.open();
+  assert.equal(page.shareAvailable(), false); assert.equal(page.data.shareReady, false);
+  assert.equal(app.calls.shareMenu.at(-1).show, false);
+  assert.deepEqual(app.calls.shareLinks, []); assertUnshareable(page);
 });
 
 test('saved copies forward the original recipe link and retain attribution', async () => {

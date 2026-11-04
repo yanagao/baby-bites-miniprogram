@@ -69,6 +69,9 @@ function setup(options = {}) {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
+        if (dependency === '../../utils/recipe-photo') return {async prepareRecipePhoto(filePath, options) {
+          options.assertCurrent(); return {filePath, async cleanup() {}};
+        }};
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;
@@ -334,7 +337,7 @@ test('a recipe draft follows the first account binding but not a second account 
   assert.ok(!blocked.store.getState().recipes.some(item => item.name === '未保存的新菜'));
 });
 
-test('switching accounts while saving a selected photo aborts recipe commit and keeps the draft recoverable', async () => {
+test('switching accounts while saving a selected photo aborts the commit and removes the orphan without updating the old draft', async () => {
   const fixture = setup();
   const page = fixture.open('editor');
   fillNewRecipe(page);
@@ -352,9 +355,33 @@ test('switching accounts while saving a selected photo aborts recipe commit and 
   assert.deepEqual(copy(fixture.store.getState()), before);
   assert.match(page.data.error, /账号已切换/);
   assert.equal(page.data.form.name, '未保存的新菜');
-  assert.equal(page.data.photo, 'wxfile://usr/staged-photo.jpg');
+  assert.equal(page.data.photo, 'wxfile://tmp/selected.jpg');
+  assert.equal(page.pendingPhoto, 'wxfile://tmp/selected.jpg');
+  assert.equal(page.stagedPhotoPath, undefined);
+  assert.deepEqual(unlinked, ['wxfile://usr/staged-photo.jpg']);
   page.onUnload();
   assert.deepEqual(unlinked, ['wxfile://usr/staged-photo.jpg']);
+});
+
+test('missing or unchanged photo persistence paths cannot replace the draft or delete its source', async () => {
+  for (const returnedPath of ['', undefined, 'wxfile://tmp/selected.jpg']) {
+    const fixture = setup(), page = fixture.open('editor');
+    fillNewRecipe(page);
+    page.pendingPhoto = 'wxfile://tmp/selected.jpg'; page.setData({photo: page.pendingPhoto});
+    const before = copy(fixture.store.getState()), unlinked = [];
+    fixture.wx.getFileSystemManager = () => ({
+      saveFile(options) { options.success({savedFilePath: returnedPath}); },
+      unlink(options) { unlinked.push(options.filePath); }
+    });
+    await page.save();
+    assert.deepEqual(copy(fixture.store.getState()), before);
+    assert.match(page.data.error, /照片未能保存/);
+    assert.equal(page.data.photo, 'wxfile://tmp/selected.jpg');
+    assert.equal(page.pendingPhoto, 'wxfile://tmp/selected.jpg');
+    assert.equal(page.data.savedComplete, false);
+    assert.equal(page.data.saving, false);
+    assert.deepEqual(unlinked, []);
+  }
 });
 
 test('meal save and deletion confirmations cannot mutate another account with matching record IDs', () => {
