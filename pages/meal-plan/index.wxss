@@ -1,0 +1,47 @@
+.plan-page {padding:24rpx 28rpx calc(180rpx + env(safe-area-inset-bottom));color:#345158;}
+.plan-intro {margin:12rpx 0 24rpx;color:#82969a;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-range {display:flex;align-items:center;gap:12rpx;margin-bottom:24rpx;padding:18rpx 0;font-size:var(--font-body);line-height:var(--line-height-body);}
+.plan-range-action {margin-left:auto;color:#577479;font-size:var(--font-caption);}
+.plan-days {display:flex;gap:8rpx;}
+.plan-day {flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2rpx;margin:0;padding:14rpx 0 10rpx;border-radius:18rpx;background:#eff8f8;color:#577479;line-height:var(--line-height-body);}
+.plan-day::after,.plan-text-button::after,.plan-choose::after,.plan-close::after,.plan-picker-recipe::after {border:0;}
+.plan-day-selected {background:#55bba4;color:#153f37;}
+.plan-weekday {font-size:var(--font-caption);}
+.plan-day-number {font-size:var(--font-body);font-weight:600;}
+.plan-dot {width:7rpx;height:7rpx;margin-top:5rpx;border-radius:50%;background:transparent;}
+.plan-dot-filled {background:#55bba4;}
+.plan-day-selected .plan-dot-filled {background:#153f37;}
+.plan-date-heading {display:flex;align-items:center;justify-content:space-between;gap:16rpx;margin:28rpx 0 20rpx;}
+.plan-date-title,.plan-group-title {font-size:var(--font-section-title);font-weight:600;line-height:1.4;}
+.plan-text-button {display:flex;align-items:center;gap:4rpx;flex:none;margin:0;padding:10rpx 0;color:#277d6d;background:transparent;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-empty-note {margin-bottom:20rpx;padding:18rpx 20rpx;border-radius:20rpx;background:#eff8f8;color:#577479;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-day-group {margin-bottom:24rpx;}
+.plan-group-title {margin-bottom:18rpx;font-size:var(--font-card-title);}
+.plan-meal {display:flex;align-items:center;gap:20rpx;margin-bottom:18rpx;padding:22rpx;border:2rpx solid #d5e9ec;border-radius:20rpx;background:#eff8f8;}
+.plan-photo {width:120rpx;height:120rpx;flex:none;border-radius:16rpx;background:#ffffff;}
+.plan-photo-empty {display:flex;align-items:center;justify-content:center;color:#73c6e8;}
+.plan-meal-body {flex:1;min-width:0;}
+.plan-meal-label {display:inline-block;margin-bottom:6rpx;padding:2rpx 12rpx;border-radius:10rpx;background:#ffffff;color:#577479;font-size:var(--font-caption);line-height:var(--line-height-body);}
+.plan-recipe-name {font-size:var(--font-card-title);font-weight:600;line-height:1.4;overflow-wrap:anywhere;}
+.plan-recipe-meta {margin-top:6rpx;color:#82969a;font-size:var(--font-caption);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.plan-allergy {margin-top:6rpx;color:#b36f55;font-size:var(--font-caption);line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.plan-choose {display:flex;align-items:center;flex:none;gap:2rpx;margin:0;padding:10rpx 0;background:transparent;color:#277d6d;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-completed {display:flex;align-items:center;gap:5rpx;margin-top:8rpx;color:#277d6d;font-size:var(--font-caption);line-height:var(--line-height-body);}
+.plan-footer {position:fixed;z-index:20;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:20rpx;padding:20rpx 28rpx calc(24rpx + env(safe-area-inset-bottom));border-top:1rpx solid #e2edf0;background:#ffffff;}
+.plan-count {flex:none;white-space:nowrap;color:#577479;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-count text {color:#345158;font-weight:600;}
+.plan-confirm {flex:1;min-width:0;max-width:360rpx;--td-button-border-radius:999rpx;}
+.plan-error {margin-top:22rpx;color:#b36f55;font-size:var(--font-secondary);line-height:var(--line-height-body);text-align:center;overflow-wrap:anywhere;}
+.plan-picker {padding:28rpx 28rpx calc(24rpx + env(safe-area-inset-bottom));border-radius:28rpx 28rpx 0 0;background:#ffffff;color:#345158;}
+.plan-picker-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:20rpx;margin-bottom:20rpx;}
+.plan-picker-title {font-size:var(--font-section-title);font-weight:600;line-height:1.4;}
+.plan-picker-subtitle {margin-top:8rpx;color:#82969a;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-close {display:flex;align-items:center;justify-content:center;flex:none;width:60rpx;height:60rpx;margin:0;padding:0;border-radius:50%;background:#eff8f8;color:#577479;}
+.plan-search {display:flex;align-items:center;gap:12rpx;margin-bottom:18rpx;padding:16rpx 20rpx;border:2rpx solid #d5e9ec;border-radius:20rpx;background:#eff8f8;color:#82969a;}
+.plan-search input {flex:1;min-width:0;color:#345158;font-size:var(--font-secondary);line-height:var(--line-height-body);}
+.plan-picker-list {height:48vh;}
+.plan-picker-recipe {display:flex;align-items:center;gap:18rpx;width:100%;margin:0 0 14rpx;padding:16rpx;border-radius:20rpx;background:#eff8f8;color:#345158;text-align:left;line-height:var(--line-height-body);}
+.plan-picker-photo {width:96rpx;height:96rpx;border-radius:16rpx;flex:none;}
+.plan-picker-body {flex:1;min-width:0;}
+.plan-picker-name {font-size:var(--font-body);font-weight:600;line-height:var(--line-height-body);overflow-wrap:anywhere;}
+.plan-picker-empty {padding:40rpx 18rpx;color:#82969a;font-size:var(--font-secondary);line-height:var(--line-height-body);text-align:center;}

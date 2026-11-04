@@ -72,6 +72,7 @@ function setup(options = {}) {
         if (dependency === '../../utils/recipe-photo') return {async prepareRecipePhoto(filePath, options) {
           options.assertCurrent(); return {filePath, async cleanup() {}};
         }};
+        if (dependency === '../../utils/meal-plans') return require('../utils/meal-plans');
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
         if (dependency === '../../utils/cloud-sync') return cloudSync;

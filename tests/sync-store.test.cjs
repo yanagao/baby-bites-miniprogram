@@ -160,7 +160,7 @@ test('only a successfully persisted complete snapshot certifies its account cach
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
   assert.deepEqual(app.reload().getState().allergies, ['鸡蛋']);
   const restarted = app.reload();
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
@@ -196,11 +196,11 @@ test('failed snapshot persistence keeps the unverified marker and data atomic un
   restarted.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
   assert.deepEqual(restarted.getState().allergies, ['牛奶']);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 2);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
 });
 
 test('missing, unknown and malformed parser versions remain readable but cannot certify completeness', () => {
-  for (const version of [undefined, 0, 1, 3, '2', null, -1, true, {}]) {
+  for (const version of [undefined, 0, 1, 2, 4, '3', null, -1, true, {}]) {
     const data = {...empty(), allergies: ['花生'], allergiesUpdatedAt: 100};
     const app = setup({[ACTIVE]: A, [key(A)]: accountCache(data, version)});
     assert.equal(app.store.getSyncInfo().blocked, false);

@@ -58,6 +58,7 @@ function setup() {
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
       if (name === './baby-age') return require('../utils/baby-age');
+      if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -79,6 +80,7 @@ function setup() {
           options.assertCurrent();
           return {filePath, async cleanup() {}};
         }};
+        if (dependency === '../../utils/meal-plans') return require('../utils/meal-plans');
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../utils/social') return {getMine: async options => { calls.mine.push(options); return hooks.mine ? hooks.mine(options) : {published: []}; }};
         if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
@@ -676,4 +678,33 @@ test('closing an unsaved compressed photo draft cleans its generated output once
   assert.deepEqual(app.calls.photoCleanups, [output.filePath]);
   assert.equal(app.calls.writes, 0); assert.equal(app.calls.saves.length, 0);
   assert.deepEqual(app.calls.unlinks, []);
+});
+
+test('an unplanned meal can be recorded with a meal slot and no optional feedback', () => {
+  const app = setup(), recipeId = firstRecipeId(app);
+  const page = app.open('record-editor', {id: recipeId, date: '2024-03-01', meal: 'lunch'});
+  assert.equal(page.data.meal, 'lunch');
+  page.save();
+  const log = app.store.getState().logs[0];
+  assert.equal(log.rating, 0); assert.equal(log.portion, '');
+  assert.equal(log.date, '2024-03-01'); assert.equal(log.meal, 'lunch');
+  assert.equal(app.calls.addLog, 1); assert.equal(page.data.ratingError, '');
+  const edit = app.open('record-editor', {logId: log.id});
+  edit.tapRating({currentTarget: {dataset: {value: 3}}});
+  edit.save();
+  assert.equal(app.store.getLog(log.id).rating, 3); assert.equal(app.store.getLog(log.id).meal, 'lunch');
+  assert.equal(app.store.getState().logs.length, 1);
+});
+
+test('meal identity changes remain a draft and storage errors retain an unrated meal for retry', () => {
+  const app = setup(), page = app.open('record-editor', {id: firstRecipeId(app), meal: 'breakfast'});
+  page.chooseMeal({currentTarget: {dataset: {meal: 'dinner'}}});
+  assert.equal(app.store.getState().logs.length, 0);
+  assert.equal(app.returnWarning(), true);
+  app.failWrites(); page.save();
+  assert.equal(app.store.getState().logs.length, 0); assert.equal(page.data.meal, 'dinner');
+  assert.ok(page.data.error);
+  app.allowWrites(); page.save();
+  assert.equal(app.store.getState().logs[0].meal, 'dinner');
+  assert.equal(app.store.getState().logs[0].rating, 0);
 });

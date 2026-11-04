@@ -99,8 +99,11 @@ function mergeFamilyPhotos(recipes, local, remote, editedPhotoIds) {
 function mergeSnapshots(local, remote, family = false, editedPhotoIds) {
   const deletedRecipes = mergeTombstones(local.deleted.recipes, remote.deleted.recipes);
   const deletedLogs = mergeTombstones(local.deleted.logs, remote.deleted.logs);
+  const hasMealPlans = local.data.mealPlans !== undefined || remote.data.mealPlans !== undefined;
+  const deletedPlans = mergeTombstones(local.deleted.mealPlans, remote.deleted.mealPlans);
   const recipes = mergeItems(local.data.recipes, remote.data.recipes, deletedRecipes);
   const logs = mergeItems(local.data.logs, remote.data.logs, deletedLogs);
+  const mealPlans = mergeItems(local.data.mealPlans, remote.data.mealPlans, deletedPlans);
   // Upload acknowledgements may add authoritative provenance while another
   // local edit is still pending. Keep that provenance even when content wins
   // a same-timestamp merge on the client.
@@ -118,6 +121,12 @@ function mergeSnapshots(local, remote, family = false, editedPhotoIds) {
       deletedLogs.set(id, {id, updatedAt: Math.max(timeOf(log), timeOf(deletedLogs.get(id)), timeOf(recipeDeletion))});
     }
   });
+  mealPlans.forEach((plan, id) => {
+    if (!recipes.has(plan.recipeId)) {
+      mealPlans.delete(id);
+      deletedPlans.set(id, {id, updatedAt: Math.max(timeOf(plan), timeOf(deletedPlans.get(id)), timeOf(deletedRecipes.get(plan.recipeId)))});
+    }
+  });
   const localProfile = {nickname: local.data.nickname, updatedAt: local.data.profileUpdatedAt || 0};
   const remoteProfile = {nickname: remote.data.nickname, updatedAt: remote.data.profileUpdatedAt || 0};
   let profile = prefer(localProfile, remoteProfile);
@@ -131,8 +140,9 @@ function mergeSnapshots(local, remote, family = false, editedPhotoIds) {
   return copy({version: 1, data: {version: 1, nickname: profile.nickname,
     profileUpdatedAt: profile.updatedAt, ...mergeAllergies(local.data, remote.data),
     ...(chosenBirthday ? {babyBirthDate: chosenBirthday.babyBirthDate, babyBirthDateUpdatedAt: chosenBirthday.updatedAt} : {}),
-    recipes: sorted(recipes.values()), logs: sorted(logs.values())},
-  deleted: {recipes: sorted(deletedRecipes.values()), logs: sorted(deletedLogs.values())}});
+    recipes: sorted(recipes.values()), logs: sorted(logs.values()), ...(hasMealPlans ? {mealPlans: sorted(mealPlans.values())} : {})},
+  deleted: {recipes: sorted(deletedRecipes.values()), logs: sorted(deletedLogs.values()),
+    ...(hasMealPlans ? {mealPlans: sorted(deletedPlans.values())} : {})}});
 }
 
 module.exports = {mergeSnapshots, mergeAllergies};

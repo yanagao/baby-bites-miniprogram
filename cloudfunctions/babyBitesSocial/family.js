@@ -230,6 +230,7 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
   }
   async function cleanup(files) { if (files.length && typeof cloud.deleteFile === 'function') { try { await cloud.deleteFile({fileList: files}); } catch (_) {} } }
   function protectedFields(previous, incoming) {
+    if (previous.mealPlans !== undefined && incoming.mealPlans === undefined) reject('请更新小程序后同步，家庭餐单和用餐记录已保留。', 'CLIENT_UPDATE_REQUIRED');
     for (const [field, time] of [['allergies', 'allergiesUpdatedAt'], ['babyBirthDate', 'babyBirthDateUpdatedAt']]) {
       if (previous[field] !== undefined && incoming[field] === undefined) reject('请更新小程序后同步，宝宝资料已保留。', 'CLIENT_UPDATE_REQUIRED');
       if (previous[time] !== undefined && incoming[time] < previous[time]) reject('家人刚更新了宝宝资料，请同步后重试。', 'FAMILY_CONFLICT');
@@ -239,21 +240,21 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
   // a deleted item. Clients (including older versions) only need to send IDs
   // and times; they cannot erase history or supply an author by editing it.
   function keepDeletionHistory(previous, incoming, kind, fields) {
-    const history = new Map(previous.deleted[kind].map(item => [item.id, item]));
+    const history = new Map((previous.deleted[kind] || []).map(item => [item.id, item]));
     const tombstones = new Map(history);
-    for (const {id, updatedAt} of incoming.deleted[kind]) {
+    for (const {id, updatedAt} of incoming.deleted[kind] || []) {
       const old = tombstones.get(id);
       if (!old || updatedAt > old.updatedAt) tombstones.set(id, {...old, id, updatedAt});
     }
     const live = new Set(incoming.data[kind].map(item => item.id));
-    for (const item of previous.data[kind]) {
+    for (const item of previous.data[kind] || []) {
       if (live.has(item.id)) continue;
       const old = tombstones.get(item.id);
       const tombstone = {id: item.id, updatedAt: Math.max(old ? old.updatedAt : now(), item.updatedAt || item.createdAt || 0)};
       for (const field of fields) if (item[field] !== undefined) tombstone[field] = item[field];
       tombstones.set(item.id, tombstone);
     }
-    if (tombstones.size > (kind === 'recipes' ? 10000 : 100000)) reject('删除记录超过同步限制。', 'INVALID_SNAPSHOT');
+    if (tombstones.size > (kind === 'recipes' ? 10000 : kind === 'mealPlans' ? 30000 : 100000)) reject('删除记录超过同步限制。', 'INVALID_SNAPSHOT');
     incoming.deleted[kind] = [...tombstones.values()];
     return history;
   }
@@ -274,6 +275,7 @@ function createFamily({cloud, db, now = Date.now, random = size => crypto.random
     const incoming = validateSnapshot(downloaded.fileContent, {env, owner, now: now(), familyTombstones: true, photoAllowed: id =>
       ownedFile(id, env, owner, 'photos') || familyFile(id, env, state.family._id, 'photos') && allowed.has(id)});
     protectedFields(previous.data, incoming.data);
+    if (incoming.data.mealPlans !== undefined) keepDeletionHistory(previous, incoming, 'mealPlans', []);
     const deletedRecipes = keepDeletionHistory(previous, incoming, 'recipes', ['createdBy', 'source']);
     const oldRecipes = new Map(previous.data.recipes.map(recipe => [recipe.id, recipe]));
     incoming.data.recipes.forEach(recipe => {

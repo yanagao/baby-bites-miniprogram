@@ -2,89 +2,106 @@
 <t-notice-bar wx:if="{{warning}}" visible theme="warning" content="{{warning}}" />
 <view class="page-shell records-page">
   <view class="journal-heading">
-    <view>
-      <view class="page-title journal-title">每一口，都记得</view>
-      <view class="journal-subtitle">记下小小喜好，慢慢了解宝宝</view>
-    </view>
+    <view><view class="page-title journal-title">餐单</view><view class="journal-subtitle">{{planStatus || '提前安排，也能随时记录'}}</view></view>
     <image class="journal-mascot" src="/assets/cute/pocket-mascot.png" mode="aspectFit" aria-hidden="true" />
-  </view>
-  <view class="weekly-summary">
-    <view class="summary-item">
-      <view class="summary-value">{{stats.logCount}}<text class="summary-unit">条</text></view>
-      <view class="summary-label">本周记录</view>
-    </view>
-    <view class="summary-divider"></view>
-    <view class="summary-item">
-      <view class="summary-value">{{stats.triedCount}}<text class="summary-unit">道</text></view>
-      <view class="summary-label">本周尝过的菜</view>
-    </view>
   </view>
   <view class="calendar-heading">
     <button class="calendar-arrow" data-direction="-1" bindtap="moveWeek" aria-label="上一周"><t-icon name="chevron-left" size="24" /></button>
-    <view class="calendar-month brush">{{monthLabel}}</view>
-    <button class="calendar-arrow {{!canNextWeek ? 'calendar-arrow-disabled' : ''}}" disabled="{{!canNextWeek}}" data-direction="1" bindtap="moveWeek" aria-label="下一周"><t-icon name="chevron-right" size="24" /></button>
+    <picker mode="date" value="{{selectedDate}}" bindchange="changeCalendarDate"><view class="calendar-month"><t-icon name="calendar" size="32rpx" />{{monthLabel}}</view></picker>
+    <button class="calendar-arrow" data-direction="1" bindtap="moveWeek" aria-label="下一周"><t-icon name="chevron-right" size="24" /></button>
   </view>
   <view class="week-strip">
-    <button wx:for="{{days}}" wx:key="date" class="day-button {{item.selected ? 'day-selected' : ''}} {{item.future ? 'day-future' : ''}}" disabled="{{item.future}}" data-date="{{item.date}}" bindtap="chooseDay" aria-label="{{item.date}}{{item.today ? '，今天' : ''}}{{item.hasLog ? '，有用餐记录' : ''}}" aria-selected="{{item.selected}}">
-      <text class="day-weekday">{{item.today ? '今' : item.weekday}}</text>
-      <text class="day-number">{{item.day}}</text>
-      <view class="day-dot {{item.hasLog ? 'day-dot-visible' : ''}}"></view>
+    <button wx:for="{{days}}" wx:key="date" class="day-button {{item.selected ? 'day-selected' : ''}}" data-date="{{item.date}}" data-scope="{{scope}}" bindtap="chooseDay" aria-label="{{item.date}}{{item.today ? '，今天' : ''}}{{item.hasLog ? '，有安排或记录' : ''}}" aria-selected="{{item.selected}}">
+      <text class="day-weekday">{{item.weekday}}</text><text class="day-number">{{item.day}}</text>
+      <text wx:if="{{item.today}}" class="day-today">今天</text><view wx:else class="day-dot {{item.hasLog ? 'day-dot-visible' : ''}}"></view>
     </button>
   </view>
   <view class="selected-date-row">
-    <view class="selected-date brush">{{selectedLabel}}</view>
-    <text wx:if="{{selectedDate === today}}" class="today-label">今天</text>
-    <button wx:else class="back-today" bindtap="goToday">回到今天</button>
+    <view class="selected-date">{{selectedLabel}}</view>
+    <button class="record-day-add" disabled="{{future}}" data-scope="{{scope}}" bindtap="openRecordPicker">记一餐 <t-icon name="add" size="28rpx" /></button>
   </view>
-  <view class="rating-filters" aria-label="按本次喜好筛选记录">
-    <button wx:for="{{filters}}" wx:key="value" class="rating-filter {{filter === item.value ? 'rating-filter-active' : ''}}" data-value="{{item.value}}" bindtap="chooseFilter" aria-selected="{{filter === item.value}}">{{item.name}}</button>
+  <view wx:if="{{!plannedCount}}" class="meal-day-hint">
+    <view wx:if="{{!logs.length}}" class="meal-hint-title">{{selectedDate === today ? '今天还没安排餐单' : '这一天还没安排餐单'}}</view>
+    <view>{{logs.length ? '未提前安排，也可以记下吃过的菜。' : future ? '先选好早午晚餐，和家人一起准备。' : '可以先选菜，也可以吃完直接记一餐。'}}</view>
   </view>
-  <view class="journal-list" wx:if="{{logs.length}}">
-    <button wx:for="{{logs}}" wx:key="id" class="journal-card" data-id="{{item.id}}" bindtap="editLog" aria-label="编辑{{selectedDate}}的{{item.recipeName}}用餐记录">
-      <image wx:if="{{item.displayPhoto}}" class="journal-photo" src="{{item.displayPhoto}}" mode="aspectFill" />
-      <view wx:else class="journal-photo journal-photo-empty"><t-icon name="rice" size="34" /></view>
-      <view class="journal-content">
-        <view class="journal-card-header">
-          <text class="journal-recipe-name">{{item.recipeName}}</text>
-          <t-icon name="edit" size="18" />
-        </view>
-        <view class="journal-tags">
-          <view class="journal-rating journal-rating-{{item.rating}}"><t-icon name="{{item.ratingIcon}}" size="16" /><text>{{item.ratingName}}</text><text wx:if="{{item.recordedBy}}"> · {{item.recordedBy.label}}记录</text></view>
-          <view wx:if="{{item.portion}}" class="journal-portion">{{item.portion}}</view>
-        </view>
-        <view wx:if="{{item.note}}" class="journal-note">{{item.note}}</view>
-        <view wx:else class="journal-note journal-note-empty">点击编辑这条记录</view>
+  <view wx:else class="meal-day-toolbar"><text>{{nickname}} 的餐单 · 已安排 {{plannedCount}} 餐</text><button bindtap="editWeek">调整安排 <t-icon name="chevron-right" size="24rpx" /></button></view>
+  <view class="meal-slots">
+    <view wx:for="{{rows}}" wx:key="value" wx:for-item="slot" class="meal-slot">
+      <view wx:if="{{!slot.cards.length}}" class="meal-empty-slot">
+        <view class="meal-slot-icon"><t-icon name="{{slot.icon}}" size="42rpx" /></view>
+        <view class="meal-empty-copy"><view class="meal-slot-title">{{slot.label}}</view><view class="muted">未安排</view></view>
+        <button class="meal-pick-link" data-meal="{{slot.value}}" data-scope="{{scope}}" bindtap="choosePlan"><t-icon name="add" size="28rpx" />选菜</button>
       </view>
-    </button>
-  </view>
-  <view wx:else class="journal-empty">
-    <t-icon name="calendar" size="36" />
-    <view class="empty-title">{{filter === 'all' ? '这一天还没有用餐记录' : '这一天暂无符合喜好的记录'}}</view>
-    <view class="empty-description">{{filter === 'all' ? '吃过什么、喜欢多少，都可以慢慢记。' : '换个喜好，看看宝宝这一天吃了什么。'}}</view>
-    <view class="empty-actions">
-      <button wx:if="{{filter !== 'all'}}" class="empty-link" bindtap="resetFilter">清除筛选</button>
-      <button wx:elif="{{latestDate && latestDate !== selectedDate}}" class="empty-link" bindtap="viewLatest">查看最近记录</button>
-      <button class="empty-link" bindtap="previousDay">查看前一天</button>
+      <view wx:for="{{slot.cards}}" wx:for-item="card" wx:key="key" class="meal-plan-card">
+        <view class="meal-card-main">
+          <image wx:if="{{card.recipe.displayPhoto}}" class="meal-card-photo" src="{{card.recipe.displayPhoto}}" mode="aspectFill" />
+          <view wx:else class="meal-card-photo meal-photo-empty"><t-icon name="rice" size="46rpx" /></view>
+          <view class="meal-card-copy">
+            <view class="meal-card-heading"><text class="meal-slot-tag">{{slot.label}}</text><text wx:if="{{card.log}}" class="meal-done-tag"><t-icon name="check" size="22rpx" />已做</text></view>
+            <view class="meal-card-name">{{card.recipe.name}}</view>
+            <view wx:if="{{card.log}}" class="meal-card-meta">{{card.log.rating ? card.log.ratingName : '喜好待补充'}}{{card.log.portion ? ' · ' + card.log.portion : ''}}</view>
+            <view wx:else class="meal-card-meta">{{card.recipe.minutes}} 分钟 · {{card.recipe.texture}}</view>
+            <view wx:if="{{card.recipe.allergyWarning}}" class="meal-allergy">{{card.recipe.allergyWarning}}</view>
+          </view>
+        </view>
+        <view class="meal-card-actions">
+          <button data-id="{{card.recipe.id}}" data-scope="{{scope}}" bindtap="viewRecipe">查看做法</button>
+          <button wx:if="{{card.log}}" data-id="{{card.log.id}}" data-scope="{{scope}}" bindtap="editLog">修改记录</button>
+          <block wx:else>
+            <button data-meal="{{slot.value}}" data-scope="{{scope}}" bindtap="choosePlan">换菜</button>
+            <button class="meal-done-button" disabled="{{future}}" data-id="{{card.planId}}" data-scope="{{scope}}" bindtap="openCompletion">{{future ? '到当天可记录' : '已做'}}</button>
+          </block>
+        </view>
+        <view wx:if="{{card.log.recordedBy}}" class="meal-recorder">{{card.log.recordedBy.label}}记录</view>
+      </view>
     </view>
   </view>
-  <button class="pink-button journal-add" bindtap="openRecordPicker"><t-icon name="add" size="23" /><text>记一餐</text></button>
+  <view wx:if="{{familyActive}}" class="meal-family-note"><t-icon name="usergroup" size="28rpx" />已加入 {{nickname}} 的家庭 · 餐单和记录在家庭内共享</view>
+  <view wx:if="{{error && !completeVisible && !recordPickerVisible}}" class="meal-page-error">{{error}}</view>
+  <view class="meal-history-heading"><view class="meal-slot-title">用餐记录</view><button wx:if="{{selectedDate !== today}}" class="back-today" bindtap="goToday">回到今天</button></view>
+  <view class="weekly-summary"><text>本周 {{stats.logCount}} 条记录</text><text>记录了 {{stats.triedCount}} 道菜</text></view>
+  <block wx:if="{{legacyLogs.length || filter !== 'all'}}">
+    <view class="meal-plan-footnote">未标注餐次的记录</view>
+    <view class="rating-filters"><button wx:for="{{filters}}" wx:key="value" class="rating-filter {{filter === item.value ? 'rating-filter-active' : ''}}" data-value="{{item.value}}" bindtap="chooseFilter">{{item.name}}</button></view>
+    <view class="journal-list">
+      <button wx:for="{{legacyLogs}}" wx:key="id" class="journal-card" data-id="{{item.id}}" data-scope="{{scope}}" bindtap="editLog">
+        <image wx:if="{{item.displayPhoto}}" class="journal-photo" src="{{item.displayPhoto}}" mode="aspectFill" />
+        <view class="journal-content"><view class="journal-recipe-name">{{item.recipeName}}</view><view class="journal-note">{{item.ratingName}}{{item.portion ? ' · ' + item.portion : ''}}</view><view wx:if="{{item.note}}" class="journal-note">{{item.note}}</view></view><t-icon name="edit" size="28rpx" />
+      </button>
+    </view>
+  </block>
+  <view wx:if="{{!logs.length}}" class="meal-plan-footnote">{{filter === 'all' ? '这一天还没有用餐记录' : '暂无符合喜好的记录'}}</view>
 </view>
 <t-popup visible="{{recordPickerVisible}}" placement="bottom" bind:visible-change="recordPickerChange">
   <view class="recipe-picker">
-    <view class="recipe-picker-header">
-      <view><view class="recipe-picker-title">记录哪一道？</view><view class="recipe-picker-date">{{selectedLabel}}</view></view>
-      <button class="picker-close" bindtap="closeRecordPicker" aria-label="关闭选菜"><t-icon name="close" size="22" /></button>
-    </view>
-    <scroll-view scroll-y class="recipe-picker-list {{!recipes.length ? 'recipe-picker-list-empty' : ''}}">
-      <button wx:for="{{recipes}}" wx:key="id" class="picker-recipe" data-id="{{item.id}}" bindtap="selectRecipe">
-        <image wx:if="{{item.displayPhoto}}" class="picker-photo" src="{{item.displayPhoto}}" mode="aspectFill" />
-        <view wx:else class="picker-photo picker-photo-empty"><t-icon name="rice" size="24" /></view>
-        <view class="picker-recipe-content"><view class="picker-recipe-name">{{item.name}}</view><view class="picker-recipe-description">{{item.ingredientText}}</view></view>
-        <t-icon name="chevron-right" size="20" />
+    <view class="recipe-picker-header"><view><view class="recipe-picker-title">{{pickerMode === 'plan' ? '选择' + pickerMealLabel : '记录哪一道？'}}</view><view class="recipe-picker-date">{{pickerDate}}</view></view><button class="picker-close" disabled="{{savingPlan}}" bindtap="closeRecordPicker" aria-label="关闭选菜"><t-icon name="close" size="22" /></button></view>
+    <view wx:if="{{pickerMode === 'record'}}" class="meal-choice-row"><button wx:for="{{mealOptions}}" wx:key="value" class="meal-choice {{pickerMeal === item.value ? 'meal-choice-selected' : ''}}" data-meal="{{item.value}}" bindtap="choosePickerMeal">{{item.label}}</button></view>
+    <input class="meal-picker-search" value="{{pickerSearch}}" bindinput="changePickerSearch" placeholder="搜索菜谱或食材" />
+    <scroll-view scroll-y class="recipe-picker-list {{!pickerRecipes.length ? 'recipe-picker-list-empty' : ''}}">
+      <button wx:for="{{pickerRecipes}}" wx:key="id" class="picker-recipe {{pickerSelected === item.id ? 'picker-recipe-selected' : ''}}" data-id="{{item.id}}" data-scope="{{scope}}" disabled="{{savingPlan}}" bindtap="selectRecipe">
+        <image wx:if="{{item.displayPhoto}}" class="picker-photo" src="{{item.displayPhoto}}" mode="aspectFill" /><view wx:else class="picker-photo picker-photo-empty"><t-icon name="rice" size="24" /></view>
+        <view class="picker-recipe-content"><view class="picker-recipe-name">{{item.name}}</view><view class="picker-recipe-description">{{item.ingredientText}}</view><view wx:if="{{item.allergyWarning}}" class="meal-allergy">{{item.allergyWarning}}</view></view>
+        <t-icon name="{{pickerSelected === item.id ? 'check-circle-filled' : 'chevron-right'}}" size="28rpx" />
       </button>
-      <view wx:if="{{!recipes.length}}" class="picker-empty">还没有菜谱，先把做过的菜收进食谱。</view>
+      <view wx:if="{{!pickerRecipes.length}}" class="picker-empty">{{recipes.length ? '没有找到匹配的菜谱' : '还没有菜谱，先把做过的菜收进食谱。'}}</view>
     </scroll-view>
-    <button class="picker-add-recipe" bindtap="addRecipe"><t-icon name="add" size="20" />添加一道菜谱</button>
+    <view wx:if="{{error}}" class="meal-page-error">{{error}}</view>
+    <block wx:if="{{pickerMode === 'plan'}}"><view class="meal-plan-footnote">确认后保存，家庭成员同步后可查看。</view><t-button theme="primary" block shape="round" loading="{{savingPlan}}" disabled="{{!pickerSelected || savingPlan}}" bind:tap="savePickedPlan">确认安排</t-button></block>
+    <button wx:if="{{!recipes.length}}" class="picker-add-recipe" bindtap="addRecipe"><t-icon name="add" size="20" />添加一道菜谱</button>
+  </view>
+</t-popup>
+<t-popup visible="{{completeVisible}}" placement="bottom" bind:visible-change="completionChange">
+  <view class="recipe-picker completion-sheet">
+    <view class="recipe-picker-header"><view class="recipe-picker-title">完成这一餐</view><button class="picker-close" disabled="{{completing}}" bindtap="closeCompletion" aria-label="关闭"><t-icon name="close" size="22" /></button></view>
+    <view wx:if="{{completion}}" class="completion-recipe"><image wx:if="{{completion.recipe.displayPhoto}}" src="{{completion.recipe.displayPhoto}}" mode="aspectFill" /><view><view class="muted">{{completion.date}} · {{completion.mealLabel}}</view><view class="meal-card-name">{{completion.recipe.name}}</view></view></view>
+    <view class="meal-plan-footnote">顺便记下用餐情况（选填）</view>
+    <view class="meal-slot-title">宝宝喜欢吗？</view>
+    <view class="meal-choice-row"><button wx:for="{{completionRatings}}" wx:key="value" class="meal-choice {{completionRating === item.value ? 'meal-choice-selected' : ''}}" data-value="{{item.value}}" disabled="{{completing}}" bindtap="rateCompletion">{{item.label}}</button></view>
+    <view class="meal-slot-title">吃了多少？</view>
+    <view class="meal-choice-row"><button wx:for="{{completionPortions}}" wx:key="*this" class="meal-choice {{completionPortion === item ? 'meal-choice-selected' : ''}}" data-value="{{item}}" disabled="{{completing}}" bindtap="portionCompletion">{{item}}</button></view>
+    <view class="meal-plan-footnote">可以先标记已做，之后再补充用餐情况。</view>
+    <view wx:if="{{error}}" class="meal-page-error">{{error}}</view>
+    <t-button theme="primary" block shape="round" loading="{{completing}}" disabled="{{completing}}" bind:tap="completeMeal">完成</t-button>
   </view>
 </t-popup>
 <bottom-navigation id="bottom-navigation" />

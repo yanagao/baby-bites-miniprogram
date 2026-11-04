@@ -68,6 +68,8 @@
 - 失败返回 `{error:{code,message}}`，不暴露底层存储路径或第三方账号标识。
 - 照片路径为 `users/<owner>/photos/<unique>.jpg|png|webp`；快照为 `users/<owner>/snapshots/<unique>.json`。每次上传必须使用新文件名，后续不要覆盖已经发布的快照。客户端负责上传、下载，服务端只读取属于当前环境、当前账号目录下的快照。
 - 快照结构为 `{version:1,data:{version:1,nickname,profileUpdatedAt,recipes,logs},deleted:{recipes:[{id,updatedAt}],logs:[{id,updatedAt}]}}`。最多 5 MiB、1000 道菜谱、20000 条用餐记录；删除历史上限为 10000 道菜谱、100000 条记录。
+- 餐单启用后，`data.mealPlans` 与 `deleted.mealPlans` 同时出现，即使为空也保留。每项为 `{id:"meal-YYYY-MM-DD-breakfast",date,meal,recipeId,createdAt,updatedAt}`，`meal` 为 `breakfast/lunch/dinner`，同日同餐次唯一；最多 3000 项及 30000 条餐单删除历史，允许安排未来日期。计划仅在个人或家庭私有快照内同步，不进入公开菜谱。
+- 启用餐单的快照允许日志 `rating:0` 表示已做但未填写喜好，并允许可选 `meal`；用餐日期仍不得晚于中国日期的今天。个人索引保存 `mealPlansSchema:1`，家庭按上一快照检查能力字段，拒绝旧客户端丢弃餐单和新日志信息；清空所有餐单也不解除保护。家庭服务端保留餐单删除历史，避免后续提交忘记墓碑。须先部署本次 `babyBitesSync` 与 `babyBitesSocial`，再发布餐单客户端；旧云函数不能接收新快照。
 
 个人索引每账号一个文档，保存 `revision/fileID/updatedAt`；家庭数据使用独立家庭文档及成员映射，按当前成员身份读取同一家庭快照。大体积快照与照片放云存储。服务端 SDK 不受客户端安全规则约束，必须保留成员、scope、归属和文件路径校验，不提供任意 fileID 的下载代理。
 

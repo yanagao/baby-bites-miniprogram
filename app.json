@@ -7,6 +7,7 @@
     "pages/ingredients/index",
     "pages/ingredient-results/index",
     "pages/records/index",
+    "pages/meal-plan/index",
     "pages/detail/index",
     "pages/editor/index",
     "pages/record-editor/index",
@@ -40,7 +41,7 @@
       },
       {
         "pagePath": "pages/records/index",
-        "text": "记录"
+        "text": "餐单"
       },
       {
         "pagePath": "pages/mine/index",

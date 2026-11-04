@@ -569,3 +569,51 @@ test('large snapshot signing rechecks both membership and revision before return
     const result=await env.read('bob',b.scope);assert.equal(result.error.code,change==='remove'?'FAMILY_CHANGED':'FAMILY_CONFLICT');assert.equal(result.snapshotURL,undefined);assert.equal(result.snapshot,undefined);
   }
 });
+
+test('family members share confirmed meal plans and unrated completions without exposing them publicly', async () => {
+  const env = environment(), data = snapshot();
+  const planned = {id: 'meal-2026-11-02-breakfast', date: '2026-11-02', meal: 'breakfast', recipeId: 'r1', createdAt: NOW, updatedAt: NOW};
+  data.data.mealPlans = [planned, {...planned, id: 'meal-2026-11-05-lunch', date: '2026-11-05', meal: 'lunch'}];
+  data.deleted.mealPlans = [];
+  const alice = await env.create('alice', data), bob = await env.join();
+  const read = await env.read('bob', bob.scope);
+  assert.deepEqual(read.snapshot.data.mealPlans, data.data.mealPlans);
+  const completion = {id: 'meal-log-' + planned.id, recipeId: 'r1', date: '2026-11-02', meal: 'breakfast',
+    rating: 0, portion: '', note: '', createdAt: NOW + 1, updatedAt: NOW + 1};
+  read.snapshot.data.logs.push(completion);
+  const saved = await env.commit('bob', bob.scope, read.revision, read.snapshot);
+  assert.ok(saved.snapshot, JSON.stringify(saved));
+  const familyData = await env.read('alice', alice.scope);
+  const actual = familyData.snapshot.data.logs.find(item => item.id === completion.id);
+  assert.equal(actual.rating, 0); assert.equal(actual.meal, 'breakfast');
+  assert.equal(actual.recordedBy.memberId, bob.family.memberId);
+  assert.deepEqual(familyData.snapshot.data.mealPlans, data.data.mealPlans);
+  assert.deepEqual(await env.socialCall('alice', 'syncPublications', alice.scope), {updated: 1, removed: 0, hasMore: false});
+  const published = env.tables.get(COLLECTIONS.recipes).get(recipeIdFor(ownerFor('alice'), 'r1'));
+  assert.ok(published);
+  assert.equal(Object.hasOwn(published, 'mealPlans'), false);
+  assert.equal(Object.hasOwn(published, 'logs'), false);
+  assert.doesNotMatch(JSON.stringify(published), /meal-2026|meal-log/);
+});
+
+test('old family writers cannot drop an enabled meal schema and plan deletion history survives later commits', async () => {
+  const env = environment(), data = snapshot();
+  data.data.mealPlans = [{id: 'meal-2026-11-05-breakfast', date: '2026-11-05', meal: 'breakfast',
+    recipeId: 'r1', createdAt: NOW, updatedAt: NOW}];
+  data.deleted.mealPlans = [];
+  const alice = await env.create('alice', data), bob = await env.join();
+  const read = await env.read('bob', bob.scope), old = clone(read.snapshot);
+  delete old.data.mealPlans; delete old.deleted.mealPlans;
+  assert.equal((await env.commit('bob', bob.scope, read.revision, old)).error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.equal((await env.read('alice', alice.scope)).revision, read.revision);
+  const cleared = clone(read.snapshot); cleared.data.mealPlans = [];
+  // The server retains a deletion even if a client omitted its new tombstone.
+  const removed = await env.commit('bob', bob.scope, read.revision, cleared);
+  assert.deepEqual(removed.snapshot.data.mealPlans, []);
+  assert.deepEqual(removed.snapshot.deleted.mealPlans.map(item => item.id), ['meal-2026-11-05-breakfast']);
+  const next = clone(removed.snapshot); next.deleted.mealPlans = [];
+  const saved = await env.commit('alice', alice.scope, removed.revision, next);
+  assert.deepEqual(saved.snapshot.deleted.mealPlans, removed.snapshot.deleted.mealPlans);
+  assert.equal((await env.commit('bob', bob.scope, saved.revision, old)).error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.equal((await env.read('alice', alice.scope)).revision, saved.revision);
+});
