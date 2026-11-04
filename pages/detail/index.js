@@ -5,6 +5,7 @@ const social = require('../../utils/social');
 const cloudSync = require('../../utils/cloud-sync');
 const config = require('../../config/cloud');
 const {isBuiltInRecipe, getBuiltInRecipe} = require('../../utils/recipe-origin');
+const {createShareReturn} = require('../../utils/native-share-return');
 const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 const syncVersion = status => status && Number.isSafeInteger(status.revision) && Number.isSafeInteger(status.publicationVersion) ?
   status.owner + ':' + status.revision + ':' + status.publicationVersion : '';
@@ -24,7 +25,7 @@ Page({
     this.recipeId = options.id;
     this._unloaded = false;
     this._visible = false;
-    this._shareReturn = null;
+    this._shareReturn = createShareReturn(wx);
     this._publicationReadVersion = null;
     this._syncRefreshPending = false;
     this._lastSyncedKey = typeof cloudSync.getStatus === 'function' ? syncVersion(cloudSync.getStatus()) : '';
@@ -45,8 +46,7 @@ Page({
   },
   async onShow() {
     if (!this.accountOK(false)) return;
-    const shareReturn = this._shareReturn;
-    this._shareReturn = null;
+    const shareReturn = this._shareReturn.show();
     this._visible = true;
     this.refresh();
     if (!this.data.socialEnabled) return;
@@ -62,7 +62,7 @@ Page({
   onUnload() {
     this._unloaded = true;
     this._visible = false;
-    this._shareReturn = null;
+    this._shareReturn.dispose();
     this._syncRefreshPending = false;
     this._publicRequest = (this._publicRequest || 0) + 1;
     this.updateShareMenu();
@@ -80,7 +80,7 @@ Page({
     const message = '微信账号已切换，或家庭已变化，请返回后重新打开菜谱。';
     if (!this._accountCleared) {
       this._accountCleared = true;
-      this._shareReturn = null;
+      this._shareReturn.clear();
       this._publicationReadVersion = null;
       this._syncRefreshPending = false;
       this._publicRequest = (this._publicRequest || 0) + 1;
@@ -98,7 +98,7 @@ Page({
       !this.data.deleteVisible && Boolean(this.data.recipe);
     // A canceled native share may not hide the page. A later action must not
     // leave its one-return exemption attached to normal navigation or editing.
-    if (allowed) this._shareReturn = null;
+    if (allowed) this._shareReturn.clear();
     return allowed;
   },
   refresh() {
@@ -114,7 +114,7 @@ Page({
       });
       if (Object.keys(changed).length) this.setData(changed);
       if (!recipe || this._shareVersion && this._shareVersion !== JSON.stringify(recipe)) {
-        this._shareReturn = null;
+        this._shareReturn.clear();
         this._publicationReadVersion = null;
         this._shareVersion = '';
         this.setData({shareRecipe: null, shareReady: false, publicReady: false, publicChanged: Boolean(recipe)});
@@ -146,7 +146,7 @@ Page({
     return this.refreshPublication();
   },
   refreshPublication(fromOperation) {
-    this._shareReturn = null;
+    this._shareReturn.clear();
     const localVersion = JSON.stringify(store.getRecipe(this.recipeId));
     const version = readVersion();
     const work = this.loadPublication(fromOperation);
@@ -230,12 +230,12 @@ Page({
     return this.refreshPublication(true);
   },
   onShareAppMessage() {
-    this._shareReturn = null;
+    this._shareReturn.clear();
     if (this.accountOK(false) && this.shareAvailable()) {
       // Native sharing can hide before or after this callback; consume this
       // exemption on only the next show, with the verified versions unchanged.
-      this._shareReturn = {recipeId: this.recipeId, request: this._publicRequest,
-        localVersion: JSON.stringify(store.getRecipe(this.recipeId)), version: this._publicationReadVersion};
+      this._shareReturn.share({recipeId: this.recipeId, request: this._publicRequest,
+        localVersion: JSON.stringify(store.getRecipe(this.recipeId)), version: this._publicationReadVersion});
       if (this.data.builtIn) {
         const recipe = getBuiltInRecipe(this.recipeId);
         return {title: recipe.name + ' · 口袋食谱', path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id),
@@ -292,5 +292,5 @@ Page({
       Promise.resolve().then(() => cloudSync.syncNow()).catch(() => {});
     }
   },
-  back() { if (!this.data.publicBusy && !this.data.deleting) { this._shareReturn = null; ui.back(); } }
+  back() { if (!this.data.publicBusy && !this.data.deleting) { this._shareReturn.clear(); ui.back(); } }
 });

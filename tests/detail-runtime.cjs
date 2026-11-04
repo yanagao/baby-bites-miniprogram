@@ -33,6 +33,7 @@ function setup(options = {}) {
   const hooks = {};
   let readVersion = 0;
   const syncListeners = new Set();
+  const appHideListeners = new Set();
   const calls = {shareLinks: [], mine: 0, recipe: [], publish: [], unpublish: [], navigation: [], toasts: [], errors: [],
     shareMenu: [], updates: 0, backs: 0, sync: 0};
   let published = Boolean(options.published);
@@ -41,6 +42,8 @@ function setup(options = {}) {
     photoURL: 'https://example.com/public.jpg', ingredients: [{name: '南瓜', amount: '30 克'}],
     steps: ['煮软。']};
   const wx = {
+    onAppHide(listener) { appHideListeners.add(listener); },
+    offAppHide(listener) { appHideListeners.delete(listener); },
     getStorageSync(key) { return clone(storage.get(key)); },
     setStorageSync(key, value) { if (hooks.storage) hooks.storage(); storage.set(key, clone(value)); },
     getStorageInfoSync() { return {keys: [...storage.keys()]}; },
@@ -102,6 +105,7 @@ function setup(options = {}) {
     require(name) {
       if (name.endsWith('/store')) return store;
       if (name.endsWith('/social')) return social;
+      if (name.endsWith('/native-share-return')) return require('../utils/native-share-return');
       if (name.endsWith('/cloud-sync')) return {async syncNow() { calls.sync++; const result = hooks.sync ? await hooks.sync() : {state: 'synced'}; if (result.state === 'synced') published = false; return result; }, getStatus: () => ({owner: OWNER, revision: 0, publicationVersion: 0}), subscribe(listener) {
         syncListeners.add(listener); return () => syncListeners.delete(listener);
       }};
@@ -117,6 +121,7 @@ function setup(options = {}) {
   }};
   page.onLoad({id: sourceID});
   return {page, store, calls, hooks, options, syncListeners, sourceID, isPublished: () => published,
+    appHideListeners, hideApp(reason) { appHideListeners.forEach(listener => listener({reason})); },
     invalidateReads() { readVersion++; },
     emitSync(status) { syncListeners.forEach(listener => listener({state: 'synced', owner: OWNER, lastSyncedAt: 10, revision: 1, publicationVersion: 1, ...status})); },
     updatePublicSnapshot(name) { publicRecipe = {...publicRecipe, name}; sourceUpdatedAt = store.getRecipe(sourceID).updatedAt; },

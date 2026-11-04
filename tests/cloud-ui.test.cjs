@@ -68,6 +68,7 @@ function setup(options = {}) {
     vm.runInNewContext(fs.readFileSync(path.join(root, 'pages', name, 'index.js'), 'utf8'), {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
+        if (dependency.endsWith('/native-share-return')) return require('../utils/native-share-return');
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/recipe-photo') return {async prepareRecipePhoto(filePath, options) {
           options.assertCurrent(); return {filePath, async cleanup() {}};

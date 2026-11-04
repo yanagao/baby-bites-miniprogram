@@ -193,7 +193,61 @@ test('backup import replaces an older completion after the same meal was deleted
   assert.equal(target.store.getState().mealPlans[0].recipeId, b);
 });
 
-test('a rebuilt completion cannot displace a newer local plan or its moved historical record', t => {
+for (const [name, date, meal] of [
+  ['date', shiftDate(DATE, -1), 'breakfast'],
+  ['meal', DATE, 'dinner'],
+  ['date and meal', shiftDate(DATE, -1), 'dinner']
+]) test(`backup import identifies a rebuilt completion by its original slot after changing its ${name}`, () => {
+  const source = setup(), [a, b, c] = source.ids;
+  const [origin, destination] = source.store.saveMealPlans([entry(a), entry(c, meal, date)]);
+  const logId = source.store.completeMeal({planId: origin.id, rating: 1});
+  const oldStorage = source.persisted(), oldBackup = source.store.exportBackup();
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  assert.equal(source.store.completeMeal({planId: origin.id, rating: 2}), logId);
+  source.store.updateLog(logId, {date, meal, rating: 3, portion: '吃了一些', note: '调整实际用餐时间'});
+  const replacement = source.store.getLog(logId), newBackup = source.store.exportBackup();
+  assert.equal(logId, 'meal-log-' + origin.id);
+  assert.notEqual(logId, 'meal-log-' + planId(date, meal));
+  const target = setup(oldStorage);
+  target.store.importBackup(newBackup);
+  assert.deepEqual(target.store.getLog(logId), replacement);
+  assert.equal(target.store.getState().logs.length, 1);
+  assert.equal(target.store.getState().mealPlans.find(plan => plan.id === origin.id).recipeId, b);
+  assert.deepEqual(target.store.getState().mealPlans.find(plan => plan.id === destination.id), destination,
+    'the actual meal date does not identify which plan was rebuilt');
+  target.store.importBackup(oldBackup);
+  assert.deepEqual(target.store.getLog(logId), replacement, 'an older backup cannot undo the rebuilt, moved completion');
+  assert.equal(target.store.getState().mealPlans.find(plan => plan.id === origin.id).recipeId, b);
+});
+
+for (const change of ['replace', 'remove']) test(`a moved rebuilt completion survives a later ${change} of its original plan`, () => {
+  const source = setup(), [a, b, c] = source.ids;
+  const [origin] = source.store.saveMealPlans([entry(a)]);
+  const logId = source.store.completeMeal({planId: origin.id, rating: 1});
+  const oldStorage = source.persisted();
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  source.store.completeMeal({planId: origin.id, rating: 2});
+  source.store.updateLog(logId, {date: shiftDate(DATE, -1), meal: 'dinner', rating: 3});
+  if (change === 'replace') source.store.saveMealPlans([entry(c)]);
+  else source.store.removeMealPlan(origin.id);
+  const backup = source.store.exportBackup(), replacement = source.store.getLog(logId);
+  const target = setup(oldStorage);
+  target.store.importBackup(backup);
+  assert.deepEqual(target.store.getLog(logId), replacement);
+  assert.equal(target.store.getState().mealPlans[0].recipeId, change === 'replace' ? c : a,
+    'data-only backup imports retain a local plan omitted by the backup');
+  if (change === 'replace') {
+    const completedTarget = setup(oldStorage);
+    const otherLogId = completedTarget.store.addLog({...entry(a), rating: 2});
+    completedTarget.store.importBackup(backup);
+    assert.deepEqual(completedTarget.store.getLog(logId), replacement);
+    assert.equal(completedTarget.store.getLog(otherLogId).recipeId, a);
+    assert.equal(completedTarget.store.getState().mealPlans[0].recipeId, a,
+      'another actual completion still protects the original slot');
+  }
+});
+
+for (const moved of [false, true]) test(`importing a ${moved ? 'moved ' : ''}rebuilt completion preserves a newer local plan`, t => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   const original = setup(), [a, b, c] = original.ids;
@@ -207,6 +261,7 @@ test('a rebuilt completion cannot displace a newer local plan or its moved histo
   const source = setup(originalStorage);
   source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
   source.store.completeMeal({planId: plan.id, rating: 3});
+  if (moved) source.store.updateLog(logId, {date: shiftDate(DATE, -2), meal: 'dinner', rating: 3});
   const backup = source.store.exportBackup();
   now += 100;
   const target = setup(movedStorage);
@@ -214,7 +269,8 @@ test('a rebuilt completion cannot displace a newer local plan or its moved histo
   const before = target.store.getState();
   assert.ok(JSON.parse(backup).logs[0].updatedAt > target.store.getLog(logId).updatedAt);
   target.store.importBackup(backup);
-  assert.deepEqual(target.store.getState(), before, 'the completion and plan must not be partially imported');
+  assert.deepEqual(target.store.getState(), moved ? {...before, logs: JSON.parse(backup).logs} : before,
+    'a moved history record is independent; an unchanged completion must stay paired with its plan');
 });
 
 test('backup import still rejects ordinary log ID collisions across recipes', () => {
@@ -227,6 +283,39 @@ test('backup import still rejects ordinary log ID collisions across recipes', ()
   assert.ok(!logId.startsWith('meal-log-'));
   app.store.importBackup(JSON.stringify(backup));
   assert.deepEqual(app.store.getState(), before);
+});
+
+test('rebuilt completions require an exact stable ID and a new creation time, and unmoved records require their plan', () => {
+  const source = setup(), [a, b, c] = source.ids;
+  const [origin] = source.store.saveMealPlans([entry(a)]);
+  const logId = source.store.completeMeal({planId: origin.id, rating: 1});
+  const oldStorage = source.persisted();
+  source.store.deleteLog(logId); source.store.saveMealPlans([entry(b)]);
+  source.store.completeMeal({planId: origin.id, rating: 2});
+  source.store.updateLog(logId, {date: shiftDate(DATE, -1), meal: 'dinner', rating: 3});
+  const newBackup = JSON.parse(source.store.exportBackup());
+  const scenarios = [
+    ['ordinary ID', 'ordinary-log'],
+    ['extra prefix', 'prefix-' + logId],
+    ['extra suffix', logId + '-extra'],
+    ['invalid original date', 'meal-log-meal-2024-02-30-breakfast'],
+    ['missing original plan', 'meal-log-' + planId(shiftDate(DATE, -2), 'breakfast')],
+    ['wrong original recipe', logId],
+    ['same generation', logId]
+  ];
+  for (const [name, id] of scenarios) {
+    const local = copy(oldStorage), incoming = copy(newBackup);
+    local.logs[0].id = id; incoming.logs[0].id = id;
+    if (name === 'missing original plan') Object.assign(incoming.logs[0], {date: shiftDate(DATE, -2), meal: 'breakfast'});
+    if (name === 'wrong original recipe') {
+      incoming.mealPlans[0].recipeId = c;
+      Object.assign(incoming.logs[0], {date: DATE, meal: 'breakfast'});
+    }
+    if (name === 'same generation') incoming.logs[0].createdAt = local.logs[0].createdAt;
+    const target = setup(local), before = target.store.getState();
+    target.store.importBackup(JSON.stringify(incoming));
+    assert.deepEqual(target.store.getState(), before, name);
+  }
 });
 
 test('rebuilt completion imports preserve tombstones and the replacement authorship without inheriting its predecessor', () => {

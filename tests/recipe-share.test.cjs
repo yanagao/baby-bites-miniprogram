@@ -24,14 +24,14 @@ test('sharing and returning retain verified recipe data without another request 
       const snapshot = clone(page.data), updates = app.calls.updates;
       const menuCalls = app.calls.shareMenu.length;
       for (let i = 0; i < 3; i++) {
-        if (hideFirst) page.onHide();
+        if (hideFirst) { app.hideApp(2); page.onHide(); }
         const shared = page.onShareAppMessage();
         assert.match(shared.path, /^\/pages\/public-recipe\/index\?id=/);
-        if (!hideFirst) page.onHide();
+        if (!hideFirst) { page.onHide(); app.hideApp(2); }
         await page.onShow();
       }
       // A canceled share chooser has the same hide/show lifecycle.
-      page.onShareAppMessage(); page.onHide(); await page.onShow();
+      page.onShareAppMessage(); page.onHide(); app.hideApp(2); await page.onShow();
       assert.equal(app.calls.shareLinks.length, 1);
       assert.equal(app.calls.updates, updates);
       assert.equal(app.calls.shareMenu.length, menuCalls);
@@ -58,11 +58,27 @@ test('ordinary returns revalidate saved copies when the original author renames 
 
 test('one share return does not suppress a later ordinary background refresh', async () => {
   const app = setup(), page = await app.open();
-  page.onShareAppMessage(); page.onHide(); await page.onShow();
+  page.onShareAppMessage(); page.onHide(); app.hideApp(2); await page.onShow();
   assert.equal(app.calls.shareLinks.length, 1);
   page.onHide(); app.updatePublicSnapshot('后台更新的菜名'); await page.onShow();
   assert.equal(app.calls.shareLinks.length, 2);
   assert.equal(page.data.shareRecipe.name, '后台更新的菜名');
+});
+
+test('canceling without hide cannot exempt a later ordinary app hide, even when the source changes', async t => {
+  for (const reason of [0, 1, 3, undefined]) for (const change of ['rename', 'NOT_PUBLIC']) {
+    await t.test(String(reason) + ' ' + change, async () => {
+      const app = setup({recipe: {source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}});
+      const page = await app.open(); page.onShareAppMessage();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (change === 'rename') app.updatePublicSnapshot('原作者修改后的名字');
+      else app.hooks.recipe = () => { throw Object.assign(Error('原作者已取消公开'), {code: 'NOT_PUBLIC'}); };
+      app.hideApp(reason); page.onHide(); await page.onShow();
+      assert.equal(app.calls.shareLinks.length, 2);
+      if (change === 'rename') assert.equal(page.data.shareRecipe.name, '原作者修改后的名字');
+      else assertUnshareable(page);
+    });
+  }
 });
 
 test('a share cancelled without hiding cannot suppress a later normal navigation return', async t => {
@@ -70,7 +86,7 @@ test('a share cancelled without hiding cannot suppress a later normal navigation
     await t.test(action, async () => {
       const app = setup({recipe: {photo: 'wxfile://usr/photo.jpg', source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}});
       const page = await app.open(); page.onShareAppMessage();
-      page[action](); page.onHide(); app.updatePublicSnapshot('导航后的新菜名'); await page.onShow();
+      page[action](); page.onHide(); app.hideApp(2); app.updatePublicSnapshot('导航后的新菜名'); await page.onShow();
       assert.equal(app.calls.shareLinks.length, 2);
       assert.equal(page.data.shareRecipe.name, '导航后的新菜名');
     });
@@ -81,7 +97,7 @@ test('social invalidation before or during native sharing requires a new verifie
   for (const when of ['before share', 'during share']) await t.test(when, async () => {
     const app = setup(), page = await app.open();
     if (when === 'before share') app.invalidateReads();
-    page.onShareAppMessage(); page.onHide();
+    page.onShareAppMessage(); page.onHide(); app.hideApp(2);
     if (when === 'during share') app.invalidateReads();
     app.updatePublicSnapshot('社交更新后的菜名'); await page.onShow();
     assert.equal(app.calls.shareLinks.length, 2);
@@ -97,7 +113,7 @@ test('a response crossing social invalidation cannot mark its share-return metad
     return result;
   };
   const page = await app.open(); delete app.hooks.link;
-  page.onShareAppMessage(); page.onHide(); app.updatePublicSnapshot('重新确认的菜名');
+  page.onShareAppMessage(); page.onHide(); app.hideApp(2); app.updatePublicSnapshot('重新确认的菜名');
   await page.onShow();
   assert.equal(app.calls.shareLinks.length, 2);
   assert.equal(page.data.shareRecipe.name, '重新确认的菜名');
@@ -126,7 +142,7 @@ test('a social change during pending preparation starts a fresh read on return a
 
 test('an unconsumed native-share return cannot survive account or family changes or unload', async t => {
   for (const change of ['account', 'family', 'unload']) await t.test(change, async () => {
-    const app = setup(), page = await app.open(); page.onShareAppMessage(); page.onHide();
+    const app = setup(), page = await app.open(); page.onShareAppMessage(); page.onHide(); app.hideApp(2);
     if (change === 'account') { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); }
     else if (change === 'family') {
       app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
@@ -150,7 +166,7 @@ test('returning during share preparation reuses the current request', async () =
 
 test('a real local edit while away still refreshes sharing on return', async () => {
   const app = setup(), page = await app.open();
-  page.onShareAppMessage(); page.onHide();
+  page.onShareAppMessage(); page.onHide(); app.hideApp(2);
   app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '编辑后的菜名'});
   app.hooks.link = () => linkResult(app, '编辑后的菜名');
   await page.onShow();
@@ -176,7 +192,7 @@ test('an edit while preparation is pending starts a fresh read on return and rej
 
 test('local-only meal changes refresh displayed content without preparing the same share again', async () => {
   const app = setup(), page = await app.open();
-  page.onShareAppMessage(); page.onHide();
+  page.onShareAppMessage(); page.onHide(); app.hideApp(2);
   const logId = app.store.addLog({recipeId: LOCAL_ID, date: '2026-11-04', rating: 3, note: ''});
   await page.onShow();
   assert.equal(page.data.lastLog.id, logId);
@@ -323,6 +339,7 @@ test('late share preparation cannot overwrite a newer result or revive switched,
 
 test('unload removes subscriptions and disabled social never prepares a link', async () => {
   const app = setup(), page = await app.open(); page.onUnload(); assert.equal(app.syncListeners.size, 0);
+  assert.equal(app.appHideListeners.size, 0);
   const updates = app.calls.updates; app.emitSync(); await turn(); assert.equal(app.calls.updates, updates);
   const disabled = setup({enabled: false}), local = await disabled.open(); await local.requestShare();
   assert.deepEqual(disabled.calls.shareLinks, []); assertUnshareable(local);

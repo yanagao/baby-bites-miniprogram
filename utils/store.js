@@ -722,13 +722,21 @@ function importBackup(text, options) {
       if (!local) { logs.set(log.id, restoreKnownDeletion(log, deletedLogs)); summary.addedLogs += 1; }
       else if (log.recipeId === local.recipeId && log.updatedAt > local.updatedAt) logs.set(log.id, log);
       else if (log.recipeId !== local.recipeId && log.updatedAt > local.updatedAt &&
-        log.createdAt > Math.max(local.createdAt, local.updatedAt) && log.id === 'meal-log-' + planId(log.date, log.meal)) {
-        const plan = incomingPlans.get(planId(log.date, log.meal));
+        log.createdAt > Math.max(local.createdAt, local.updatedAt) && log.id.startsWith('meal-log-')) {
+        // The recorded date/meal may be edited; the stable ID retains its original slot.
+        const originalPlanId = log.id.slice('meal-log-'.length);
+        if (!validPlanId(originalPlanId)) return;
+        if (originalPlanId !== planId(log.date, log.meal)) {
+          // Moved history is independent of later changes to its original plan.
+          logs.set(log.id, log);
+          return;
+        }
+        const plan = incomingPlans.get(originalPlanId);
         if (plan && plan.recipeId === log.recipeId) rebuiltMeals.push({log, plan});
       }
     });
     // A deleted completion can be rebuilt with another dish under the same
-    // stable slot ID. Accept that new generation only together with its plan;
+    // stable slot ID. Accept an unmoved generation only together with its plan;
     // ordinary log IDs still cannot change recipes during backup import.
     for (const {log, plan} of rebuiltMeals) {
       const localPlan = (next.mealPlans || []).find(item => item.id === plan.id);
