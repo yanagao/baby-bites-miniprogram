@@ -383,11 +383,12 @@ test('repeated completion generations restore only the recorder associated with 
   const staleWhileLive = clone(restored.snapshot);
   staleWhileLive.data.logs = [{...original, updatedAt: NOW + 55, recordedBy: replacement.recordedBy}];
   const staleResult = await env.commit('bob', bob.scope, restored.revision, staleWhileLive);
-  assert.equal(staleResult.error && staleResult.error.code, 'FAMILY_CONFLICT');
+  assert.ok(staleResult.snapshot, JSON.stringify(staleResult));
+  assert.deepEqual(staleResult.snapshot.data.logs[0], restored.snapshot.data.logs[0]);
   assert.deepEqual((await env.read('alice', alice.scope)).snapshot.data.logs[0], restored.snapshot.data.logs[0]);
   const removeAgain = clone(restored.snapshot);
   removeAgain.data.logs = []; removeAgain.deleted.logs = [{id: completionId, updatedAt: NOW + 60}];
-  const deletedAgain = await env.commit('alice', alice.scope, restored.revision, removeAgain);
+  const deletedAgain = await env.commit('alice', alice.scope, staleResult.revision, removeAgain);
   const olderBackup = clone(deletedAgain.snapshot);
   olderBackup.data.logs = [{...original, updatedAt: NOW + 70, recordedBy: replacement.recordedBy}];
   const oldRestored = await env.commit('bob', bob.scope, deletedAgain.revision, olderBackup);
@@ -411,12 +412,137 @@ test('a late old-generation edit cannot replace a completion born after its dele
   assert.equal(rebuilt.snapshot.data.logs[0].recordedBy.memberId, bob.family.memberId);
   const stale = clone(rebuilt.snapshot);
   stale.data.logs = [{...older.data.logs[0], updatedAt: NOW + 200}];
-  const rejected = await env.commit('alice', alice.scope, rebuilt.revision, stale);
-  assert.equal(rejected.error.code, 'FAMILY_CONFLICT');
+  const retained = await env.commit('alice', alice.scope, rebuilt.revision, stale);
+  assert.ok(retained.snapshot, JSON.stringify(retained));
+  assert.deepEqual(retained.snapshot.data.logs[0], rebuilt.snapshot.data.logs[0]);
+  const lateEdit = clone(retained.snapshot);
+  lateEdit.data.logs[0].updatedAt = NOW + 160;
+  const edited = await env.commit('bob', bob.scope, retained.revision, lateEdit);
   stale.deleted.logs[0].updatedAt = NOW + 150;
-  const advancedBoundary = await env.commit('alice', alice.scope, rebuilt.revision, stale);
-  assert.equal(advancedBoundary.error.code, 'FAMILY_CONFLICT', 'a newer client marker cannot erase the older authoritative boundary');
+  const advancedBoundary = await env.commit('alice', alice.scope, edited.revision, stale);
+  assert.ok(advancedBoundary.snapshot, JSON.stringify(advancedBoundary));
+  assert.deepEqual(advancedBoundary.snapshot.data.logs[0], edited.snapshot.data.logs[0],
+    'a marker predating the latest live edit cannot replace it with an older generation');
   assert.equal((await env.read('alice', alice.scope)).snapshot.data.logs[0].recipeId, 'r2');
+});
+
+for (const knownRecorder of [true, false]) test(`an offline delete and restore of an older completion converges with ${knownRecorder ? 'verified' : 'unknown'} historical attribution`, async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const original = clone(saved.snapshot.data.logs[0]), next = clone(saved.snapshot);
+  next.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  next.data.logs = [{...original, recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 30}];
+  delete next.data.logs[0].recordedBy;
+  next.data.mealPlans[0].recipeId = 'r2';
+  const rebuilt = await env.commit('bob', bob.scope, saved.revision, next);
+  if (!knownRecorder) {
+    delete rebuilt.snapshot.deleted.logs[0].createdAt;
+    env.files.set(rebuilt.fileID, Buffer.from(JSON.stringify(rebuilt.snapshot)));
+  }
+  const restored = clone(rebuilt.snapshot), replacement = clone(rebuilt.snapshot.data.logs[0]);
+  restored.deleted.logs = [{id: completionId, updatedAt: NOW + 40, createdAt: original.createdAt,
+    recordedBy: original.recordedBy}];
+  restored.data.logs = [{...original, updatedAt: NOW + 50, recordedBy: replacement.recordedBy}];
+  restored.data.mealPlans[0] = {...restored.data.mealPlans[0], recipeId: 'r1', updatedAt: NOW + 50};
+  restored.data.recipes[0].name = '同时修改的菜谱';
+  const result = await env.commit('bob', bob.scope, rebuilt.revision, mergeSnapshots(restored, rebuilt.snapshot, true));
+  assert.ok(result.snapshot, JSON.stringify(result));
+  assert.equal(result.snapshot.data.logs[0].recipeId, 'r1');
+  assert.equal(result.snapshot.data.logs[0].createdAt, original.createdAt);
+  assert.deepEqual(result.snapshot.data.logs[0].recordedBy, knownRecorder ? original.recordedBy : undefined);
+  assert.deepEqual(result.snapshot.deleted.logs[0], {id: completionId, updatedAt: NOW + 40,
+    createdAt: replacement.createdAt, recordedBy: replacement.recordedBy});
+  assert.equal(result.snapshot.data.recipes[0].name, '同时修改的菜谱');
+  assert.deepEqual(mergeSnapshots(result.snapshot, result.snapshot, true).data.logs, result.snapshot.data.logs);
+  const restoreB = clone(result.snapshot);
+  restoreB.deleted.logs[0].updatedAt = NOW + 60;
+  restoreB.data.logs = [{...replacement, updatedAt: NOW + 70, recordedBy: original.recordedBy}];
+  restoreB.data.mealPlans[0].recipeId = 'r2';
+  const back = await env.commit('alice', alice.scope, result.revision, restoreB);
+  assert.ok(back.snapshot, JSON.stringify(back));
+  assert.deepEqual(back.snapshot.data.logs[0].recordedBy, replacement.recordedBy);
+  assert.deepEqual((await env.read('bob', bob.scope)).snapshot.data.logs, back.snapshot.data.logs);
+});
+
+for (const moved of [false, true]) test(`canonical completion arbitration ${moved ? 'preserves independently changed plans for moved history' : 'retains only the completed original plan'}`, async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const original = clone(saved.snapshot.data.logs[0]), next = clone(saved.snapshot);
+  next.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  next.data.logs = [{...original, recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 60,
+    ...(moved ? {meal: 'lunch'} : {})}];
+  delete next.data.logs[0].recordedBy;
+  next.data.mealPlans[0].recipeId = 'r2';
+  const rebuilt = await env.commit('bob', bob.scope, saved.revision, next);
+  const stale = clone(rebuilt.snapshot);
+  stale.deleted.logs[0].updatedAt = NOW + 40;
+  stale.data.logs = [{...original, updatedAt: NOW + 100}];
+  stale.data.mealPlans[0] = {...stale.data.mealPlans[0], recipeId: 'r1', updatedAt: NOW + 100};
+  stale.data.mealPlans.push({id: 'meal-2026-11-02-dinner', date: '2026-11-02', meal: 'dinner',
+    recipeId: 'r1', createdAt: NOW + 100, updatedAt: NOW + 100});
+  const result = await env.commit('alice', alice.scope, rebuilt.revision, stale);
+  assert.ok(result.snapshot, JSON.stringify(result));
+  assert.deepEqual(result.snapshot.data.logs[0], rebuilt.snapshot.data.logs[0]);
+  assert.equal(result.snapshot.data.mealPlans[0].recipeId, moved ? 'r1' : 'r2');
+  if (!moved) assert.ok(result.snapshot.data.mealPlans[0].updatedAt > stale.data.mealPlans[0].updatedAt);
+  assert.deepEqual(result.snapshot.data.mealPlans[1], stale.data.mealPlans[1]);
+  assert.deepEqual(mergeSnapshots(result.snapshot, result.snapshot, true).data.logs, result.snapshot.data.logs);
+});
+
+test('recipe deletion preserves a surviving older completion restore without reviving a dangling live record', async () => {
+  const {env, alice, bob, saved} = await completedFamilyMeal();
+  const original = clone(saved.snapshot.data.logs[0]), next = clone(saved.snapshot);
+  next.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+  next.data.logs = [{...original, recipeId: 'r2', createdAt: NOW + 30, updatedAt: NOW + 60}];
+  delete next.data.logs[0].recordedBy;
+  next.data.mealPlans[0].recipeId = 'r2';
+  const rebuilt = await env.commit('bob', bob.scope, saved.revision, next);
+  const restore = clone(rebuilt.snapshot);
+  restore.deleted.logs[0].updatedAt = NOW + 40;
+  restore.data.logs = [{...original, updatedAt: NOW + 50, recordedBy: rebuilt.snapshot.data.logs[0].recordedBy}];
+  restore.data.recipes = restore.data.recipes.filter(recipe => recipe.id !== 'r2');
+  restore.data.mealPlans[0].recipeId = 'r1';
+  const result = await env.commit('bob', bob.scope, rebuilt.revision, restore);
+  assert.ok(result.snapshot, JSON.stringify(result));
+  assert.equal(result.snapshot.data.logs[0].recipeId, 'r1');
+  assert.equal(result.snapshot.data.logs[0].createdAt, original.createdAt);
+  assert.deepEqual(result.snapshot.data.logs[0].recordedBy, original.recordedBy);
+  assert.deepEqual(result.snapshot.deleted.logs[0], {id: completionId, updatedAt: NOW + 60,
+    createdAt: NOW + 30, recordedBy: rebuilt.snapshot.data.logs[0].recordedBy});
+  assert.ok(result.snapshot.data.logs[0].updatedAt > result.snapshot.deleted.logs[0].updatedAt);
+  assert.deepEqual(mergeSnapshots(result.snapshot, result.snapshot, true).data.logs, result.snapshot.data.logs);
+  const read = await env.read('alice', alice.scope);
+  assert.ok(read.snapshot, JSON.stringify(read));
+  read.snapshot.data.logs[0].note = '后续修改仍可保存';
+  read.snapshot.data.logs[0].updatedAt += 1;
+  const later = await env.commit('alice', alice.scope, read.revision, read.snapshot);
+  assert.ok(later.snapshot, JSON.stringify(later));
+  assert.equal(later.snapshot.data.logs[0].note, '后续修改仍可保存');
+});
+
+test('completion arbitration honors a deletion covering both candidates and normalizes a surviving legacy version', async () => {
+  for (const legacy of [false, true]) {
+    const {env, alice, bob, saved} = await completedFamilyMeal();
+    const original = clone(saved.snapshot.data.logs[0]), next = clone(saved.snapshot);
+    next.deleted.logs = [{id: completionId, updatedAt: NOW + 20}];
+    next.data.logs = [{...original, recipeId: 'r2', createdAt: NOW + (legacy ? 60 : 30), updatedAt: NOW + 30}];
+    delete next.data.logs[0].recordedBy;
+    next.data.mealPlans[0].recipeId = 'r2';
+    const rebuilt = await env.commit('bob', bob.scope, saved.revision, next);
+    const stale = clone(rebuilt.snapshot);
+    stale.deleted.logs[0].updatedAt = NOW + 40;
+    stale.data.logs = [{...original, updatedAt: NOW + (legacy ? 100 : 35)}];
+    const result = await env.commit('alice', alice.scope, rebuilt.revision, stale);
+    assert.ok(result.snapshot, JSON.stringify(result));
+    if (legacy) {
+      assert.equal(result.snapshot.data.logs[0].recipeId, 'r2');
+      assert.equal(result.snapshot.data.logs[0].updatedAt, NOW + 60);
+      assert.deepEqual(result.snapshot.data.logs[0].recordedBy, rebuilt.snapshot.data.logs[0].recordedBy);
+    } else {
+      assert.deepEqual(result.snapshot.data.logs, []);
+      assert.equal(result.snapshot.deleted.logs[0].createdAt, NOW + 30);
+    }
+    assert.deepEqual(mergeSnapshots(result.snapshot, result.snapshot, true).data.logs, result.snapshot.data.logs);
+    assert.ok((await env.read('bob', bob.scope)).snapshot);
+  }
 });
 
 test('canonical deletion metadata remains readable for legacy creation and edit timestamp ordering', async () => {
@@ -791,4 +917,120 @@ test('old family writers cannot drop an enabled meal schema and plan deletion hi
   assert.deepEqual(saved.snapshot.deleted.mealPlans, removed.snapshot.deleted.mealPlans);
   assert.equal((await env.commit('bob', bob.scope, saved.revision, old)).error.code, 'CLIENT_UPDATE_REQUIRED');
   assert.equal((await env.read('alice', alice.scope)).revision, saved.revision);
+});
+
+async function syncRealFamilyClient(client) {
+  const status = await client.sync.syncNow();
+  assert.equal(status.state, 'synced', JSON.stringify({status, lastRequest: client.requests.at(-1)}));
+  assert.equal(client.store.getSyncInfo().dirty, false);
+  return status;
+}
+
+async function restoredMealIntegration(unverifiedBackup = false) {
+  const {createFamilyClient} = require('./helpers/family-client.cjs');
+  const env = environment(), initial = snapshot();
+  initial.data.logs = []; initial.data.recipes.push(recipe('r2'));
+  const aliceFamily = await env.create('alice', initial), bobFamily = await env.join();
+  let clock = NOW;
+  const advance = () => {clock += 1000; env.advance(1000);};
+  const alice = createFamilyClient({environment: env, actor: 'alice', env: ENV, now: () => clock});
+  const bob = createFamilyClient({environment: env, actor: 'bob', env: ENV, now: () => clock});
+  await syncRealFamilyClient(alice);
+  advance();
+  const [plan] = alice.store.saveMealPlans([{date: '2026-11-02', meal: 'breakfast', recipeId: 'r1'}]);
+  const logId = alice.store.completeMeal({planId: plan.id, rating: 1});
+  let backup;
+  if (unverifiedBackup) {
+    // This older generation never reached the server, so its author is unknown.
+    backup = alice.store.exportBackup();
+    alice.store.deleteLog(logId); advance();
+    alice.store.completeMeal({planId: plan.id, rating: 2});
+  }
+  await syncRealFamilyClient(alice);
+  assert.equal(alice.store.getLog(logId).recordedBy.memberId, aliceFamily.family.memberId);
+  if (!backup) backup = alice.store.exportBackup();
+  advance(); alice.store.deleteLog(logId); await syncRealFamilyClient(alice);
+  await syncRealFamilyClient(bob); advance();
+  bob.store.saveMealPlans([{date: plan.date, meal: plan.meal, recipeId: 'r2'}]);
+  assert.equal(bob.store.completeMeal({planId: plan.id, rating: 3}), logId);
+  await syncRealFamilyClient(bob);
+  assert.equal(bob.store.getLog(logId).recordedBy.memberId, bobFamily.family.memberId);
+  await syncRealFamilyClient(alice);
+  return {env, alice, bob, aliceFamily, bobFamily, advance, backup, logId, plan};
+}
+
+for (const unverified of [false, true]) test(`real family sync restores an ${unverified ? 'unverifiable' : 'attested'} older meal after an offline deletion without staying dirty`, async () => {
+  const {env, alice, aliceFamily, bobFamily, advance, backup, logId} = await restoredMealIntegration(unverified);
+  const original = JSON.parse(backup).logs.find(log => log.id === logId);
+  advance(); alice.store.deleteLog(logId); alice.store.importBackup(backup);
+  const beforeRevision = alice.store.getSyncInfo().revision;
+  assert.equal(alice.store.getSyncInfo().dirty, true);
+  assert.equal(alice.store.getLog(logId).createdAt, original.createdAt);
+  await syncRealFamilyClient(alice);
+  assert.equal(alice.store.getSyncInfo().revision, beforeRevision + 1);
+  const canonical = await env.read('alice', aliceFamily.scope);
+  const restored = canonical.snapshot.data.logs.find(log => log.id === logId);
+  assert.equal(restored.recipeId, 'r1'); assert.equal(restored.createdAt, original.createdAt);
+  if (unverified) assert.equal(restored.recordedBy, undefined);
+  else assert.equal(restored.recordedBy.memberId, aliceFamily.family.memberId);
+  assert.notEqual(restored.recordedBy && restored.recordedBy.memberId, bobFamily.family.memberId);
+  assert.deepEqual(clone(alice.store.getLog(logId)), restored);
+  const commits = alice.requests.filter(request => request.data.action === 'commit').length;
+  await syncRealFamilyClient(alice);
+  assert.equal(alice.requests.filter(request => request.data.action === 'commit').length, commits);
+  advance(); alice.store.setNickname('恢复后仍能更新');
+  alice.store.updateLog(logId, {date: restored.date, rating: 3, note: '恢复后补充反馈'});
+  await syncRealFamilyClient(alice);
+  const updated = await env.read('alice', aliceFamily.scope);
+  assert.equal(updated.snapshot.data.nickname, '恢复后仍能更新');
+  const log = updated.snapshot.data.logs.find(item => item.id === logId);
+  assert.equal(log.note, '恢复后补充反馈'); assert.equal(log.createdAt, original.createdAt);
+  assert.deepEqual(clone(alice.store.getLog(logId)), log);
+});
+
+test('real family sync preserves a concurrently edited newer meal and still saves unrelated restored-client edits', async () => {
+  const {env, alice, bob, aliceFamily, bobFamily, advance, backup, logId, plan} = await restoredMealIntegration();
+  advance(); alice.store.deleteLog(logId); alice.store.importBackup(backup); alice.store.setNickname('保留其他修改');
+  const deletion = alice.store.getSyncSnapshot().deleted.logs.find(log => log.id === logId);
+  advance(); bob.store.updateLog(logId, {date: plan.date, rating: 2, note: '爸爸离线后的新反馈'});
+  await syncRealFamilyClient(bob);
+  assert.ok(bob.store.getLog(logId).updatedAt > deletion.updatedAt);
+  await syncRealFamilyClient(alice);
+  const saved = await env.read('alice', aliceFamily.scope), log = saved.snapshot.data.logs.find(item => item.id === logId);
+  assert.equal(log.recipeId, 'r2'); assert.equal(log.note, '爸爸离线后的新反馈');
+  assert.equal(log.recordedBy.memberId, bobFamily.family.memberId);
+  assert.equal(saved.snapshot.data.nickname, '保留其他修改');
+  assert.deepEqual(clone(alice.store.getLog(logId)), log);
+  advance(); alice.store.setNickname('可以继续同步'); await syncRealFamilyClient(alice);
+  assert.equal((await env.read('alice', aliceFamily.scope)).snapshot.data.nickname, '可以继续同步');
+});
+
+test('real family sync accepts canonical fallback when an ambiguous older restore reaches the server', async () => {
+  const {env, alice, bob, aliceFamily, bobFamily, advance, backup, logId, plan} = await restoredMealIntegration();
+  const newerBackup = bob.store.exportBackup();
+  advance();
+  // Both devices observe the same latest deletion. Bob explicitly restores B,
+  // so its latest edit is newer than that boundary on the server.
+  alice.store.deleteLog(logId); bob.store.deleteLog(logId); bob.store.importBackup(newerBackup);
+  const boundary = alice.store.getSyncSnapshot().deleted.logs.find(log => log.id === logId).updatedAt;
+  assert.equal(bob.store.getSyncSnapshot().deleted.logs.find(log => log.id === logId).updatedAt, boundary);
+  await syncRealFamilyClient(bob);
+  assert.ok(bob.store.getLog(logId).updatedAt > boundary);
+  advance(); alice.store.importBackup(backup); alice.store.setNickname('歧义恢复仍保存昵称');
+  assert.equal(alice.store.getLog(logId).recipeId, 'r1');
+  const firstRequest = alice.requests.length;
+  await syncRealFamilyClient(alice);
+  const commit = alice.requests.slice(firstRequest).find(request => request.data.action === 'commit');
+  assert.ok(commit, 'the real client must upload its merge to exercise server arbitration');
+  const uploaded = JSON.parse(env.files.get(commit.data.fileID).toString());
+  assert.equal(uploaded.data.logs.find(log => log.id === logId).recipeId, 'r1', 'client actually submits the older generation');
+  assert.equal(uploaded.deleted.logs.find(log => log.id === logId).updatedAt, boundary);
+  const canonical = commit.result.snapshot.data.logs.find(log => log.id === logId);
+  assert.equal(canonical.recipeId, 'r2', 'server canonical fallback retains the newer edited generation');
+  assert.equal(canonical.recordedBy.memberId, bobFamily.family.memberId);
+  assert.deepEqual(clone(alice.store.getLog(logId)), canonical);
+  assert.equal(alice.store.getState().mealPlans.find(item => item.id === plan.id).recipeId, 'r2');
+  assert.equal((await env.read('alice', aliceFamily.scope)).snapshot.data.nickname, '歧义恢复仍保存昵称');
+  advance(); alice.store.setNickname('冲突收敛后继续同步'); await syncRealFamilyClient(alice);
+  assert.equal((await env.read('alice', aliceFamily.scope)).snapshot.data.nickname, '冲突收敛后继续同步');
 });
