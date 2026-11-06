@@ -111,6 +111,7 @@ function setup(options = {}) {
       }};
       if (name.endsWith('/selectors')) return selectors;
       if (name.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
+      if (name.endsWith('/recipe-covers')) return {getCover: recipe => options.cover ? options.cover(recipe) : ''};
       if (name.endsWith('/cloud')) return {socialEnabled: options.enabled !== false};
       if (name.endsWith('/ui')) return {error(error) { calls.errors.push(error.message); }, back() { calls.backs++; }};
       throw Error(name);

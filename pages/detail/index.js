@@ -5,6 +5,7 @@ const social = require('../../utils/social');
 const cloudSync = require('../../utils/cloud-sync');
 const config = require('../../config/cloud');
 const {isBuiltInRecipe, getBuiltInRecipe} = require('../../utils/recipe-origin');
+const {getCover} = require('../../utils/recipe-covers');
 const {createShareReturn} = require('../../utils/native-share-return');
 const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 const syncVersion = status => status && Number.isSafeInteger(status.revision) && Number.isSafeInteger(status.publicationVersion) ?
@@ -185,7 +186,7 @@ Page({
       // current merely because the caller resumed after the version changed.
       this._publicationReadVersion = version;
       this.setData({publicInfo: {id: recipe.id, sourceUpdatedAt: local.updatedAt || local.createdAt || 0},
-        publicReady: true, publicChanged: false, shareRecipe: {id: recipe.id, name: recipe.name}});
+        publicReady: true, publicChanged: false, shareRecipe: {id: recipe.id, name: recipe.name, photoURL: recipe.photoURL || ''}});
       return true;
     } catch (error) {
       if (this.accountOK(false) && request === this._publicRequest) {
@@ -239,11 +240,11 @@ Page({
       if (this.data.builtIn) {
         const recipe = getBuiltInRecipe(this.recipeId);
         return {title: recipe.name + ' · 口袋食谱', path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id),
-          imageUrl: '/assets/cute/pocket-mascot.png'};
+          imageUrl: getCover(recipe) || '/assets/cute/pocket-mascot.png'};
       }
       const recipe = this.data.shareRecipe;
       return {title: recipe.name + ' · 口袋食谱', path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id),
-        imageUrl: '/assets/cute/pocket-mascot.png'};
+        imageUrl: recipe.photoURL || '/assets/cute/pocket-mascot.png'};
     }
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },

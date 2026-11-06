@@ -11,6 +11,7 @@ test('own recipes prepare a synchronized link without a preview or profile-setup
     assert.equal(page.data.shareReady, true);
     assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + PUBLIC_ID);
     assert.equal(page.onShareAppMessage().title, '已公开的南瓜小米粥 · 口袋食谱');
+    assert.equal(page.onShareAppMessage().imageUrl, 'https://example.com/public.jpg');
     assert.deepEqual(app.calls.shareLinks, [{id: LOCAL_ID, force: false}]);
     assert.deepEqual(app.calls.navigation, []); assert.deepEqual(app.calls.publish, []);
     assert.deepEqual(clone(app.store.getState()), before);

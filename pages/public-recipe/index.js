@@ -224,7 +224,8 @@ Page({
     this._shareReturn.clear();
     if (recipe) this._shareReturn.share({recipeId: this.recipeId, request: this.request, version: this._recipeReadVersion});
     return recipe ? {title: recipe.name + ' · 口袋食谱',
-      path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id), imageUrl: '/assets/cute/pocket-mascot.png'} :
+      path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id),
+      imageUrl: recipe.photoURL || recipe.displayPhoto || '/assets/cute/pocket-mascot.png'} :
       {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   back() { this._shareReturn.clear(); ui.back(); }

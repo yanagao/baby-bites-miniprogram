@@ -10,6 +10,8 @@ const turn = () => new Promise(resolve => setImmediate(resolve));
 const author = {id: 'a'.repeat(32), name: '朋友的小厨房'};
 const recipe = {id: 'b'.repeat(64), name: '南瓜粥', profileId: author.id,
   ingredients: [{name: '南瓜'}], steps: ['蒸熟'], source: {profileId: 'c'.repeat(32)}};
+const photoURL = 'https://example.test/author-recipe.jpg';
+const fallbackImage = '/assets/cute/pocket-mascot.png';
 
 function setup() {
   let owner = 'owner-a', scope = 'family-a', version = 1, imported = null, allergies = [];
@@ -65,6 +67,36 @@ function nativeShare(app, options) {
   app.hideApp(2);
   return result;
 }
+
+test('forwarded recipe cards prefer the author photo, then the public cover, then the app image', async () => {
+  const displayPhoto = 'wxfile://usr/recipe-covers-v1/public-cover.jpg';
+  for (const [photos, expected] of [[{photoURL, displayPhoto}, photoURL], [{displayPhoto}, displayPhoto], [{}, fallbackImage]]) {
+    const app = setup();
+    app.hooks.recipe = () => ({recipe: {...recipe, ...photos}, author});
+    await app.page.onShow();
+    const share = app.page.onShareAppMessage();
+    assert.equal(share.imageUrl, expected);
+    assert.equal(share.path, '/pages/public-recipe/index?id=' + recipe.id);
+  }
+});
+
+test('reloading replaces the shared photo and never exposes the previous photo while loading or after failure', async () => {
+  const app = setup();
+  app.hooks.recipe = () => ({recipe: {...recipe, photoURL}, author});
+  await app.page.onShow();
+  assert.equal(app.page.onShareAppMessage().imageUrl, photoURL);
+  let release;
+  app.hooks.recipe = () => new Promise(resolve => { release = resolve; });
+  const loading = app.page.reload();
+  assert.equal(app.page.data.loading, true);
+  assert.equal(app.page.onShareAppMessage().imageUrl, fallbackImage);
+  const replacement = 'https://example.test/author-recipe-updated.jpg';
+  release({recipe: {...recipe, photoURL: replacement}, author}); await loading;
+  assert.equal(app.page.onShareAppMessage().imageUrl, replacement);
+  app.hooks.recipe = () => { throw Error('菜谱已取消公开'); };
+  await app.page.reload();
+  assert.equal(app.page.onShareAppMessage().imageUrl, fallbackImage);
+});
 
 test('native recipe sharing and cancellation preserve the loaded view, pagination and failed-image state without requests', async t => {
   for (const from of ['button', 'menu']) for (const hideFirst of [false, true]) await t.test(from + (hideFirst ? ' hide first' : ' share first'), async () => {
@@ -190,13 +222,15 @@ test('photo previews cannot pick up a canceled share marker when they open a nat
 
 test('share-return reuse cannot revive account or family ABA sessions and ignores unloaded pages', async t => {
   for (const mode of ['account', 'family', 'unnotified', 'unload']) await t.test(mode, async () => {
-    const app = setup(); await app.page.onShow(); app.page.onShareAppMessage();
+    const app = setup(); app.hooks.recipe = () => ({recipe: {...recipe, photoURL}, author});
+    await app.page.onShow(); assert.equal(app.page.onShareAppMessage().imageUrl, photoURL);
     if (mode === 'account') { app.changeIdentity('owner-b'); app.changeIdentity('owner-a'); }
     if (mode === 'family') { app.changeIdentity('owner-a', 'family-b'); app.changeIdentity('owner-a', 'family-a'); }
     if (mode === 'unnotified') app.changeIdentity('owner-b', 'family-a', false);
     if (mode === 'unload') app.page.onUnload();
     await app.page.onShow(); assert.equal(app.calls.recipes.length, 1);
     assert.equal(app.page.onShareAppMessage().path, '/pages/home/index');
+    assert.equal(app.page.onShareAppMessage().imageUrl, fallbackImage);
     if (mode !== 'unload') assert.equal(app.page.data.recipe, null);
     else { assert.equal(app.listeners.size, 0); assert.equal(app.appHideListeners.size, 0); }
   });

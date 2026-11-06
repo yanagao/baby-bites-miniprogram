@@ -41,7 +41,9 @@ function setup(options = {}) {
       if (name.endsWith('/data/recipes')) return catalog;
       if (name.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
       if (name.endsWith('/allergies')) return require('../utils/allergies');
-      if (name.endsWith('/recipe-covers')) return {withCover(recipe) {
+      if (name.endsWith('/recipe-covers')) return {getCover(recipe) {
+        return options.cover ? options.cover(recipe) : '/static-catalog/' + recipe.id + '.jpg';
+      }, withCover(recipe) {
         calls.covers.push(recipe.id);
         return {...clone(recipe), displayPhoto: '/static-catalog/' + recipe.id + '.jpg'};
       }};
@@ -72,6 +74,7 @@ test('every packaged built-in recipe has a direct read-only landing route and st
     const share = app.page.onShareAppMessage();
     assert.equal(share.path, '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id));
     assert.ok(share.title.includes(recipe.name));
+    assert.equal(share.imageUrl, '/static-catalog/' + recipe.id + '.jpg');
     assert.equal(app.calls.shares.at(-1), 'show');
     assert.equal(app.calls.cloud, 0); assert.equal(app.calls.writes, 0);
   }
@@ -145,11 +148,15 @@ test('an unavailable cover does not change the recipe route, and an unloaded pag
 
 test('sharing an edited built-in from local detail uses the original title and a recipe-specific landing page', async () => {
   const app = detailSetup({recipe: {...clone(first), name: PRIVATE_NAME, note: PRIVATE_NOTE,
-    photo: PRIVATE_PHOTO, isExample: true}});
+    photo: PRIVATE_PHOTO, isExample: true}, cover: recipe => {
+      assert.equal(recipe.photo || '', '');
+      return '/static-catalog/' + recipe.id + '.jpg';
+    }});
   const page = await app.open();
   const share = page.onShareAppMessage();
   assert.equal(share.path, '/pages/builtin-recipe/index?id=' + first.id);
   assert.ok(share.title.includes(first.name));
+  assert.equal(share.imageUrl, '/static-catalog/' + first.id + '.jpg');
   assert.equal(JSON.stringify(share).includes(PRIVATE_NAME), false);
   assert.equal(JSON.stringify(share).includes(PRIVATE_NOTE), false);
   assert.equal(JSON.stringify(share).includes(PRIVATE_PHOTO), false);

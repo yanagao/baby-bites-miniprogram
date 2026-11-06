@@ -1,5 +1,5 @@
 const {getBuiltInRecipe} = require('../../utils/recipe-origin');
-const {withCover} = require('../../utils/recipe-covers');
+const {withCover, getCover} = require('../../utils/recipe-covers');
 const {findRecipeAllergens} = require('../../utils/allergies');
 const store = require('../../utils/store');
 const ui = require('../../utils/ui');
@@ -29,7 +29,7 @@ Page({
   onShareAppMessage() {
     const recipe = !this._unloaded && getBuiltInRecipe(this.recipeId);
     return recipe ? {title: recipe.name + ' · 口袋食谱',
-      path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id), imageUrl: '/assets/cute/pocket-mascot.png'} :
+      path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id), imageUrl: getCover(recipe) || '/assets/cute/pocket-mascot.png'} :
       {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   back: ui.back
