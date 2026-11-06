@@ -6,6 +6,7 @@ const cloudSync = require('../../utils/cloud-sync');
 const config = require('../../config/cloud');
 const {isBuiltInRecipe, getBuiltInRecipe} = require('../../utils/recipe-origin');
 const {getCover} = require('../../utils/recipe-covers');
+const {createSharePhoto} = require('../../utils/recipe-share-photo');
 const {createShareReturn} = require('../../utils/native-share-return');
 const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 const syncVersion = status => status && Number.isSafeInteger(status.revision) && Number.isSafeInteger(status.publicationVersion) ?
@@ -27,6 +28,7 @@ Page({
     this._unloaded = false;
     this._visible = false;
     this._shareReturn = createShareReturn(wx);
+    this._sharePhoto = createSharePhoto(wx);
     this._publicationReadVersion = null;
     this._syncRefreshPending = false;
     this._lastSyncedKey = typeof cloudSync.getStatus === 'function' ? syncVersion(cloudSync.getStatus()) : '';
@@ -64,6 +66,7 @@ Page({
     this._unloaded = true;
     this._visible = false;
     this._shareReturn.dispose();
+    this._sharePhoto.clear();
     this._syncRefreshPending = false;
     this._publicRequest = (this._publicRequest || 0) + 1;
     this.updateShareMenu();
@@ -82,6 +85,7 @@ Page({
     if (!this._accountCleared) {
       this._accountCleared = true;
       this._shareReturn.clear();
+      this._sharePhoto.clear();
       this._publicationReadVersion = null;
       this._syncRefreshPending = false;
       this._publicRequest = (this._publicRequest || 0) + 1;
@@ -116,6 +120,7 @@ Page({
       if (Object.keys(changed).length) this.setData(changed);
       if (!recipe || this._shareVersion && this._shareVersion !== JSON.stringify(recipe)) {
         this._shareReturn.clear();
+        this._sharePhoto.clear();
         this._publicationReadVersion = null;
         this._shareVersion = '';
         this.setData({shareRecipe: null, shareReady: false, publicReady: false, publicChanged: Boolean(recipe)});
@@ -159,6 +164,7 @@ Page({
   },
   async loadPublication(fromOperation) {
     if (!this.data.socialEnabled || !this.accountOK(false) || !this.data.recipe || this.data.deleting || this.data.publicBusy) return false;
+    this._sharePhoto.clear();
     const version = readVersion();
     this._syncRefreshPending = false;
     if (this.data.builtIn) {
@@ -185,6 +191,7 @@ Page({
       // An invalidation during this read must not certify older metadata as
       // current merely because the caller resumed after the version changed.
       this._publicationReadVersion = version;
+      this._sharePhoto.prepare(recipe.photoURL);
       this.setData({publicInfo: {id: recipe.id, sourceUpdatedAt: local.updatedAt || local.createdAt || 0},
         publicReady: true, publicChanged: false, shareRecipe: {id: recipe.id, name: recipe.name, photoURL: recipe.photoURL || ''}});
       return true;
@@ -244,7 +251,7 @@ Page({
       }
       const recipe = this.data.shareRecipe;
       return {title: recipe.name + ' · 口袋食谱', path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id),
-        imageUrl: recipe.photoURL || '/assets/cute/pocket-mascot.png'};
+        imageUrl: this._sharePhoto.get(recipe.photoURL) || '/assets/cute/pocket-mascot.png'};
     }
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },

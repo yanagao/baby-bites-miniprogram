@@ -85,6 +85,7 @@ function publicDetail() {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'pages/public-recipe/index.js'), 'utf8'), {
     wx, Page(value) {definition = value;}, require(name) {
       if (name.endsWith('/native-share-return')) return require('../utils/native-share-return');
+      if (name.endsWith('/recipe-share-photo')) return require('../utils/recipe-share-photo');
       if (name.endsWith('/store')) return store;
       if (name.endsWith('/allergies')) return require('../utils/allergies');
       if (name.endsWith('/account')) return account.exports;
