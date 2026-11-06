@@ -35,13 +35,18 @@ function setup(options = {}) {
   const syncListeners = new Set();
   const appHideListeners = new Set();
   const calls = {shareLinks: [], mine: 0, recipe: [], publish: [], unpublish: [], navigation: [], toasts: [], errors: [],
-    shareMenu: [], updates: 0, backs: 0, sync: 0};
+    shareMenu: [], updates: 0, backs: 0, sync: 0, images: []};
   let published = Boolean(options.published);
   let sourceUpdatedAt = 1;
   let publicRecipe = {id: PUBLIC_ID, profileId: AUTHOR_ID, name: '已公开的南瓜小米粥',
     photoURL: 'https://example.com/public.jpg', ingredients: [{name: '南瓜', amount: '30 克'}],
     steps: ['煮软。']};
   const wx = {
+    getImageInfo(args) {
+      calls.images.push(args.src);
+      if (hooks.image) return hooks.image(args);
+      args.success({path: 'wxfile://tmp/public-share.jpg'});
+    },
     onAppHide(listener) { appHideListeners.add(listener); },
     offAppHide(listener) { appHideListeners.delete(listener); },
     getStorageSync(key) { return clone(storage.get(key)); },
@@ -106,11 +111,13 @@ function setup(options = {}) {
       if (name.endsWith('/store')) return store;
       if (name.endsWith('/social')) return social;
       if (name.endsWith('/native-share-return')) return require('../utils/native-share-return');
+      if (name.endsWith('/recipe-share-photo')) return require('../utils/recipe-share-photo');
       if (name.endsWith('/cloud-sync')) return {async syncNow() { calls.sync++; const result = hooks.sync ? await hooks.sync() : {state: 'synced'}; if (result.state === 'synced') published = false; return result; }, getStatus: () => ({owner: OWNER, revision: 0, publicationVersion: 0}), subscribe(listener) {
         syncListeners.add(listener); return () => syncListeners.delete(listener);
       }};
       if (name.endsWith('/selectors')) return selectors;
       if (name.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
+      if (name.endsWith('/recipe-covers')) return {getCover: recipe => options.cover ? options.cover(recipe) : ''};
       if (name.endsWith('/cloud')) return {socialEnabled: options.enabled !== false};
       if (name.endsWith('/ui')) return {error(error) { calls.errors.push(error.message); }, back() { calls.backs++; }};
       throw Error(name);
@@ -131,6 +138,7 @@ function setup(options = {}) {
 function assertUnshareable(page) {
   const share = page.onShareAppMessage();
   assert.equal(share.path, '/pages/home/index');
+  assert.equal(share.imageUrl, '/assets/cute/pocket-mascot.png');
   assert.doesNotMatch(JSON.stringify(share), /尚未公开|只给自己|宝宝私密|私密用餐|private-recipe-one|private-meal/);
 }
 
