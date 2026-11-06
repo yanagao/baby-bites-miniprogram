@@ -36,6 +36,7 @@ function setup(name, social = {}) {
     Page(value) {definition = value;}, wx, getApp: () => ({globalData: {pantry: ['鸡蛋', '大米']}}),
     require(dep) {
       if (dep.endsWith('/native-share-return')) return require('../utils/native-share-return');
+      if (dep.endsWith('/recipe-share-photo')) return require('../utils/recipe-share-photo');
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/selectors')) return selectors;
       if (dep.endsWith('/allergies')) return allergies;

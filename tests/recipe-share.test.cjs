@@ -4,6 +4,66 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const {setup, pending, turn, assertUnshareable, clone, OWNER, OTHER, PUBLIC_ID, AUTHOR_ID, LOCAL_ID} = require('./detail-runtime.cjs');
 const linkResult = (app, name = '同步后的南瓜粥') => ({recipe: {id: PUBLIC_ID, name}, localVersion: JSON.stringify(app.store.getRecipe(app.sourceID))});
+const fallbackImage = '/assets/cute/pocket-mascot.png';
+
+test('detail shares the cached public photo after 301 seconds and reuses it on native share return', async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const app = setup({recipe: {photo: 'wxfile://usr/private-photo.jpg'}}), page = await app.open();
+  assert.deepEqual(app.calls.images, ['https://example.com/public.jpg']);
+  const before = clone(page.data), updates = app.calls.updates;
+  now += 301000;
+  const share = page.onShareAppMessage();
+  assert.equal(share.imageUrl, 'wxfile://tmp/public-share.jpg');
+  assert.equal(share.path, '/pages/public-recipe/index?id=' + PUBLIC_ID);
+  page.onHide(); app.hideApp(2); await page.onShow();
+  assert.equal(page.onShareAppMessage().imageUrl, share.imageUrl);
+  assert.equal(app.calls.images.length, 1); assert.equal(app.calls.shareLinks.length, 1);
+  assert.equal(app.calls.updates, updates); assert.deepEqual(clone(page.data), before);
+});
+
+test('pending and failed public photo downloads use the default image without blocking recipe sharing', async () => {
+  const app = setup(); let download;
+  app.hooks.image = args => { download = args; };
+  const page = await app.open();
+  assert.equal(page.data.shareReady, true);
+  assert.equal(page.onShareAppMessage().imageUrl, fallbackImage);
+  download.fail({errMsg: 'download failed'});
+  assert.equal(page.onShareAppMessage().imageUrl, fallbackImage);
+  assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + PUBLIC_ID);
+});
+
+test('detail ignores out-of-order photo downloads even when a reload returns the same URL', async () => {
+  const app = setup(), downloads = [];
+  app.hooks.image = args => downloads.push(args);
+  const page = await app.open();
+  await page.requestShare();
+  assert.equal(downloads.length, 2); assert.equal(downloads[0].src, downloads[1].src);
+  const updates = app.calls.updates;
+  downloads[1].success({path: 'wxfile://tmp/current-public.jpg'});
+  downloads[0].success({path: 'wxfile://tmp/stale-public.jpg'});
+  assert.equal(page.onShareAppMessage().imageUrl, 'wxfile://tmp/current-public.jpg');
+  assert.equal(app.calls.updates, updates);
+});
+
+test('late detail photo downloads cannot survive edits, account or family changes, or unload', async () => {
+  for (const mode of ['edit', 'account', 'family', 'unload']) {
+    const app = setup(); let download;
+    app.hooks.image = args => { download = args; };
+    const page = await app.open();
+    if (mode === 'edit') app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '待同步的新菜名'});
+    else if (mode === 'account') { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); }
+    else if (mode === 'family') {
+      app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+      app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+    } else page.onUnload();
+    const updates = app.calls.updates;
+    download.success({path: 'wxfile://tmp/previous-session.jpg'});
+    assert.equal(app.calls.updates, updates);
+    assert.equal(page._sharePhoto.get(download.src), '');
+    assertUnshareable(page);
+  }
+});
 
 test('own recipes prepare a synchronized link without a preview or profile-setup step', async () => {
   for (const profileExists of [true, false]) {
@@ -11,6 +71,7 @@ test('own recipes prepare a synchronized link without a preview or profile-setup
     assert.equal(page.data.shareReady, true);
     assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + PUBLIC_ID);
     assert.equal(page.onShareAppMessage().title, '已公开的南瓜小米粥 · 口袋食谱');
+    assert.equal(page.onShareAppMessage().imageUrl, 'wxfile://tmp/public-share.jpg');
     assert.deepEqual(app.calls.shareLinks, [{id: LOCAL_ID, force: false}]);
     assert.deepEqual(app.calls.navigation, []); assert.deepEqual(app.calls.publish, []);
     assert.deepEqual(clone(app.store.getState()), before);

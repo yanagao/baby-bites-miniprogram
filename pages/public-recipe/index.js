@@ -5,6 +5,7 @@ const ui = require('../../utils/ui');
 const account = require('../profile/account');
 const {getProfileAvatar} = require('../../utils/profile-avatar');
 const {createShareReturn} = require('../../utils/native-share-return');
+const {createSharePhoto} = require('../../utils/recipe-share-photo');
 const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 
 Page({
@@ -15,7 +16,7 @@ Page({
     feedbackLoading: false, feedbackError: '', feedbackReady: false, saveCount: 0, cooksnapCount: 0,
     cooksnaps: [], feedbackOffset: null, feedbackMore: false, deletingCooksnap: ''
   },
-  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; this._shareReturn = createShareReturn(wx); this._recipeReadVersion = null; account.bind(this); },
+  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; this._shareReturn = createShareReturn(wx); this._sharePhoto = createSharePhoto(wx); this._recipeReadVersion = null; account.bind(this); },
   onShow() {
     if (!account.check(this)) return;
     const shareReturn = this._shareReturn.show();
@@ -31,10 +32,11 @@ Page({
     }
     return this.load();
   },
-  onUnload() { this._shareReturn.dispose(); this.request++; this.relationRequest++; account.dispose(this); },
+  onUnload() { this._shareReturn.dispose(); this._sharePhoto.clear(); this.request++; this.relationRequest++; account.dispose(this); },
   reload() { this._shareReturn.clear(); return account.reload(this, {force: true}); },
   disposeLocalContent() {
     this._shareReturn.clear();
+    this._sharePhoto.clear();
     this._recipeReadVersion = null;
     this.feedbackRequest = (this.feedbackRequest || 0) + 1;
     this.setData({allergyWarning: '', feedbackLoading: false, feedbackMore: false, feedbackReady: false,
@@ -62,6 +64,7 @@ Page({
       // Only a completed recipe read can make this displayed recipe current.
       // Later relationship/feedback reads and opening a share sheet cannot.
       this._recipeReadVersion = readVersion();
+      this._sharePhoto.prepare(result.recipe && result.recipe.photoURL);
       const imported = social.findImportedRecipe(this.recipeId);
       const author = result.author ? {...result.author, avatar: getProfileAvatar(result.author.id)} : result.author;
       this.setData({recipe: result.recipe, author, importedId: imported ? imported.id : '', loading: false});
@@ -223,8 +226,10 @@ Page({
     // Reuse this view only for its next return, unless another action changes it.
     this._shareReturn.clear();
     if (recipe) this._shareReturn.share({recipeId: this.recipeId, request: this.request, version: this._recipeReadVersion});
+    // displayPhoto can alias photoURL; use it only for recipes without an upload.
     return recipe ? {title: recipe.name + ' · 口袋食谱',
-      path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id), imageUrl: '/assets/cute/pocket-mascot.png'} :
+      path: '/pages/public-recipe/index?id=' + encodeURIComponent(recipe.id),
+      imageUrl: (recipe.photoURL ? this._sharePhoto.get(recipe.photoURL) : recipe.displayPhoto) || '/assets/cute/pocket-mascot.png'} :
       {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   back() { this._shareReturn.clear(); ui.back(); }

@@ -61,7 +61,7 @@
   </view>
   <view class="settings-version">
     <text class="settings-version-name">小口袋</text>
-    <text class="settings-version-number">版本 1.5.0</text>
+    <text class="settings-version-number">版本 1.6.0</text>
   </view>
 </view>
 <t-dialog visible="{{importVisible}}" title="合并这份备份？" content="{{importDescription}}" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />

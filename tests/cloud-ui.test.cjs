@@ -69,6 +69,7 @@ function setup(options = {}) {
       Page(value) { definition = value; }, wx, getApp() { return app; },
       require(dependency) {
         if (dependency.endsWith('/native-share-return')) return require('../utils/native-share-return');
+        if (dependency.endsWith('/recipe-share-photo')) return require('../utils/recipe-share-photo');
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
         if (dependency === '../../utils/recipe-photo') return {async prepareRecipePhoto(filePath, options) {
           options.assertCurrent(); return {filePath, async cleanup() {}};
@@ -81,6 +82,7 @@ function setup(options = {}) {
         if (dependency === '../../utils/social') return {getMine: async () => ({profile: {exists: false}, published: []})};
         if (dependency === '../../utils/selectors') return selectors;
         if (dependency === '../../utils/recipe-origin') return require('../utils/recipe-origin');
+        if (dependency === '../../utils/recipe-covers') return require('../utils/recipe-covers');
         if (dependency === '../../utils/recipe-ages') return require('../utils/recipe-ages');
         if (dependency === '../../utils/tab-bar') return {syncTabBar() {}};
         if (dependency === '../../utils/backup') return backup;
