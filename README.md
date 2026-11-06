@@ -1,6 +1,6 @@
 # 小口袋 · 微信小程序
 
-版本 1.6.0。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
+版本 1.6.1。原生微信小程序，采用 JavaScript、WXML、WXSS 和腾讯 **TDesign MiniProgram 1.17.0**。正式 AppID：`wxc6c61fbebebe3340`；云环境：`cloud1-5gxmasdl05652531`。交付文件包含按需生成的 `miniprogram_npm/tdesign-miniprogram/`，首次导入无需安装 npm 依赖或重新构建。
 
 **2026-11-04 开发版本 1.6.0 上传**：新增家庭餐单与可选用餐反馈，优化家庭邀请、菜谱分享、图片压缩和刷新请求，修复备份恢复及家庭记录归属与同步；按新增功能递增次版本。基于已合并的 MR #7，上传源码为 `e070ad6`。1620 项测试、23 页/250 个脚本的原生编译与包体预检通过。已按 Social → Sync 顺序部署两支函数，均 Active、30 秒超时；下载回验 14 个运行文件与本地一致，原线上源码已备份，未新增集合、索引或权限，见[部署核验](../output/release-1.6.0/verification.json)。微信官方 CLI 已确认上传成功，总包 1,580,872 字节、主包 1,208,023 字节、资源分包 372,849 字节，见[上传记录](../output/release-1.6.0/upload.log)、[包体信息](../output/release-1.6.0/upload-info.json)及[发布记录](../output/release-1.6.0/release.json)。本轮未进行多账号真机验收或重新执行线上业务接口测试。微信公众平台访问被浏览器安全策略阻止，未代提交审核或正式发布；管理员须在后台提交 1.6.0 审核，通过后发布。
 
