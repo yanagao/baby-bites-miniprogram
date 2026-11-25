@@ -1,8 +1,20 @@
 # 小口袋公开主页与关注
 
-## 家庭作用域与作者（2026-11-02，尚未部署）
+## 当日餐单与公开安排（2026-11-25 已部署，客户端 1.7.0 待审核发布）
 
-家庭协议由 `babyBitesSync` 管理，部署配置见 [family-database.json](../babyBitesSync/family-database.json)。两个独立部署的函数各包含相同的 `family.js`，测试校验其字节一致。当前改动尚未部署；需先建立家庭、成员映射、邀请三个 deny-all 集合和 `family_publication_inventory` 索引，再更新两函数与客户端，不放宽现有私人存储权限。
+新增 `meal-plans.js` 与 `meal-plan-catalog.js`，需与本目录完整代码一同部署。沿用既有账户、家庭、公开主页及公开菜谱集合，无新增集合/索引或文件权限。Social 已于 2026-11-25 部署并核验 Active，下载的 12 个运行文件与本地一致；客户端 1.7.0 已上传开发版本，待审核发布，旧客户端接口保持兼容。见[核验报告](../../../output/release-1.7.0/verification.json)。
+
+- `profileMealPlans({profileId,offset?})`：只读已确认安排，按日期倒序每页 20 天，返回 `{days:[{date,meals}],nextOffset}`；offset 范围 0–3000。
+- `mealPlan({profileId,date})`：只读指定 `YYYY-MM-DD`，返回 `{author,date,meals}`；不存在主页或当日无安排返回 `NOT_FOUND`。
+- `shareMealPlan({date,expectedOwner,expectedScope,protocolVersion:2})`：仅当前账号/家庭已提交安排可分享；事务内核对快照和成员身份，必要时建立默认公开主页，返回 `{author,date,meals}`。不采信客户端菜谱或餐单数据。
+
+`meals` 只包含已安排餐次，顺序为早、中、晚，每项 `{meal,label,recipe}`；`recipe` 是 `{id,name,minutes,texture,imageKey,photoURL,kind:'public'|'builtin'}` 或 `null`。null 表示菜谱暂不可公开查看，与未安排餐次区别展示。内置链接仅返回固定公开原版摘要，来源副本沿用原作者；家庭菜谱不改署名。访客读取不要求加入家庭，不执行旧家庭归属迁移，并在异步读取后再次核验快照/范围。所有私人反馈、照片路径、家庭标识、宝宝生日及过敏信息均不输出。
+
+## 家庭作用域与作者（1.6.0 后端已部署）
+
+2026-11-04：本函数先于 Sync 更新，支持餐单、完成记录及删除历史格式，并包含最新家庭记录恢复与归属修复（上传源码 `e070ad6`）。两支函数均 Active、30 秒超时，沿用原 Node.js 16.13 配置；下载回验的 14 个运行文件与本地一致，部署前源码备份保留，未新增集合、索引或权限。见[1.6.0 部署核验](../../../output/release-1.6.0/verification.json)。客户端 1.6.0 已上传开发版本，尚未由本轮提交审核或正式发布。
+
+家庭协议由 `babyBitesSync` 管理，部署配置见 [family-database.json](../babyBitesSync/family-database.json)。两个独立部署的函数各包含相同的 `family.js`，测试校验其字节一致。2026-11-03 已建立所需家庭、成员映射、邀请及反馈集合/索引，并按 Social → Sync 顺序部署截至 `003e39e` 的修复；两者均 Active、30 秒超时，下载源码及运行配置与本地一致，见[1.5.0 核验](../../../output/release-1.5.0/verification.json)。客户端 1.5.0 已上传开发版本，未提审或正式发布。首次部署仍须先建立 deny-all 集合与配套索引，不放宽现有私人存储权限。
 
 社交 owner 始终为个人微信身份。涉及私人快照的操作按可信成员映射解析当前 scope，从家庭 canonical 快照读取；请求入口接受的 scope 通过每次调用独立的参数传至后续读取（含保存回执），不能在请求中途改用刚加入的家庭或退出后的个人数据。公开前 token 同时绑定 scope/membershipId、revision/fileID、内容和原作者。事务内再次验证实际调用者仍为同一次加入的成员，旧 scope、移出后重加和迟到操作不能跨家庭提交。
 

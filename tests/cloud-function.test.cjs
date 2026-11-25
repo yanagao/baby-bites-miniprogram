@@ -348,3 +348,24 @@ test('owned photo paths accept only supported formats and no path traversal', ()
     assert.equal(ownedFile(fileFor(ownerFor('alice'), 'photos', name), ENV, ownerFor('alice'), 'photos'), false);
   }
 });
+
+test('meal planning capability remains protected even after all personal plans are removed', async () => {
+  const env = fakeEnvironment(), handler = env.handler(), data = snapshot();
+  data.data.mealPlans = [{id: 'meal-2026-10-24-breakfast', date: '2026-10-24', meal: 'breakfast',
+    recipeId: 'recipe-1', createdAt: NOW, updatedAt: NOW}];
+  data.deleted.mealPlans = [];
+  data.data.logs[0].rating = 0; data.data.logs[0].meal = 'breakfast';
+  assert.equal((await handler({action: 'commit', baseRevision: 0, fileID: env.upload('alice', 'planned.json', data)})).revision, 1);
+  assert.equal(env.records.get(ownerFor('alice')).mealPlansSchema, 1);
+  const oldClient = env.upload('alice', 'old-meal-client.json', snapshot());
+  assert.equal((await handler({action: 'commit', baseRevision: 1, fileID: oldClient})).error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.equal(env.records.get(ownerFor('alice')).revision, 1);
+  data.deleted.mealPlans.push({id: data.data.mealPlans[0].id, updatedAt: NOW + 1});
+  data.data.mealPlans = [];
+  const empty = env.upload('alice', 'empty-plans.json', data);
+  assert.equal((await handler({action: 'commit', baseRevision: 1, fileID: empty})).revision, 2);
+  assert.equal((await handler({action: 'commit', baseRevision: 2, fileID: oldClient})).error.code, 'CLIENT_UPDATE_REQUIRED');
+  assert.equal(env.records.get(ownerFor('alice')).fileID, empty);
+  assert.equal(env.records.get(ownerFor('alice')).mealPlansSchema, 1);
+  assert.deepEqual(Object.keys(await handler({action: 'identity'})).sort(), ['fileID', 'owner', 'revision']);
+});

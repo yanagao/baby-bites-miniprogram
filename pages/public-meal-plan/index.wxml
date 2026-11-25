@@ -1,0 +1,61 @@
+<t-navbar title="分享的餐单" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
+<view class="shared-plan-page">
+  <view wx:if="{{loading}}" class="empty-note">正在打开这份餐单…</view>
+  <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button slot="action" theme="primary" shape="round" bind:tap="reload">重新加载</t-button></t-empty>
+  <block wx:elif="{{ready}}">
+    <view class="shared-plan-date">{{date}} · {{weekdayLabel}}</view>
+    <view class="shared-plan-heading">
+      <view class="page-title">{{dateLabel}}餐单</view>
+      <button wx:if="{{hasPlans}}" class="shared-plan-share" open-type="share" hover-class="shared-plan-pressed" aria-label="分享这一天的餐单"><t-icon name="share" size="36rpx" /><text>分享</text></button>
+    </view>
+    <button class="shared-plan-author" bindtap="openAuthor" hover-class="shared-plan-pressed" aria-label="{{'打开' + author.name + '的主页'}}"><image class="shared-plan-avatar" src="{{author.avatar}}" mode="aspectFit" aria-hidden="true" /><view class="shared-plan-author-copy"><view class="shared-plan-author-name">{{author.name}}</view><view class="shared-plan-author-caption">分享的当日餐单</view></view><t-icon name="chevron-right" size="28rpx" /></button>
+    <view wx:if="{{!hasPlans}}" class="shared-plan-empty"><view>这一天还没有安排餐单</view><t-button theme="primary" variant="text" size="small" bind:tap="reload">重新加载</t-button></view>
+    <view wx:else class="shared-plan-hint">点开菜谱，看看食材和做法</view>
+    <view class="shared-plan-meals">
+      <button wx:for="{{meals}}" wx:key="meal" class="shared-plan-meal {{!item.recipe ? 'shared-plan-meal-empty' : ''}}" disabled="{{!item.recipe}}" data-meal="{{item.meal}}" bindtap="openRecipe" hover-class="shared-plan-pressed" aria-label="{{item.label + '：' + (item.recipe ? item.recipe.name + '，查看做法' : item.emptyLabel)}}">
+        <view class="shared-plan-meal-label"><t-icon name="{{item.icon}}" size="26rpx" /><text>{{item.label}}</text></view>
+        <view class="shared-plan-meal-content"><image wx:if="{{item.recipe && item.recipe.displayPhoto && !item.photoFailed}}" class="shared-plan-photo" src="{{item.recipe.displayPhoto}}" mode="aspectFill" data-meal="{{item.meal}}" binderror="photoError" /><view wx:else class="shared-plan-photo shared-plan-photo-empty"><t-icon name="rice" size="40rpx" /></view><view class="shared-plan-meal-copy"><view class="shared-plan-recipe-name">{{item.recipe ? item.recipe.name : item.emptyLabel}}</view><view wx:if="{{item.recipe}}" class="shared-plan-recipe-meta"><text wx:if="{{item.recipe.minutes}}">{{item.recipe.minutes}} 分钟</text><text wx:if="{{item.recipe.minutes && item.recipe.texture}}"> · </text><text>{{item.recipe.texture}}</text></view><view wx:elif="{{item.planned}}" class="shared-plan-recipe-meta">做法暂未公开</view></view><t-icon wx:if="{{item.recipe}}" name="chevron-right" size="30rpx" /></view>
+      </button>
+    </view>
+    <view class="shared-plan-bottom-space" />
+  </block>
+</view>
+<view wx:if="{{ready && !loading && !error}}" class="shared-plan-bottom">
+  <t-button theme="primary" shape="round" block icon="add" disabled="{{!hasSavableMeals}}" bind:tap="openCopy">保存这天餐单</t-button>
+  <view class="shared-plan-save-caption">{{hasSavableMeals ? '菜谱和餐次一并保存，可再自由调整' : '暂无可保存的公开菜谱'}}</view>
+</view>
+<t-popup visible="{{copyVisible}}" placement="bottom" close-on-overlay-click="{{!copySaving}}" bind:visible-change="copyVisibleChange">
+  <view class="copy-sheet">
+    <view class="copy-sheet-heading"><view class="copy-sheet-title">{{copyDestination}}</view><button class="copy-sheet-close" disabled="{{copySaving}}" bindtap="closeCopy" aria-label="关闭保存餐单"><t-icon name="close" size="36rpx" /></button></view>
+    <block wx:if="{{copySavedDate}}">
+      <view class="copy-success"><t-icon name="check-circle-filled" size="80rpx" /><view class="copy-success-title">已保存到 {{copyDateLabel}}</view><view class="copy-note">{{copyResultMessage}}</view><view class="copy-note">之后可以在自己的餐单里换菜或调整。</view></view>
+      <view wx:if="{{copyError}}" class="copy-error">{{copyError}}</view>
+      <t-button theme="primary" shape="round" block bind:tap="viewCopiedPlan">查看我的餐单</t-button>
+    </block>
+    <block wx:else>
+      <picker mode="date" value="{{copyDate}}" start="{{copyMinDate}}" disabled="{{copySaving}}" bindchange="changeCopyDate">
+        <view class="copy-date"><text>安排到</text><view><text>{{copyDateLabel}}</text><t-icon name="calendar" size="32rpx" /><t-icon name="chevron-right" size="28rpx" /></view></view>
+      </picker>
+      <view wx:if="{{copyConflictCount}}" class="copy-conflicts">
+        <view class="copy-note">这一天已有安排，如何处理？</view>
+        <view class="copy-modes">
+          <button class="copy-mode {{copyMode === 'keep' ? 'copy-mode-selected' : ''}}" data-mode="keep" disabled="{{copySaving}}" bindtap="changeCopyMode" aria-selected="{{copyMode === 'keep'}}">保留已有安排</button>
+          <button class="copy-mode {{copyMode === 'replace' ? 'copy-mode-selected' : ''}}" data-mode="replace" disabled="{{copySaving}}" bindtap="changeCopyMode" aria-selected="{{copyMode === 'replace'}}">替换可调整的餐次</button>
+        </view>
+      </view>
+      <view class="copy-meals">
+        <view wx:for="{{copyRows}}" wx:key="meal" class="copy-meal">
+          <text class="copy-meal-label">{{item.label}}</text>
+          <view class="copy-meal-copy"><view class="copy-meal-name">{{item.name || (item.action === 'unavailable' ? '菜谱暂不可查看' : '未安排')}}</view><view class="copy-meal-note {{item.action === 'replace' ? 'copy-replace-note' : ''}}">{{item.actionLabel}}</view></view>
+          <t-icon wx:if="{{item.action === 'add' || item.action === 'replace'}}" name="check" size="30rpx" color="#438775" />
+        </view>
+      </view>
+      <view class="copy-note">所需菜谱会一并保存，已记录用餐的餐次会保留。</view>
+      <view wx:if="{{copyUnavailableCount}}" class="copy-note">{{copyUnavailableCount}} 餐做法暂未公开，本次跳过。</view>
+      <view wx:if="{{!copySaveCount && !copyError}}" class="copy-note">这一天暂无需要添加的餐次，可以更换日期或处理方式。</view>
+      <view wx:if="{{copyError}}" class="copy-error">{{copyError}}</view>
+      <t-button class="copy-confirm" theme="primary" shape="round" block loading="{{copySaving}}" disabled="{{copySaving || !copySaveCount}}" bind:tap="confirmCopy">{{copySaving ? '正在保存菜谱和餐单' : '保存 ' + copySaveCount + ' 餐'}}</t-button>
+      <t-button wx:if="{{!copySaveCount && copyCanView}}" theme="primary" variant="text" block disabled="{{copySaving}}" bind:tap="viewCopiedPlan">查看这一天的餐单</t-button>
+    </block>
+  </view>
+</t-popup>

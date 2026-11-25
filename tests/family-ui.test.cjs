@@ -98,20 +98,163 @@ test('creating the same family again after dissolution uses a fresh operation id
   }
 });
 
-test('opening an invite previews only and joins only after explicit confirmation', async () => {
-  const app = setup({query: {token: 'given-token'}}); await app.page.onShow();
+test('opening an invite is read-only and requires family confirmation before the identity step', async () => {
+  const app = setup({query: {token: 'given-token'}});
+  assert.equal(app.page.data.inviteMode, true);
+  await app.page.onShow();
   assert.deepEqual(app.calls.preview, ['given-token']); assert.equal(app.calls.join.length, 0);
-  app.page.changeRole(change('姥姥')); app.page.join();
-  assert.match(app.page.data.confirmText, /不会自动合并/); assert.equal(app.calls.join.length, 0);
-  await app.page.confirmOperation(); assert.equal(app.calls.join.length, 1); assert.equal(app.page.data.family.isManager, false);
+  assert.equal(app.page.data.inviteStep, 'confirm');
+  app.page.setData({roleLabel: '姥姥'});
+  await app.page.join(); app.page.create();
+  assert.equal(app.calls.join.length, 0); assert.equal(app.calls.create.length, 0);
+  assert.equal(app.page.data.confirmVisible, false);
+  app.page.confirmInvitation();
+  assert.equal(app.page.data.inviteStep, 'role'); assert.equal(app.calls.join.length, 0);
+  app.page.changeRole(change('姥姥'));
+  await app.page.join();
+  assert.equal(app.calls.join.length, 1);
+  assert.equal(app.calls.join[0].token, 'given-token'); assert.equal(app.calls.join[0].label, '姥姥');
+  assert.equal(app.page.data.family.isManager, false); assert.equal(app.page.data.confirmVisible, false);
+  assert.equal(app.page.data.inviteMode, false); assert.equal(app.page.data.preview, null);
+  assert.equal(app.page.data.token, ''); assert.equal(app.page.locked, false);
 });
 
-test('expired preview cannot join and changing invitation clears the previous preview', async () => {
-  const app = setup(); await app.page.onShow(); app.page.changeRole(change('爷爷')); app.page.changeToken(change('token'));
-  app.hooks.preview = async () => ({name: '家庭', nickname: '宝宝', memberCount: 1, expiresAt: Date.now() - 1});
-  await app.page.previewInvite(); app.page.join(); assert.equal(app.page.data.preview, null); assert.equal(app.calls.join.length, 0);
-  delete app.hooks.preview; await app.page.previewInvite(); app.page.changeToken(change('other'));
-  assert.equal(app.page.data.preview, null);
+test('a manually entered invite opens the same confirmation flow without another preview request', async () => {
+  const app = setup(); await app.page.onShow();
+  assert.equal(app.page.data.inviteMode, false);
+  app.page.changeToken(change('typed-token')); await app.page.previewInvite();
+  assert.equal(app.page.data.inviteMode, true); assert.equal(app.page.data.inviteStep, 'confirm');
+  assert.equal(app.calls.join.length, 0);
+  app.page.confirmInvitation(); app.page.changeRole(change('舅舅'));
+  app.page.backToInvitation();
+  assert.equal(app.page.data.inviteStep, 'confirm'); assert.equal(app.page.data.roleLabel, '舅舅');
+  app.page.confirmInvitation();
+  assert.equal(app.page.data.inviteStep, 'role'); assert.deepEqual(app.calls.preview, ['typed-token']);
+  await app.page.join(); assert.equal(app.calls.join[0].label, '舅舅');
+});
+
+test('identity is required and repeated submit cannot issue another join while one is pending', async () => {
+  const app = setup({query: {token: 'given-token'}}); await app.page.onShow(); app.page.confirmInvitation();
+  app.page.changeRole(change('   ')); await app.page.join();
+  assert.match(app.page.data.actionError, /关系|身份|称谓/); assert.equal(app.calls.join.length, 0);
+  app.page.chooseRole({currentTarget: {dataset: {label: '爸爸'}}});
+  const wait = deferred(); app.hooks.join = () => wait.promise;
+  const work = app.page.join(); await app.page.join(); app.page.backToInvitation();
+  assert.equal(app.calls.join.length, 1); assert.equal(app.page.data.busy, true);
+  assert.equal(app.page.data.inviteStep, 'role');
+  wait.reject(Error('连接失败，请重试')); await work;
+  assert.equal(app.page.data.busy, false); assert.equal(app.page.data.roleLabel, '爸爸');
+  assert.match(app.page.data.actionError, /连接失败/);
+});
+
+test('join failures keep the chosen identity and retries reuse the operation identity', async () => {
+  const app = setup({query: {token: 'given-token'}}); await app.page.onShow(); app.page.confirmInvitation();
+  app.page.changeRole(change('外婆'));
+  app.hooks.join = async () => {throw Error('网络暂时不可用');};
+  await app.page.join();
+  assert.equal(app.page.data.inviteMode, true); assert.equal(app.page.data.inviteStep, 'role');
+  assert.equal(app.page.data.roleLabel, '外婆'); assert.ok(app.page.data.preview);
+  await app.page.join();
+  assert.equal(app.calls.join.length, 2);
+  assert.equal(app.calls.join[0].requestId, app.calls.join[1].requestId);
+  delete app.hooks.join; await app.page.join();
+  assert.equal(app.calls.join[2].requestId, app.calls.join[0].requestId);
+  assert.equal(app.page.data.inviteMode, false); assert.ok(app.page.data.family);
+});
+
+test('returning to a loaded invitation preserves the identity step without polling family or invite', async () => {
+  const app = setup({query: {token: 'given-token'}}); await app.page.onShow(); app.page.confirmInvitation();
+  app.page.changeRole(change('奶奶')); app.page.loadedAt = Date.now() - 60000;
+  await app.page.onShow(); await app.page.onShow();
+  assert.equal(app.calls.info, 1); assert.deepEqual(app.calls.preview, ['given-token']);
+  assert.equal(app.page.data.inviteStep, 'role'); assert.equal(app.page.data.roleLabel, '奶奶');
+  await app.page.reload();
+  assert.equal(app.calls.info, 2); assert.equal(app.calls.preview.length, 2);
+});
+
+test('expired invitations cannot advance or submit, including expiry while choosing an identity', async () => {
+  for (const stage of ['confirm', 'role']) {
+    const app = setup({query: {token: 'given-token'}}); await app.page.onShow();
+    if (stage === 'role') {app.page.confirmInvitation(); app.page.changeRole(change('爷爷'));}
+    app.page.data.preview.expiresAt = Date.now() - 1;
+    if (stage === 'confirm') app.page.confirmInvitation(); else await app.page.join();
+    assert.equal(app.page.data.preview, null); assert.equal(app.page.data.inviteUnavailable, true);
+    assert.match(app.page.data.inviteError, /过期|失效/); assert.equal(app.calls.join.length, 0);
+    assert.equal(app.page.data.inviteMode, true);
+  }
+});
+
+test('expired preview responses and invalid invites stay unavailable without exposing creation', async () => {
+  for (const mode of ['expired', 'invalid']) {
+    const app = setup({query: {token: 'given-token'}});
+    app.hooks.preview = async () => {
+      if (mode === 'invalid') throw Object.assign(Error('邀请已失效或已被使用'), {code: 'INVITE_INVALID'});
+      return {name: '家庭', nickname: '宝宝', memberCount: 1, expiresAt: Date.now() - 1};
+    };
+    await app.page.onShow();
+    assert.equal(app.page.data.inviteMode, true); assert.equal(app.page.data.inviteUnavailable, true);
+    assert.equal(app.page.data.preview, null); assert.match(app.page.data.inviteError, /过期|失效/);
+    app.page.confirmInvitation(); await app.page.join(); app.page.create(); await app.page.previewInvite();
+    assert.equal(app.calls.preview.length, 1); assert.equal(app.calls.join.length, 0);
+    assert.equal(app.calls.create.length, 0); assert.equal(app.page.data.confirmVisible, false);
+  }
+});
+
+test('an invite invalidated during join cannot be submitted or previewed again on return', async () => {
+  const app = setup({query: {token: 'given-token'}}); await app.page.onShow();
+  app.page.confirmInvitation(); app.page.changeRole(change('爸爸'));
+  app.hooks.join = async () => {throw Object.assign(Error('邀请已失效或已被使用'), {code: 'INVITE_INVALID'});};
+  await app.page.join();
+  assert.equal(app.page.data.inviteMode, true); assert.equal(app.page.data.inviteUnavailable, true);
+  assert.equal(app.page.data.preview, null); assert.equal(app.page.data.inviteStep, 'confirm');
+  assert.equal(app.page.data.busy, false); assert.match(app.page.data.inviteError, /失效/);
+  app.page.confirmInvitation(); await app.page.join(); await app.page.previewInvite();
+  app.page.loadedAt = Date.now() - 60000; await app.page.onShow();
+  assert.equal(app.calls.join.length, 1); assert.equal(app.calls.preview.length, 1); assert.equal(app.calls.info, 1);
+  assert.equal(app.page.data.family, null); assert.equal(app.page.data.inviteStep, 'confirm');
+});
+
+test('a temporary preview failure can retry the same invite without creating or joining anything', async () => {
+  const app = setup({query: {token: 'given-token'}});
+  app.hooks.preview = async () => {throw Object.assign(Error('网络暂时不可用'), {code: 'NETWORK'});};
+  await app.page.onShow();
+  assert.equal(app.page.data.inviteMode, true); assert.equal(app.page.data.inviteUnavailable, false);
+  assert.match(app.page.data.inviteError, /网络/); assert.equal(app.page.data.preview, null);
+  delete app.hooks.preview; await app.page.previewInvite();
+  assert.deepEqual(app.calls.preview, ['given-token', 'given-token']);
+  assert.equal(app.page.data.inviteError, ''); assert.ok(app.page.data.preview);
+  assert.equal(app.calls.create.length, 0); assert.equal(app.calls.join.length, 0);
+});
+
+test('an existing family member cannot join from an invite and can open their current family', async () => {
+  const app = setup({family: group(), query: {token: 'other-family-invite'}}); await app.page.onShow();
+  assert.equal(app.page.data.inviteMode, true); assert.equal(app.calls.preview.length, 0);
+  app.page.confirmInvitation(); await app.page.join();
+  assert.equal(app.calls.join.length, 0);
+  app.page.openCurrentFamily();
+  assert.equal(app.page.data.inviteMode, false); assert.equal(app.page.data.token, '');
+  assert.equal(app.page.data.preview, null); assert.equal(app.page.data.family.id, FAMILY);
+  assert.equal(app.calls.info, 1);
+});
+
+test('account or family changes and unload prevent late invite previews from restoring sensitive state', async () => {
+  for (const mode of ['owner', 'scope', 'unload']) {
+    const app = setup({query: {token: 'given-token'}}); await app.page.onShow();
+    app.page.confirmInvitation(); app.page.changeRole(change('奶奶'));
+    const wait = deferred(); app.hooks.preview = () => wait.promise;
+    const work = app.page.previewInvite();
+    if (mode === 'owner') {app.changeOwner(OTHER); app.changeOwner(OWNER);}
+    else if (mode === 'scope') {app.setScope(shared); app.setScope(personal);}
+    else app.page.onUnload();
+    const before = clone(app.page.data);
+    wait.resolve({name: '不应恢复的家庭', nickname: '宝宝', memberCount: 1, expiresAt: Date.now() + 10000});
+    await work;
+    assert.deepEqual(app.page.data, before); assert.equal(app.calls.join.length, 0);
+    if (mode !== 'unload') {
+      assert.equal(app.page.locked, true); assert.equal(app.page.data.preview, null);
+      assert.equal(app.page.data.token, ''); assert.equal(app.page.data.roleLabel, '');
+    }
+  }
 });
 
 test('invite is generated and copied only on request and only explicit invitation sharing includes its token', async () => {

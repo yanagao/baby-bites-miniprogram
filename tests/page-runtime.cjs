@@ -12,6 +12,8 @@ function evaluatePage(name, context) {
     const runtime = {...context, module, exports: module.exports, require(dep) {
       const resolved = path.resolve(path.dirname(file), dep + '.js');
       if (resolved === path.join(root, 'pages/profile/page.js')) return evaluate(resolved);
+      if (dep.endsWith('/native-share-return')) return require('../utils/native-share-return');
+      if (dep.endsWith('/recipe-share-photo')) return require('../utils/recipe-share-photo');
       if (dep.endsWith('/recipe-origin')) return require('../utils/recipe-origin');
       if (dep.endsWith('/allergies')) return require('../utils/allergies');
       if (dep.endsWith('/profile-content')) return require('../utils/profile-content');

@@ -10,6 +10,16 @@ const root = path.resolve(__dirname, '..');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZS0AAAAASUVORK5CYII=', 'base64');
 const photoUri = 'data:image/png;base64,' + png.toString('base64');
 
+function recipeFixture(index = 0) {
+  return {...clone(require('../data/recipes')[index]), id: 'backup-recipe-' + index,
+    isExample: false, favorite: false, photo: '', createdAt: 1, updatedAt: 1};
+}
+
+function setupWithRecipes() {
+  return setup({version: 1, nickname: '宝宝', profileUpdatedAt: 0,
+    recipes: [recipeFixture(0), recipeFixture(1)], logs: []});
+}
+
 function setup(initial) {
   const storage = new Map([['baby-bites-v1', clone(initial)]]);
   let failStorage = false;
@@ -71,6 +81,8 @@ test('portable backup export and import retain private allergy settings and an e
 
 function imageBackup(app, count = 1) {
   const data = app.store.getState();
+  // Photo-import fixtures must not depend on a fresh install containing recipes.
+  while (data.recipes.length < count) data.recipes.push(recipeFixture(data.recipes.length));
   for (let i = 0; i < count; i += 1) {
     data.recipes[i].photo = photoUri;
     data.recipes[i].updatedAt = 100;
@@ -92,7 +104,7 @@ function settingsPage(app) {
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
 test('portable photo backup round-trips explicit ages and preserves missing metadata on legacy recipes', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   app.files.set('wxfile://usr/age-photo.png', png);
   app.store.saveRecipe({...recipe, ageGroups: ['18+', '9-11'], photo: 'wxfile://usr/age-photo.png'});
@@ -118,7 +130,7 @@ test('invalid ages in an imported photo backup roll back the staged photo and pr
 });
 
 test('photo backup detects content type without an extension and restores on another device', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   recipe.photo = 'wxfile://store_photo_without_extension';
   app.store.saveRecipe(recipe);
@@ -135,7 +147,7 @@ test('photo backup detects content type without an extension and restores on ano
 });
 
 test('storage failure removes newly imported photos and preserves current files and records', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const local = app.store.getState().recipes[0];
   local.photo = 'wxfile://usr/original.png';
   app.store.saveRecipe(local);
@@ -175,7 +187,7 @@ test('invalid recipe data rolls back imported photos as well as records', async 
 });
 
 test('stale photo imports are cleaned up and replacing a photo removes only the unused old file', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const local = app.store.getState().recipes[0];
   local.photo = 'wxfile://usr/current.png';
   app.store.saveRecipe(local);
@@ -209,7 +221,7 @@ test('all photos are preflighted, including exact decoded-size and base64 paddin
 });
 
 test('failed export removes a partially written backup and missing photos report their recipe', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   app.failWrite(1);
   await assert.rejects(app.backup.exportFile(), /写入失败/);
   assert.equal(app.files.size, 0);
@@ -471,7 +483,7 @@ test('leaving during sharing keeps the file until its callback and avoids updati
 });
 
 test('cloud photos export as portable images and only the downloaded temporary file is removed', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   const cloudID = 'cloud://cloud1-test.bucket/users/owner/photos/food.png';
   recipe.photo = cloudID;
@@ -497,7 +509,7 @@ test('cloud photos export as portable images and only the downloaded temporary f
 });
 
 test('failed cloud downloads report the recipe without deleting local or cloud originals', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   recipe.photo = 'cloud://cloud1-test.bucket/users/owner/photos/food.png';
   app.store.saveRecipe(recipe);
@@ -514,7 +526,7 @@ test('failed cloud downloads report the recipe without deleting local or cloud o
 test('cloud download read errors and invalid image contents still reclaim the temporary file', async t => {
   for (const kind of ['unreadable', 'oversized', 'invalid-format', 'http-error']) {
     await t.test(kind, async () => {
-      const app = setup();
+      const app = setupWithRecipes();
       const recipe = app.store.getState().recipes[0];
       recipe.photo = 'cloud://cloud1-test.bucket/users/owner/photos/food.png';
       app.store.saveRecipe(recipe);
@@ -538,7 +550,7 @@ test('cloud download read errors and invalid image contents still reclaim the te
 });
 
 test('a cloud download cannot cause deletion of a saved local photo or a cloud file ID', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   recipe.photo = 'cloud://cloud1-test.bucket/users/owner/photos/food.png';
   app.store.saveRecipe(recipe);
@@ -554,7 +566,7 @@ test('a cloud download cannot cause deletion of a saved local photo or a cloud f
 });
 
 test('importing a replacement for a cloud photo never unlinks or deletes its cloud original', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const recipe = app.store.getState().recipes[0];
   const cloudID = 'cloud://cloud1-test.bucket/users/owner/photos/old.png';
   recipe.photo = cloudID;
@@ -587,7 +599,7 @@ test('import guard runs before reading current photos and rejects without creati
 });
 
 test('account switch while importing photos aborts before storage commit and reclaims only staged files', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const ownerA = 'a'.repeat(64);
   const ownerB = 'b'.repeat(64);
   app.store.bindAccount(ownerA);
@@ -640,7 +652,7 @@ test('successful import validates account twice while asynchronous guards are re
 });
 
 test('reimporting an identical portable backup repairs an unreadable local photo and advances only its edit timestamp', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const original = app.store.getState().recipes[0];
   original.photo = 'wxfile://usr/missing-original.png';
   app.store.saveRecipe(original);
@@ -660,7 +672,7 @@ test('reimporting an identical portable backup repairs an unreadable local photo
 test('same-version photo repair never replaces an available local photo or a cloud reference', async t => {
   for (const existingPhoto of ['wxfile://usr/available.png', 'cloud://cloud1-test.bucket/users/owner/photos/available.png']) {
     await t.test(existingPhoto.indexOf('cloud://') === 0 ? 'cloud' : 'local', async () => {
-      const app = setup();
+      const app = setupWithRecipes();
       const original = app.store.getState().recipes[0];
       original.photo = existingPhoto;
       app.store.saveRecipe(original);
@@ -680,7 +692,7 @@ test('same-version photo repair never replaces an available local photo or a clo
 test('same-version missing-photo repair cannot change other recipe contents or restore an older version', async t => {
   for (const kind of ['different-content', 'older-version']) {
     await t.test(kind, async () => {
-      const app = setup();
+      const app = setupWithRecipes();
       const original = app.store.getState().recipes[0];
       original.photo = 'wxfile://usr/missing-original.png';
       app.store.saveRecipe(original);
@@ -699,7 +711,7 @@ test('same-version missing-photo repair cannot change other recipe contents or r
 });
 
 test('photo repair rechecks the current recipe after asynchronous file writes and preserves an intervening edit', async () => {
-  const app = setup();
+  const app = setupWithRecipes();
   const original = app.store.getState().recipes[0];
   original.photo = 'wxfile://usr/missing-original.png';
   app.store.saveRecipe(original);
@@ -727,7 +739,7 @@ test('photo repair rechecks the current recipe after asynchronous file writes an
 });
 
 test('export cancels after a same-account family ABA switch while reading a private photo', async () => {
-  const app = setup(), owner = 'a'.repeat(64);
+  const app = setupWithRecipes(), owner = 'a'.repeat(64);
   app.store.bindAccount(owner);
   const recipe = app.store.getState().recipes[0];
   app.store.saveRecipe({...recipe, photo: 'wxfile://usr/scope.png'});

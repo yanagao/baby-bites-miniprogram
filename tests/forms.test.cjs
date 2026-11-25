@@ -12,12 +12,12 @@ const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringif
 
 // Run the actual pages and store with an isolated WeChat device for every test.
 // Storage and file failures are observable at the same API boundary as on-device.
-function setup() {
-  const storage = new Map();
+function setup(initial) {
+  const storage = new Map(initial ? [['baby-bites-v1', copy(initial)]] : []);
   let failWrites = false;
   let returnWarning = false;
   const hooks = {};
-  const calls = { writes: 0, saves: [], unlinks: [], back: 0, alerts: [], toasts: [], addLog: 0, updateLog: 0, redirects: [], mine: [], timerDelays: [] };
+  const calls = { writes: 0, saves: [], unlinks: [], back: 0, alerts: [], toasts: [], addLog: 0, updateLog: 0, redirects: [], mine: [], timerDelays: [], photoPreparations: [], photoCleanups: [], photoChoices: 0 };
   const wx = {
     getStorageSync(key) { return copy(storage.get(key)); },
     setStorageSync(key, value) {
@@ -32,6 +32,8 @@ function setup() {
     redirectTo(options) { calls.redirects.push(options); },
     cloud: {callFunction() { throw Error('Forms must save locally before background publication'); }},
     chooseMedia(options) {
+      calls.photoChoices++;
+      if (hooks.chooseMedia) return hooks.chooseMedia(options);
       options.success({ tempFiles: [{ tempFilePath: 'wxfile://tmp/selected-photo.jpg', size: 4096 }] });
     },
     getFileSystemManager() {
@@ -55,7 +57,9 @@ function setup() {
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './retired-starter-recipes') return require('../utils/retired-starter-recipes');
       if (name === './baby-age') return require('../utils/baby-age');
+      if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './allergies') return require('../utils/allergies');
       throw new Error('Unexpected store dependency: ' + name);
     }
@@ -71,6 +75,13 @@ function setup() {
       wx, Page(value) { definition = value; },
       require(dependency) {
         if (dependency === '../../utils/family-photos') return {photoURL: value => value || ''};
+        if (dependency === '../../utils/recipe-photo') return {async prepareRecipePhoto(filePath, options) {
+          calls.photoPreparations.push(filePath);
+          if (hooks.prepareRecipePhoto) return hooks.prepareRecipePhoto(filePath, options);
+          options.assertCurrent();
+          return {filePath, async cleanup() {}};
+        }};
+        if (dependency === '../../utils/meal-plans') return require('../utils/meal-plans');
         if (dependency === '../../utils/store') return store;
         if (dependency === '../../utils/social') return {getMine: async options => { calls.mine.push(options); return hooks.mine ? hooks.mine(options) : {published: []}; }};
         if (dependency === '../../components/form-session/controller') return require('../components/form-session/controller');
@@ -110,8 +121,14 @@ function setup() {
 
 const valueEvent = value => ({ detail: { value } });
 
+function setupWithExistingRecipe() {
+  // An explicitly saved legacy recipe remains editable after defaults retire.
+  return setup({version: 1, nickname: '宝宝', profileUpdatedAt: 0,
+    recipes: [{...copy(seed[0]), isExample: true, favorite: false, photo: '', createdAt: 1, updatedAt: 1}], logs: []});
+}
+
 test('meal date arrows cross leap days, stop at date bounds and keep changes unsaved', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', {id: firstRecipeId(app), date: '2024-03-01'});
   const move = delta => page.moveDate({currentTarget: {dataset: {delta}}});
   move(-1); assert.equal(page.data.date, '2024-02-29');
@@ -125,7 +142,7 @@ test('meal date arrows cross leap days, stop at date bounds and keep changes uns
 });
 
 test('quick meal preference and portion choices do not persist until save is explicitly tapped', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', {id: firstRecipeId(app)});
   page.tapRating({currentTarget: {dataset: {value: 3}}});
   page.tapPortion({currentTarget: {dataset: {value: 2}}});
@@ -205,7 +222,7 @@ test('canceling a recipe picker keeps the current value; confirmation changes th
 });
 
 test('canceling the date picker preserves the date; confirming saves the chosen date', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   const originalDate = page.data.date;
   page.openDate();
@@ -221,7 +238,7 @@ test('canceling the date picker preserves the date; confirming saves the chosen 
 });
 
 test('calendar date query is preserved for a new meal, validated, and never overrides an existing record date', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const now = selectors.today();
   const year = Number(now.slice(0, 4));
   const selectedDate = (year - 1) + '-12-01';
@@ -265,7 +282,7 @@ test('recipe return warning is enabled only while the form differs from its orig
 });
 
 test('meal return warning is cleared when edited text is restored to its original value', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   assert.equal(app.returnWarning(), false);
   page.note(valueEvent('临时备注'));
@@ -294,7 +311,7 @@ test('canceling a changed recipe and choosing to continue keeps all edits withou
 });
 
 test('canceling a meal and continuing retains the preference and note', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   page.rate(valueEvent(1));
   page.note(valueEvent('今天没有吃太多'));
@@ -316,7 +333,7 @@ test('failed storage keeps the full photo draft and retries without saving the p
   const form = copy(page.data.form);
   page.toggleRecordMeal(valueEvent(true));
   page.rate(valueEvent(3));
-  page.choosePhoto();
+  await page.choosePhoto();
   app.failWrites();
   await page.save();
   assert.ok(page.data.error);
@@ -353,7 +370,7 @@ test('discarding a failed photo draft removes the staged file and leaves stored 
   const page = app.open('editor');
   const before = copy(app.store.getState());
   fillRecipe(page);
-  page.choosePhoto();
+  await page.choosePhoto();
   app.failWrites();
   await page.save();
   page.cancel();
@@ -365,7 +382,7 @@ test('discarding a failed photo draft removes the staged file and leaves stored 
 });
 
 test('editing by logId updates the existing meal without adding a log or rewriting its unchanged legacy portion', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const recipeId = firstRecipeId(app);
   const logId = app.store.addLog({ recipeId, rating: 2, date: '2020-01-01', portion: '光盘啦', note: '原备注' });
   const addsBeforeEditing = app.calls.addLog;
@@ -419,7 +436,7 @@ test('saving a new recipe returns immediately without a sharing choice or remote
 
 test('editing own, built-in and attributed recipes returns without publishing from the form', async () => {
   for (const kind of ['own', 'builtin', 'copy']) {
-    const app = setup(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
+    const app = setupWithExistingRecipe(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
     const page = app.open('editor', {id}); input(page, 'name', '调整后的做法'); await page.save();
     assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
     assert.equal(app.store.getRecipe(id).name, '调整后的做法');
@@ -493,7 +510,7 @@ test('recipe and record forms have no publication-choice UI or preview route', (
 });
 
 test('closing the editor during photo persistence prevents the save and removes its orphaned staged photo', async () => {
-  const app = setup(), page = app.open('editor'); fillRecipe(page); page.choosePhoto();
+  const app = setup(), page = app.open('editor'); fillRecipe(page); await page.choosePhoto();
   let finish;
   app.wx.getFileSystemManager = () => ({saveFile(options) { finish = options.success; }, unlink(options) { app.calls.unlinks.push(options.filePath); }});
   const save = page.save(); page.onUnload(); finish({savedFilePath: 'wxfile://usr/late-photo.jpg'}); await save;
@@ -532,4 +549,169 @@ test('editing another family member recipe preserves creator and returns without
   assert.equal(app.store.getRecipe(recipe.id).createdBy, creator);
   assert.equal(app.store.getRecipe(recipe.id).name, '爸爸调整后的南瓜饭');
   assert.equal(app.calls.mine.length, 0);
+});
+
+const photoTurn = () => new Promise(resolve => setImmediate(resolve));
+function pendingPhotoPreparation() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return {promise, resolve};
+}
+function preparedPhoto(app, filePath = 'wxfile://tmp/compressed-photo.jpg') {
+  let cleaned = false;
+  return {filePath, async cleanup() {
+    if (cleaned) return;
+    cleaned = true; app.calls.photoCleanups.push(filePath);
+  }};
+}
+
+test('large selected photos are prepared before preview and only the compressed result is persisted', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page);
+  const source = 'wxfile://tmp/large-camera-photo.jpg', output = 'wxfile://tmp/compressed-camera-photo.jpg';
+  app.hooks.chooseMedia = options => options.success({tempFiles: [{tempFilePath: source, size: 8 * 1024 * 1024}]});
+  app.hooks.prepareRecipePhoto = (filePath, options) => {
+    options.assertCurrent(); assert.equal(filePath, source); return preparedPhoto(app, output);
+  };
+  await page.choosePhoto();
+  assert.deepEqual(app.calls.photoPreparations, [source]);
+  assert.equal(page.data.photo, output); assert.equal(page.data.photoDisplay, output);
+  assert.equal(page.pendingPhoto, output); assert.equal(page.data.choosingPhoto, false);
+  assert.equal(app.calls.saves.length, 0); assert.equal(app.calls.writes, 0);
+  await page.save();
+  assert.equal(app.calls.saves[0].tempFilePath, output);
+  assert.equal(newRecipe(app).photo, app.calls.saves[0].savedFilePath);
+  assert.deepEqual(app.calls.photoCleanups, [output]);
+  page.onUnload();
+  assert.deepEqual(app.calls.photoCleanups, [output]);
+  assert.deepEqual(app.calls.unlinks, []);
+});
+
+test('photo preparation keeps the prior preview and blocks duplicate choices, removal and premature saving', async () => {
+  const app = setup(), oldPhoto = 'wxfile://usr/existing-photo.jpg';
+  const id = ownRecipe(app, {photo: oldPhoto}), page = app.open('editor', {id});
+  const gate = pendingPhotoPreparation(), output = preparedPhoto(app);
+  let guard;
+  app.hooks.prepareRecipePhoto = (_, options) => { guard = options.assertCurrent; return gate.promise; };
+  const work = page.choosePhoto(); await photoTurn();
+  const writes = app.calls.writes;
+  assert.equal(page.data.choosingPhoto, true); assert.equal(page.data.photo, oldPhoto);
+  assert.equal(typeof guard, 'function'); guard();
+  await page.choosePhoto(); page.clearPhoto(); await page.save();
+  assert.equal(app.calls.photoChoices, 1); assert.equal(app.calls.photoPreparations.length, 1);
+  assert.equal(page.data.photo, oldPhoto); assert.equal(app.calls.writes, writes);
+  assert.equal(app.calls.saves.length, 0); assert.deepEqual(app.calls.unlinks, []);
+  gate.resolve(output); await work;
+  assert.equal(page.data.photo, output.filePath); assert.equal(page.data.choosingPhoto, false);
+  assert.equal(app.store.getRecipe(id).photo, oldPhoto);
+});
+
+test('picker cancellation, empty results and compression failures retain the complete previous photo draft', async t => {
+  for (const mode of ['cancel', 'permission', 'empty', 'compression']) await t.test(mode, async () => {
+    const app = setup(), oldPhoto = 'wxfile://usr/existing-photo.jpg';
+    const id = ownRecipe(app, {photo: oldPhoto}), page = app.open('editor', {id});
+    const before = copy(app.store.getState());
+    if (mode === 'cancel' || mode === 'permission') app.hooks.chooseMedia = options => options.fail({errMsg: 'chooseMedia:fail ' + (mode === 'cancel' ? 'cancel' : 'auth deny')});
+    else if (mode === 'empty') app.hooks.chooseMedia = options => options.success({tempFiles: []});
+    else app.hooks.prepareRecipePhoto = () => { throw Error('照片压缩失败'); };
+    await page.choosePhoto();
+    assert.equal(page.data.photo, oldPhoto); assert.equal(page.data.photoDisplay, oldPhoto);
+    assert.equal(page.data.choosingPhoto, false); assert.equal(app.returnWarning(), false);
+    assert.deepEqual(copy(app.store.getState()), before);
+    assert.deepEqual(app.calls.unlinks, []); assert.deepEqual(app.calls.photoCleanups, []);
+    assert.equal(app.calls.toasts.length, mode === 'cancel' || mode === 'empty' ? 0 : 1);
+  });
+});
+
+test('late prepared photos cannot repopulate closed or changed-account and family drafts', async t => {
+  for (const mode of ['unload', 'account', 'family-aba']) await t.test(mode, async () => {
+    const app = setup(), owner = 'a'.repeat(64), other = 'b'.repeat(64);
+    app.store.bindAccount(owner);
+    const oldPhoto = 'wxfile://usr/existing-photo.jpg', id = ownRecipe(app, {photo: oldPhoto});
+    const page = app.open('editor', {id}), gate = pendingPhotoPreparation(), output = preparedPhoto(app);
+    let guard;
+    app.hooks.prepareRecipePhoto = (_, options) => { guard = options.assertCurrent; return gate.promise; };
+    const work = page.choosePhoto(); await photoTurn();
+    if (mode === 'unload') page.onUnload();
+    else if (mode === 'account') app.store.bindAccount(other);
+    else {
+      app.store.bindScope(owner, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+      app.store.bindScope(owner, {kind: 'personal', id: owner});
+    }
+    assert.throws(guard, /页面已关闭|账号|家庭/);
+    const view = copy(page.data), stored = copy(app.store.getState()), writes = app.calls.writes;
+    gate.resolve(output); await work;
+    assert.deepEqual(page.data, view); assert.deepEqual(copy(app.store.getState()), stored);
+    assert.equal(app.calls.writes, writes); assert.equal(app.calls.saves.length, 0);
+    assert.deepEqual(app.calls.photoCleanups, [output.filePath]);
+    assert.deepEqual(app.calls.unlinks, []); assert.equal(app.calls.toasts.length, 0);
+  });
+});
+
+test('replacing or clearing prepared photos cleans only temporary outputs and never the original saved photo', async () => {
+  const app = setup(), oldPhoto = 'wxfile://usr/existing-photo.jpg';
+  const id = ownRecipe(app, {photo: oldPhoto}), page = app.open('editor', {id});
+  const first = preparedPhoto(app, 'wxfile://tmp/compressed-first.jpg');
+  app.hooks.prepareRecipePhoto = () => first; await page.choosePhoto();
+  app.hooks.prepareRecipePhoto = () => { throw Error('压缩未完成'); }; await page.choosePhoto();
+  assert.equal(page.data.photo, first.filePath); assert.deepEqual(app.calls.photoCleanups, []);
+  const second = preparedPhoto(app, 'wxfile://tmp/compressed-second.jpg');
+  app.hooks.prepareRecipePhoto = () => second; await page.choosePhoto();
+  assert.deepEqual(app.calls.photoCleanups, [first.filePath]);
+  page.clearPhoto(); page.onUnload();
+  assert.deepEqual(app.calls.photoCleanups, [first.filePath, second.filePath]);
+  assert.equal(page.data.photo, ''); assert.equal(app.store.getRecipe(id).photo, oldPhoto);
+  assert.deepEqual(app.calls.unlinks, []);
+});
+
+test('a failed recipe write retries the persisted compressed photo without choosing, compressing or saving the file twice', async () => {
+  const app = setup(), page = app.open('editor'); fillRecipe(page);
+  const output = preparedPhoto(app);
+  app.hooks.prepareRecipePhoto = () => output;
+  await page.choosePhoto(); app.failWrites(); await page.save();
+  assert.equal(app.calls.photoPreparations.length, 1); assert.equal(app.calls.saves.length, 1);
+  assert.deepEqual(app.calls.photoCleanups, [output.filePath]);
+  assert.equal(page.data.photo, app.calls.saves[0].savedFilePath);
+  assert.equal(page.data.savedComplete, false);
+  app.allowWrites(); await page.save(); page.onUnload();
+  assert.equal(app.calls.photoPreparations.length, 1); assert.equal(app.calls.saves.length, 1);
+  assert.equal(newRecipe(app).photo, app.calls.saves[0].savedFilePath);
+  assert.deepEqual(app.calls.photoCleanups, [output.filePath]); assert.deepEqual(app.calls.unlinks, []);
+});
+
+test('closing an unsaved compressed photo draft cleans its generated output once', async () => {
+  const app = setup(), page = app.open('editor'), output = preparedPhoto(app);
+  app.hooks.prepareRecipePhoto = () => output;
+  await page.choosePhoto(); page.onUnload(); page.onUnload();
+  assert.deepEqual(app.calls.photoCleanups, [output.filePath]);
+  assert.equal(app.calls.writes, 0); assert.equal(app.calls.saves.length, 0);
+  assert.deepEqual(app.calls.unlinks, []);
+});
+
+test('an unplanned meal can be recorded with a meal slot and no optional feedback', () => {
+  const app = setupWithExistingRecipe(), recipeId = firstRecipeId(app);
+  const page = app.open('record-editor', {id: recipeId, date: '2024-03-01', meal: 'lunch'});
+  assert.equal(page.data.meal, 'lunch');
+  page.save();
+  const log = app.store.getState().logs[0];
+  assert.equal(log.rating, 0); assert.equal(log.portion, '');
+  assert.equal(log.date, '2024-03-01'); assert.equal(log.meal, 'lunch');
+  assert.equal(app.calls.addLog, 1); assert.equal(page.data.ratingError, '');
+  const edit = app.open('record-editor', {logId: log.id});
+  edit.tapRating({currentTarget: {dataset: {value: 3}}});
+  edit.save();
+  assert.equal(app.store.getLog(log.id).rating, 3); assert.equal(app.store.getLog(log.id).meal, 'lunch');
+  assert.equal(app.store.getState().logs.length, 1);
+});
+
+test('meal identity changes remain a draft and storage errors retain an unrated meal for retry', () => {
+  const app = setupWithExistingRecipe(), page = app.open('record-editor', {id: firstRecipeId(app), meal: 'breakfast'});
+  page.chooseMeal({currentTarget: {dataset: {meal: 'dinner'}}});
+  assert.equal(app.store.getState().logs.length, 0);
+  assert.equal(app.returnWarning(), true);
+  app.failWrites(); page.save();
+  assert.equal(app.store.getState().logs.length, 0); assert.equal(page.data.meal, 'dinner');
+  assert.ok(page.data.error);
+  app.allowWrites(); page.save();
+  assert.equal(app.store.getState().logs[0].meal, 'dinner');
+  assert.equal(app.store.getState().logs[0].rating, 0);
 });

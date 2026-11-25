@@ -28,6 +28,14 @@ function recipe(overrides) {
     steps: ['把两种食材洗净、切块。', '蒸熟后压泥。'], note: ''}, overrides || {});
 }
 
+function savedState(recipes) {
+  return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes, logs: []};
+}
+
+function editedLegacyCatalog() {
+  return savedState(seed.map(item => ({...copy(item), isExample: true, createdAt: 1, updatedAt: 1})));
+}
+
 function withLog(state, id, recipeId, rating, date, createdAt) {
   state.logs.push({id, recipeId, rating, date, createdAt, portion: '', note: ''});
 }
@@ -63,13 +71,18 @@ test('invalid recipe age groups never mutate storage and missing custom ages sta
   }
 });
 
-test('first read exposes the starter catalog, no fabricated feedback, and no implicit write', () => {
+test('first read exposes an empty cookbook, no fabricated feedback, and no implicit write', () => {
   const app = setup();
-  assert.equal(app.store.init().recipes.length, seed.length);
+  assert.deepEqual(app.store.init().recipes, []);
   assert.deepEqual(app.store.getState().logs, []);
   assert.equal(app.store.getWarning(), '');
   assert.equal(app.writes(), 0);
-  assert.ok(app.store.getState().recipes.every(item => item.isExample && !item.favorite));
+  assert.equal(app.store.getRecipe('missing'), null);
+});
+
+test('state and recipe reads return independent copies of explicitly saved recipes', () => {
+  const app = setup();
+  app.store.saveRecipe(recipe());
   const snapshot = app.store.getState();
   snapshot.recipes[0].name = '修改副本';
   snapshot.recipes[0].ingredients[0].name = '修改副本食材';
@@ -122,7 +135,7 @@ test('invalid inputs are rejected without changing existing state', () => {
 });
 
 test('saving an edited example preserves creation time and its built-in origin', () => {
-  const {store} = setup();
+  const {store} = setup(editedLegacyCatalog());
   const original = store.getState().recipes[0];
   assert.equal(original.isExample, true);
   const edited = Object.assign({}, original, {name: '我的南瓜小米粥', photo: undefined});
@@ -145,11 +158,11 @@ test('imported examples keep their origin when editing even with a nonstandard I
 
 test('feedback rejects impossible/future dates and invalid ratings', () => {
   const app = setup();
-  const recipeId = app.store.getState().recipes[0].id;
+  const recipeId = app.store.saveRecipe(recipe());
   for (const date of ['2024-02-30', '2023-02-29', '2024-13-01', '9999-12-31']) {
     assert.throws(() => app.store.addLog({recipeId, rating: 3, date}), /用餐记录/);
   }
-  assert.throws(() => app.store.addLog({recipeId, rating: 0}), /用餐记录/);
+  assert.throws(() => app.store.addLog({recipeId, rating: 4}), /用餐记录/);
   assert.throws(() => app.store.addLog({recipeId, rating: 3, note: '字'.repeat(501)}), /用餐记录/);
   assert.equal(app.store.getState().logs.length, 0);
   app.store.addLog({recipeId, rating: 2, date: '2024-02-29'});
@@ -193,11 +206,11 @@ test('failed storage writes roll back memory for creation, edits, deletes, and p
 test('corrupt stored content is not overwritten by initialization or ordinary mutations', () => {
   const original = '{this is not json';
   const app = setup(original);
-  assert.equal(app.store.getState().recipes.length, seed.length);
+  assert.deepEqual(app.store.getState().recipes, []);
   assert.match(app.store.getWarning(), /原数据未被覆盖/);
   assert.equal(app.saved(), original);
   assert.throws(() => app.store.saveRecipe(recipe()), /导入有效备份/);
-  assert.throws(() => app.store.exportBackup(), /不能将示例菜谱/);
+  assert.throws(() => app.store.exportBackup(), /不能导出备份/);
   assert.equal(app.saved(), original);
   assert.equal(app.writes(), 0);
   const recovery = app.store.getState();
@@ -218,7 +231,7 @@ test('storage read errors do not trigger a destructive default-data write', () =
 });
 
 test('backup merge restores newer same-ID edits and nickname, skips duplicates and stale edits', () => {
-  const app = setup();
+  const app = setup(savedState([recipe({id: 'saved-recipe', createdAt: 1, updatedAt: 1})]));
   const backup = app.store.getState();
   const id = backup.recipes[0].id;
   backup.recipes[0].name = '调整过的南瓜粥';
@@ -256,7 +269,7 @@ test('an intentional newer default nickname is not overwritten by an older backu
 });
 
 test('invalid and oversized backup merges are atomic and leave re-loadable data', () => {
-  const baseline = setup().store.getState();
+  const baseline = setup(savedState([recipe({id: 'saved-recipe', createdAt: 1, updatedAt: 1})])).store.getState();
   const many = prefix => Object.assign(copy(baseline), {
     recipes: Array.from({length: 600}, (_, index) => Object.assign(copy(baseline.recipes[0]), {id: `${prefix}-${index}`}))
   });
@@ -280,6 +293,7 @@ test('invalid and oversized backup merges are atomic and leave re-loadable data'
 
 test('backup write failure preserves current recipes and feedback', () => {
   const app = setup();
+  app.store.saveRecipe(recipe(), 2);
   app.store.setNickname('保留的称呼');
   const before = app.store.getState();
   const savedBefore = app.saved();
@@ -293,7 +307,7 @@ test('backup write failure preserves current recipes and feedback', () => {
 });
 
 test('latest preference uses meal date, then creation time on the same day', () => {
-  const state = setup().store.getState();
+  const state = setup(editedLegacyCatalog()).store.getState();
   const id = state.recipes[0].id;
   withLog(state, 'older-entered-later', id, 3, '2024-04-01', 500);
   withLog(state, 'newer', id, 1, '2024-04-02', 100);
@@ -312,7 +326,7 @@ test('latest preference uses meal date, then creation time on the same day', () 
 });
 
 test('recipe search, sort, favorites, and texture filters compose without mutating input', () => {
-  const state = setup().store.getState();
+  const state = setup(editedLegacyCatalog()).store.getState();
   const before = copy(state);
   assert.equal(selectors.listRecipes(state, {search: '西红柿'})[0].id, 'tomato-beef-noodle');
   const pumpkinRecipes = selectors.listRecipes(state, {search: '  南瓜  '});
@@ -332,7 +346,7 @@ test('recipe search, sort, favorites, and texture filters compose without mutati
 });
 
 test('pantry matching reports missing ingredients and normalizes aliases', () => {
-  const state = setup().store.getState();
+  const state = setup(editedLegacyCatalog()).store.getState();
   const matches = selectors.matchRecipes(state, ['南瓜', '小米', '马铃薯']);
   assert.equal(matches[0].id, 'pumpkin-millet');
   assert.equal(matches[0].complete, true);
@@ -350,7 +364,7 @@ test('pantry matching reports missing ingredients and normalizes aliases', () =>
 });
 
 test('random selection respects category/latest dislikes, avoids repetition, and handles empty pools', () => {
-  const state = setup().store.getState();
+  const state = setup(editedLegacyCatalog()).store.getState();
   const first = selectors.randomRecipe(state, {category: '蔬菜手抓'}, () => 0);
   const next = selectors.randomRecipe(state, {category: '蔬菜手抓', lastId: first.id}, () => 0);
   assert.notEqual(first.id, next.id);
@@ -367,7 +381,7 @@ test('random selection respects category/latest dislikes, avoids repetition, and
 
 test('editing a meal keeps its identity and chronology and updates the latest preference', () => {
   const {store} = setup();
-  const recipeId = store.getState().recipes[0].id;
+  const recipeId = store.saveRecipe(recipe());
   const id = store.addLog({recipeId, rating: 1, date: '2024-04-02', portion: '尝了几口'});
   const original = store.getLog(id);
   assert.equal(store.getLog('missing'), null);
@@ -378,22 +392,22 @@ test('editing a meal keeps its identity and chronology and updates the latest pr
   assert.equal(updated.createdAt, original.createdAt);
   assert.ok(updated.updatedAt > 0);
   assert.equal(store.getState().logs.length, 1);
-  const recipe = selectors.enrichRecipe(store.getState(), store.getRecipe(recipeId));
-  assert.equal(recipe.rating, 3);
-  assert.equal(recipe.ratingDate, '2024-04-02');
-  assert.equal(recipe.favorite, false, 'meal preference must not implicitly favorite the recipe');
+  const enriched = selectors.enrichRecipe(store.getState(), store.getRecipe(recipeId));
+  assert.equal(enriched.rating, 3);
+  assert.equal(enriched.ratingDate, '2024-04-02');
+  assert.equal(enriched.favorite, false, 'meal preference must not implicitly favorite the recipe');
   store.toggleFavorite(recipeId);
   assert.equal(store.getLog(id).rating, 3);
 });
 
 test('invalid and failed meal edits keep persisted data and memory unchanged', () => {
   const app = setup();
-  const recipeId = app.store.getState().recipes[0].id;
+  const recipeId = app.store.saveRecipe(recipe());
   const id = app.store.addLog({recipeId, rating: 2, date: '2024-04-02'});
   const before = app.store.getState();
   const savedBefore = app.saved();
   for (const input of [
-    {rating: 0, date: '2024-04-02'}, {rating: 3, date: '2024-02-30'},
+    {rating: 4, date: '2024-04-02'}, {rating: 3, date: '2024-02-30'},
     {rating: 3, date: '2024-04-02', recipeId: 'another-recipe'}
   ]) assert.throws(() => app.store.updateLog(id, input));
   assert.throws(() => app.store.updateLog('missing', {rating: 3, date: '2024-04-02'}), /不存在/);
@@ -405,7 +419,7 @@ test('invalid and failed meal edits keep persisted data and memory unchanged', (
 
 test('meal edits round-trip through backups and newer edits win without duplicate records', () => {
   const app = setup();
-  const recipeId = app.store.getState().recipes[0].id;
+  const recipeId = app.store.saveRecipe(recipe());
   const id = app.store.addLog({recipeId, rating: 1, date: '2024-04-02'});
   const oldBackup = app.store.exportBackup();
   app.store.updateLog(id, {rating: 3, date: '2024-04-02', note: '最新反馈'});

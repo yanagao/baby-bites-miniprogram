@@ -37,6 +37,9 @@ function setup(options = {}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/editor/index.js'), 'utf8'), {
     wx, Page(value) { definition = value; }, require(dep) {
       if (dep.endsWith('/family-photos')) return {photoURL: value => value || ''};
+      if (dep.endsWith('/recipe-photo')) return {async prepareRecipePhoto(filePath, options) {
+        options.assertCurrent(); return {filePath, async cleanup() {}};
+      }};
       if (dep.endsWith('/store')) return store;
       if (dep.endsWith('/social')) return {getMine: async () => ({published: []})};
       if (dep.endsWith('/form-session/controller')) return require('../components/form-session/controller');

@@ -12,7 +12,7 @@ const imageUrl = '/assets/cute/pocket-mascot.png';
 const destinations = {
   home: 'home', discover: 'discover', recipes: 'recipes', ingredients: 'ingredients',
   'ingredient-results': 'ingredients', random: 'random', records: 'home',
-  editor: 'home', 'record-editor': 'home', settings: 'home', following: 'home'
+  editor: 'home', 'record-editor': 'home', 'meal-plan': 'home', settings: 'home', following: 'home'
 };
 const clone = value => JSON.parse(JSON.stringify(value));
 

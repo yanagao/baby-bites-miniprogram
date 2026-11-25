@@ -1,6 +1,7 @@
 const store = require('../../utils/store');
 const selectors = require('../../utils/selectors');
 const {today} = selectors;
+const {MEALS, validMeal} = require('../../utils/meal-plans');
 const ui = require('../../utils/ui');
 const {createFormSession} = require('../../components/form-session/controller');
 const formSession = createFormSession({store, wx});
@@ -16,7 +17,7 @@ Page({
   data: {
     ...formSession.data,
     recipe: null, editing: false, missingMessage: '没有找到这道菜谱，可能已经被删除。',
-    rating: 0,
+    rating: 0, meal: '', mealOptions: MEALS,
     ratingOptions: [{ label: '不太喜欢', value: 1, icon: 'unhappy' }, { label: '还不错', value: 2, icon: 'smile' }, { label: '很喜欢', value: 3, icon: 'happy' }],
     date: today(), maxDate: today(), minDate: '', dateVisible: false,
     portions, portionOptions: portions.map((label, value) => ({ label, value })), portionIndex: 0,
@@ -40,7 +41,8 @@ Page({
     const parsed = new Date(parts[0], parts[1] - 1, parts[2]);
     const validRequested = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= now && requested >= minDate &&
       parsed.getFullYear() === parts[0] && parsed.getMonth() === parts[1] - 1 && parsed.getDate() === parts[2];
-    this.setData({ date: !options.logId && validRequested ? requested : now, maxDate: now, minDate });
+    this.setData({ date: !options.logId && validRequested ? requested : now, maxDate: now, minDate,
+      meal: validMeal(options.meal) ? options.meal : '' });
     if (options.logId) {
       const log = store.getLog(options.logId);
       if (!log) {
@@ -57,7 +59,7 @@ Page({
       this.initialPortionIndex = portionIndex;
       wx.setNavigationBarTitle({ title: '编辑用餐记录' });
       this.setData({
-        editing: true, rating: log.rating, date: log.date, minDate: log.date < minDate ? log.date : minDate,
+        editing: true, rating: log.rating, meal: log.meal || '', date: log.date, minDate: log.date < minDate ? log.date : minDate,
         portions: values, portionOptions: values.map((label, value) => ({ label, value })),
         portionIndex, note: log.note || ''
       });
@@ -76,7 +78,7 @@ Page({
     if (!this._draftOwner && owner) { this._draftOwner = owner; this._draftScope = store.getSyncInfo().scopeKey || owner; }
   },
   draftSnapshot() {
-    return JSON.stringify({ rating: this.data.rating, date: this.data.date, portionIndex: this.data.portionIndex, note: this.data.note });
+    return JSON.stringify({ rating: this.data.rating, meal: this.data.meal, date: this.data.date, portionIndex: this.data.portionIndex, note: this.data.note });
   },
   updateUnsavedAlert() {
     const dirty = this.initialDraft !== undefined && this.draftSnapshot() !== this.initialDraft;
@@ -98,8 +100,14 @@ Page({
     if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
     const rating = Number(event.detail.value);
     if (![1, 2, 3].includes(rating)) return;
-    this.setData({ rating, ratingError: '', error: '' });
+    this.setData({ rating: this.data.rating === rating ? 0 : rating, ratingError: '', error: '' });
     this.updateUnsavedAlert();
+  },
+  chooseMeal(event) {
+    if (this.data.saving || this.data.savedComplete || this.data.deleting || this.data.deleteVisible) return;
+    const meal = event.currentTarget.dataset.meal;
+    if (!validMeal(meal)) return;
+    this.setData({meal, error: ''}); this.updateUnsavedAlert();
   },
   openDate() {
     if (!this.data.saving && !this.data.savedComplete && !this.data.deleting && !this.data.deleteVisible) this.setData({ dateVisible: true, maxDate: today() });
@@ -142,7 +150,7 @@ Page({
     const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && date <= today() &&
       parsed.getFullYear() === parts[0] && parsed.getMonth() === parts[1] - 1 && parsed.getDate() === parts[2];
     this.setData({
-      ratingError: [1, 2, 3].includes(this.data.rating) ? '' : '请选择本次喜好',
+      ratingError: [0, 1, 2, 3].includes(this.data.rating) ? '' : '请选择有效的本次喜好',
       dateError: validDate ? '' : '请选择今天或之前的有效日期', error: ''
     });
     if (this.data.ratingError || this.data.dateError) return;
@@ -152,7 +160,7 @@ Page({
       const portion = this.originalLog && this.data.portionIndex === this.initialPortionIndex
         ? this.originalLog.portion || '' : this.data.portionIndex ? this.data.portions[this.data.portionIndex] : '';
       const input = { recipeId: this.recipeId, rating: this.data.rating, date,
-        portion, note: this.data.note.trim() };
+        portion, note: this.data.note.trim(), ...(validMeal(this.data.meal) ? {meal: this.data.meal} : {}) };
       if (this.logId) store.updateLog(this.logId, input);
       else store.addLog(input);
       this.initialDraft = this.draftSnapshot();

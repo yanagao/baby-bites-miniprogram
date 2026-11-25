@@ -8,6 +8,8 @@ const {withCover} = require('./recipe-covers');
 const coverLoader = require('./cover-loader');
 const {isValidBirthDate} = require('./baby-age');
 const {normalizeAgeGroups} = require('./recipe-ages');
+const {validPlanDate} = require('./meal-plans');
+const {normalizeMealPlan, normalizeDays, dayVersion} = require('./public-meal-plans');
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const imports = new Map();
 const COOKSNAP_PHOTO_BYTES = 1024 * 1024;
@@ -21,8 +23,13 @@ const MAX_CACHE_ENTRIES = 32;
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const readCache = new Map();
 const readFlights = new Map();
+// Record the version of the returned data, even if another write starts before
+// its caller resumes. The version stays off the server payload and view data.
+const mineResultVersions = new WeakMap();
+const MINE_MUTATIONS = new Set(['updateProfile', 'follow', 'publish', 'unpublish', 'shareMealPlan']);
 let cacheBytes = 0;
 let readVersion = 0;
+let mineReadVersion = 0;
 let identity = null;
 let identityFlight = null;
 let identityRejected = false;
@@ -35,12 +42,15 @@ let observedRevision = store.getSyncInfo().revision;
 let observedPublication = 0;
 let observedIdentityInvalid = false;
 let ownerEpoch = 0;
-function invalidateReads() {
+function invalidateReads(includeMine = false) {
   readVersion += 1;
-  readCache.clear();
-  cacheBytes = 0;
+  if (includeMine) mineReadVersion += 1;
+  // Private records and feedback do not change the profile or follow counters.
+  for (const [key, entry] of readCache) {
+    if (includeMine || entry.action !== 'mine') removeCached(key);
+  }
 }
-function forgetIdentity(rejected = false) { identity = null; identityFlight = null; identityRejected = rejected; invalidateReads(); }
+function forgetIdentity(rejected = false) { identity = null; identityFlight = null; identityRejected = rejected; invalidateReads(true); }
 store.subscribe(info => {
   if (info.owner !== observedOwner || (info.scopeKey || info.owner || '') !== observedScope) {
     observedScope = info.scopeKey || info.owner || '';
@@ -54,14 +64,14 @@ if (typeof cloudSync.subscribe === 'function') cloudSync.subscribe(status => {
   if (status.owner !== observedOwner || status.scopeKey && status.scopeKey !== observedScope) return;
   if (status.identityInvalid === true && !observedIdentityInvalid) forgetIdentity(true);
   observedIdentityInvalid = status.identityInvalid === true;
-  let changed = false;
+  let changed = false, mineChanged = false;
   if (Number.isSafeInteger(status.revision) && status.revision !== observedRevision) {
     observedRevision = status.revision; changed = true;
   }
   if (Number.isSafeInteger(status.publicationVersion) && status.publicationVersion !== observedPublication) {
-    observedPublication = status.publicationVersion; changed = true;
+    observedPublication = status.publicationVersion; changed = true; mineChanged = true;
   }
-  if (changed) invalidateReads();
+  if (changed) invalidateReads(mineChanged);
   if (status.state === 'synced' && !status.identityInvalid) flushSaveReceipts(false).catch(() => {});
 });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -245,7 +255,7 @@ function removeCached(key) {
   const entry = readCache.get(key);
   if (entry) { cacheBytes -= entry.bytes; readCache.delete(key); }
 }
-function cacheResult(key, result) {
+function cacheResult(key, result, action) {
   const json = JSON.stringify(result), bytes = json.length * 2;
   removeCached(key);
   if (bytes > MAX_CACHE_BYTES) return;
@@ -256,23 +266,25 @@ function cacheResult(key, result) {
   while (readCache.size >= MAX_CACHE_ENTRIES || cacheBytes + bytes > MAX_CACHE_BYTES) {
     removeCached(readCache.keys().next().value);
   }
-  readCache.set(key, {json, bytes, expiresAt: now + READ_TTL});
+  readCache.set(key, {json, bytes, action, expiresAt: now + READ_TTL});
   cacheBytes += bytes;
 }
-function readCopy(result) {
+function readCopy(result, action, version) {
   // Each caller owns its view data; cover sources can become ready independently.
   const value = JSON.parse(JSON.stringify(result));
   if (object(value.recipe)) value.recipe = withCover(value.recipe);
   if (Array.isArray(value.recipes)) value.recipes = value.recipes.map(withCover);
+  if (action === 'mine') mineResultVersions.set(value, version);
   return value;
 }
+function versionForRead(action) { return action === 'mine' ? mineReadVersion : readVersion; }
 async function read(action, data, options = {}, cacheable = true) {
   const owner = await readyIdentity(true);
   assertOwner(owner);
-  const version = readVersion;
+  const version = versionForRead(action);
   const key = owner.epoch + ':' + version + ':' + action + ':' + JSON.stringify(data || {});
   const entry = readCache.get(key);
-  if (cacheable && !options.force && entry && Date.now() < entry.expiresAt) return readCopy(JSON.parse(entry.json));
+  if (cacheable && !options.force && entry && Date.now() < entry.expiresAt) return readCopy(JSON.parse(entry.json), action, version);
   if (entry && Date.now() >= entry.expiresAt) removeCached(key);
   let work = readFlights.get(key);
   if (!work) {
@@ -285,16 +297,21 @@ async function read(action, data, options = {}, cacheable = true) {
   assertOwner(owner);
   // A write or automatic publication completed while this read was in flight.
   // Never let the older response repopulate the cache or overwrite the new view.
-  if (version !== readVersion) return read(action, data, options, cacheable);
-  if (cacheable) cacheResult(key, result);
-  return readCopy(result);
+  if (version !== versionForRead(action)) return read(action, data, options, cacheable);
+  if (cacheable) cacheResult(key, result, action);
+  return readCopy(result, action, version);
 }
 async function mutate(action, data, owner) {
-  invalidateReads();
+  const affectsMine = MINE_MUTATIONS.has(action);
+  invalidateReads(affectsMine);
   try { return await (owner ? request(action, data, owner) : invoke(action, data)); }
-  finally { invalidateReads(); }
+  finally { invalidateReads(affectsMine); }
 }
 function getReadVersion() { return readVersion; }
+function getMineReadVersion(result) {
+  if (!arguments.length) return mineReadVersion;
+  return object(result) ? mineResultVersions.get(result) : undefined;
+}
 function checkProfileId(value) { if (!profileId(value)) fail('主页地址不正确，请重新打开好友分享的主页。', 'INVALID_INPUT'); }
 function checkRecipeId(value) { if (!publicId(value)) fail('菜谱地址不正确，请重新打开这道菜谱。', 'INVALID_INPUT'); }
 function offset(value) {
@@ -334,6 +351,28 @@ function saveProfile(input) {
 }
 function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
+async function getProfileMealPlans(id, start = 0, options = {}) {
+  checkProfileId(id);
+  const position = offset(start);
+  if (position > 3000) fail('分页信息不正确，请刷新页面。', 'INVALID_INPUT');
+  return normalizeDays(await read('profileMealPlans', {profileId: id, offset: position}, options, false), position);
+}
+async function getMealPlan(id, date, options = {}) {
+  checkProfileId(id);
+  if (!validPlanDate(date)) fail('餐单日期不正确，请重新打开。', 'INVALID_INPUT');
+  return normalizeMealPlan(await read('mealPlan', {profileId: id, date}, options, false), id, date);
+}
+async function getMealPlanShareLink(date) {
+  if (!validPlanDate(date)) fail('餐单日期不正确，请重新打开。', 'INVALID_INPUT');
+  const owner = await ready();
+  const state = store.getState(), version = dayVersion(state, date);
+  if (!(state.mealPlans || []).some(plan => plan.date === date)) fail('请先安排这一天的餐单。', 'INVALID_INPUT');
+  if (store.getSyncInfo().dirty) fail('餐单尚未同步，请稍后重试。', 'SYNC_REQUIRED');
+  const result = await mutate('shareMealPlan', {date}, owner);
+  assertOwner(owner);
+  if (store.getSyncInfo().dirty || dayVersion(store.getState(), date) !== version) fail('餐单已有更新，请重新分享。', 'SYNC_REQUIRED');
+  return {...normalizeMealPlan(result, null, date), localVersion: version};
+}
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
 async function getRecipeShareLink(sourceRecipeId, options = {}) {
   const owner = await ready({ifNeeded: !options.force});
@@ -710,6 +749,6 @@ async function deleteCooksnap(id) {
   return {deleted: true};
 }
 
-module.exports = {getMine, getFamilyRecipeLink, getRecipeShareLink, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
+module.exports = {getMine, getMineReadVersion, getFamilyRecipeLink, getRecipeShareLink, saveProfile, getProfile, getProfileSummary, getProfileMealPlans, getMealPlan, getMealPlanShareLink, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe,
   getRecipeFeedback, getFeedbackInbox, addCooksnap, deleteCooksnap};

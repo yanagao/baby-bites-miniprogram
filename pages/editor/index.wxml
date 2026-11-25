@@ -26,12 +26,11 @@
     <t-textarea value="{{form.note}}" placeholder="记录下次想调整的口感或做法" maxlength="2000" autosize="{{true}}" disabled="{{saving || savedComplete}}" data-field="note" bind:change="input" />
   </t-cell-group>
   <t-cell-group class="editor-group" title="成品照（选填）">
-    <t-cell title="照片" description="照片随菜谱同步，单张最多 2 MB。">
-      <view slot="note" class="editor-photo-action"><t-button theme="primary" shape="round" icon="camera" disabled="{{saving || savedComplete}}" bind:tap="choosePhoto">{{photo ? '更换照片' : '添加照片'}}</t-button></view>
+    <t-cell title="照片" description="照片会自动压缩，随菜谱一起同步。">
+      <view slot="note" class="editor-photo-action"><t-button theme="primary" shape="round" icon="camera" loading="{{choosingPhoto}}" disabled="{{saving || savedComplete || choosingPhoto}}" bind:tap="choosePhoto">{{choosingPhoto ? '处理照片中' : photo ? '更换照片' : '添加照片'}}</t-button></view>
     </t-cell>
-    <t-cell wx:if="{{photo}}" title="查看照片" image="{{photoDisplay}}" arrow hover bind:click="previewPhoto" />
-    <t-cell wx:if="{{photo}}">
-      <t-button slot="note" variant="text" disabled="{{saving || savedComplete}}" bind:tap="clearPhoto">移除照片</t-button>
+    <t-cell wx:if="{{photo}}" class="editor-photo-preview" title="查看照片" image="{{photoDisplay}}" t-class-center="editor-photo-preview-title" t-class-note="editor-photo-remove" aria-role="button" hover bind:click="previewPhoto">
+      <view slot="note" class="editor-photo-remove-action"><t-button size="small" variant="text" disabled="{{saving || savedComplete || choosingPhoto}}" bind:tap="clearPhoto">移除照片</t-button></view>
     </t-cell>
   </t-cell-group>
   <t-cell-group class="editor-group" wx:if="{{!editing}}" title="用餐记录">
@@ -46,7 +45,7 @@
   <t-cell class="form-error" wx:if="{{error}}" title="未能保存" description="{{error}}" />
   <view class="editor-actions">
     <view class="editor-cancel"><t-button theme="default" shape="round" block disabled="{{saving || savedComplete}}" bind:tap="cancel">取消</t-button></view>
-    <view class="editor-save"><t-button theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving || savedComplete}}" bind:tap="save">保存菜谱</t-button></view>
+    <view class="editor-save"><t-button theme="primary" shape="round" block loading="{{saving}}" disabled="{{saving || savedComplete || choosingPhoto}}" bind:tap="save">保存菜谱</t-button></view>
   </view>
   </view>
   <t-picker visible="{{pickerVisible}}" value="{{pickerValue}}" title="{{pickerTitle}}" bind:confirm="pick" bind:cancel="closePicker" bind:close="closePicker">

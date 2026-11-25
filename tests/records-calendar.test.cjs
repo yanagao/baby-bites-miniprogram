@@ -22,7 +22,9 @@ function harness(logs = [], recipes = [seed[0], seed[1]]) {
     require(name) {
       if (name.endsWith('/selectors')) return {...selectors, today: () => now};
       if (name.endsWith('/calendar')) return calendar;
-      if (name.endsWith('/store')) return {getState: () => state, getWarning: () => ''};
+      if (name.endsWith('/meal-plans')) return require('../utils/meal-plans');
+      if (name.endsWith('/store')) return {getState: () => state, getWarning: () => '',
+        getSyncInfo: () => ({owner: 'owner', scopeKey: 'personal-owner', scope: {kind: 'personal'}}), subscribe: () => () => {}};
       if (name.endsWith('/tab-bar')) return {syncTabBar() {}};
       throw new Error('Unexpected module ' + name);
     },
@@ -34,6 +36,7 @@ function harness(logs = [], recipes = [seed[0], seed[1]]) {
   });
   const page = {...definition, data: copy(definition.data),
     setData(update) { Object.assign(this.data, update); }};
+  page.onLoad();
   return {page, state, navigation, setToday(value) { now = value; }};
 }
 
@@ -79,7 +82,7 @@ test('records default to today and count actual entries separately from distinct
   assert.deepEqual(copy(page.data.stats), {logCount: 3, triedCount: 2});
   assert.equal(page.data.logs[0].note, '喜欢南瓜');
   assert.equal(page.data.logs[0].portion, '吃了一点');
-  assert.equal(page.data.canNextWeek, false);
+  assert.equal(page.data.canNextWeek, true);
   page.chooseFilter(tap({value: '3'}));
   assert.equal(page.data.logs.length, 1);
   assert.deepEqual(copy(page.data.stats), {logCount: 3, triedCount: 2}, 'summary is not reduced by a display filter');
@@ -88,7 +91,7 @@ test('records default to today and count actual entries separately from distinct
   assert.deepEqual(state, before);
 });
 
-test('week controls preserve weekday, clamp future dates and expose selected-day records', () => {
+test('week controls preserve weekday and permit future meal planning while exposing historical records', () => {
   const {page} = harness(logs);
   page.onShow();
   page.moveWeek(tap({direction: -1}));
@@ -98,12 +101,16 @@ test('week controls preserve weekday, clamp future dates and expose selected-day
   page.chooseDay(tap({date: '2026-10-18'}));
   assert.equal(page.data.logs[0].id, 'old-1');
   page.moveWeek(tap({direction: 1}));
-  assert.equal(page.data.selectedDate, '2026-10-23', 'Sunday in the current week clamps to today');
+  assert.equal(page.data.selectedDate, '2026-10-25', 'future Sunday remains selectable for planning');
+  assert.equal(page.data.future, true);
   page.moveWeek(tap({direction: 1}));
-  assert.equal(page.data.weekStart, '2026-10-19');
+  assert.equal(page.data.weekStart, '2026-10-26');
+  assert.equal(page.data.selectedDate, '2026-11-01');
   page.chooseDay(tap({date: '2026-10-24'}));
   page.chooseDay(tap({date: '2026-02-30'}));
-  assert.equal(page.data.selectedDate, '2026-10-23');
+  assert.equal(page.data.selectedDate, '2026-10-24');
+  page.openRecordPicker();
+  assert.equal(page.data.recordPickerVisible, false, 'future dates can be planned but not logged as eaten');
   page.chooseDay(tap({date: '2026-10-19'}));
   assert.equal(page.data.logs[0].id, 'week-1');
   page.goToday();
@@ -141,9 +148,11 @@ test('record picker uses actual recipes and selected date; existing cards open t
   page.selectRecipe(tap({id: 'missing'}));
   assert.equal(navigation.length, 0);
   page.chooseDay(tap({date: '2026-10-19'}));
+  assert.equal(page.data.recordPickerVisible, false, 'changing day discards the previous picker context');
+  page.openRecordPicker();
   page.selectRecipe(tap({id: seed[0].id}));
   assert.equal(page.data.recordPickerVisible, false);
-  assert.equal(navigation[0], '/pages/record-editor/index?id=' + encodeURIComponent(seed[0].id) + '&date=2026-10-19');
+  assert.equal(navigation[0], '/pages/record-editor/index?id=' + encodeURIComponent(seed[0].id) + '&date=2026-10-19&meal=breakfast');
   page.editLog(tap({id: 'week-1'}));
   assert.equal(navigation[1], '/pages/record-editor/index?logId=week-1');
   page.editLog(tap({id: 'not-visible'}));

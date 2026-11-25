@@ -14,18 +14,25 @@ const expiresLabel = time => {
 Page({
   data: {loading: true, error: '', actionError: '', family: null, busy: false, busyText: '',
     name: '宝宝的小家庭', roleLabel: '', roleOptions: ROLE_LABELS, token: '', preview: null,
-    invite: null, inviteExpiry: '', roleEditing: false, babyEditing: false, nickname: '', babyBirthDate: null,
+    invite: null, inviteExpiry: '', inviteMode: false, inviteStep: 'confirm', inviteError: '', inviteUnavailable: false,
+    roleEditing: false, babyEditing: false, nickname: '', babyBirthDate: null,
     birthDateToday: babyAge.todayString(), babyAgeLabel: '',
     confirmVisible: false, confirmTitle: '', confirmText: '', confirmLabel: '确认', confirmDanger: false},
   onLoad(options = {}) {
     this.request = 0; this.disposed = false; this.locked = false;
     const info = store.getSyncInfo(); this.owner = info.owner || ''; this.scope = scopeKey(info);
     this.unsubscribe = store.subscribe(() => this.check());
-    if (typeof options.token === 'string') this.setData({token: options.token.slice(0, 128)});
+    if (typeof options.token === 'string' && options.token.trim()) this.setData({token: options.token.trim().slice(0, 128), inviteMode: true});
     if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
   },
   onShow() {
+    if (!this.check()) return;
     if (this.data.invite && this.data.invite.expiresAt <= Date.now()) this.setData({invite: null, inviteExpiry: ''});
+    // Returning from the keyboard or another app does not restart an invitation.
+    if (this.data.inviteMode && this.loadedAt) {
+      if (!this.data.busy && this.data.preview) this.validInvitation();
+      return;
+    }
     if (!this.data.busy && !this.data.babyEditing && !this.data.roleEditing && (!this.loadedAt || Date.now() - this.loadedAt >= 30000)) return this.load();
   },
   onUnload() { this.disposed = true; this.request++; if (this.unsubscribe) this.unsubscribe(); },
@@ -37,6 +44,7 @@ Page({
       this.locked = true; this.request++; this.confirmAction = null;
       this.setData({loading: false, busy: false, family: null, invite: null, preview: null,
         name: '', token: '', roleLabel: '', nickname: '', babyBirthDate: null, babyAgeLabel: '',
+        inviteStep: 'confirm', inviteError: '', inviteUnavailable: false, inviteExpiry: '',
         roleEditing: false, babyEditing: false, confirmVisible: false, actionError: '',
         error: '微信账号已切换，或家庭已变化，请重新加载后再操作。'});
       return false;
@@ -58,6 +66,7 @@ Page({
       if (!this.check() || request !== this.request) return;
       this.present(result); this.loadedAt = Date.now();
       if (!result.family && this.data.token) await this.previewInvite();
+      else if (!result.family && this.data.inviteMode) this.setData({inviteUnavailable: true, inviteError: '请重新打开家人发来的邀请。'});
     } catch (error) {
       if (this.check() && request === this.request) this.setData({loading: false, error: error.message || '家庭暂时无法加载，请重试。'});
     }
@@ -77,7 +86,7 @@ Page({
   chooseRole(event) {
     if (this.editable() && ROLE_LABELS.includes(event.currentTarget.dataset.label)) this.setData({roleLabel: event.currentTarget.dataset.label, actionError: ''});
   },
-  changeToken(event) { if (this.editable()) this.setData({token: fieldValue(event).trim().slice(0, 128), preview: null, actionError: ''}); },
+  changeToken(event) { if (this.editable() && !this.data.inviteMode) this.setData({token: fieldValue(event).trim().slice(0, 128), preview: null, actionError: ''}); },
   validRole() {
     if (!this.data.roleLabel.trim()) { this.setData({actionError: '请选择或填写你与宝宝的关系。'}); return false; }
     return true;
@@ -93,7 +102,7 @@ Page({
     if (action) return action();
   },
   create() {
-    if (!this.editable() || this.data.family || !this.validRole()) return;
+    if (!this.editable() || this.data.family || this.data.inviteMode || !this.validRole()) return;
     const name = this.data.name.trim();
     if (!name) { this.setData({actionError: '请填写家庭名称。'}); return; }
     const input = {name, label: this.data.roleLabel.trim()};
@@ -103,40 +112,77 @@ Page({
       () => this.mutate('正在创建家庭…', () => familyService.create({...input, requestId: this.creation.requestId}), true));
   },
   async previewInvite() {
-    if (!this.editable() || this.data.family) return;
+    if (!this.editable() || this.data.family || this.data.inviteUnavailable) return;
     const token = this.data.token.trim();
     if (!token) { this.setData({actionError: '请先填写家人发来的邀请码。'}); return; }
     const request = this.request;
-    this.setData({busy: true, busyText: '正在确认邀请…', actionError: '', preview: null});
+    this.setData({busy: true, busyText: '正在确认邀请…', actionError: '', preview: null,
+      inviteStep: 'confirm', inviteError: '', inviteExpiry: ''});
     try {
       const preview = await familyService.preview(token);
-      if (this.check() && request === this.request) this.setData({preview, inviteExpiry: expiresLabel(preview.expiresAt)});
-    } catch (error) { if (this.check() && request === this.request) this.setData({actionError: error.message || '邀请暂时无法查看，请家人重新生成。'}); }
+      if (this.check() && request === this.request) {
+        this.setData({preview, inviteMode: true, inviteExpiry: expiresLabel(preview.expiresAt)});
+        this.validInvitation(); this.scrollToTop();
+      }
+    } catch (error) {
+      if (this.check() && request === this.request) {
+        const message = error.message || '邀请暂时无法查看，请稍后重试。';
+        this.setData(this.data.inviteMode ? {inviteError: message, inviteUnavailable: error.code === 'INVITE_INVALID'} : {actionError: message});
+      }
+    }
     finally { if (this.check() && request === this.request) this.setData({busy: false, busyText: ''}); }
   },
+  validInvitation() {
+    if (!this.data.preview) return false;
+    if (this.data.preview.expiresAt <= Date.now()) {
+      this.setData({preview: null, inviteStep: 'confirm', inviteExpiry: '', actionError: '',
+        inviteUnavailable: true, inviteError: '邀请已过期，请家人重新生成邀请。'});
+      return false;
+    }
+    return true;
+  },
+  scrollToTop() { if (wx.pageScrollTo) wx.pageScrollTo({scrollTop: 0, duration: 0}); },
+  confirmInvitation() {
+    if (!this.editable() || this.data.family || !this.data.inviteMode || !this.validInvitation()) return;
+    this.setData({inviteStep: 'role', actionError: ''}); this.scrollToTop();
+  },
+  backToInvitation() {
+    if (!this.editable() || !this.data.inviteMode) return;
+    this.setData({inviteStep: 'confirm', actionError: ''}); this.scrollToTop();
+  },
+  openCurrentFamily() {
+    if (!this.editable() || !this.data.family) return;
+    this.setData({inviteMode: false, inviteStep: 'confirm', token: '', preview: null, inviteError: '', inviteUnavailable: false});
+    this.scrollToTop();
+  },
   join() {
-    if (!this.editable() || this.data.family || !this.data.preview || !this.validRole()) return;
-    if (this.data.preview.expiresAt <= Date.now()) { this.setData({preview: null, actionError: '邀请已过期，请家人重新生成。'}); return; }
+    if (!this.editable() || this.data.family || !this.data.inviteMode || this.data.inviteStep !== 'role' || !this.validInvitation() || !this.validRole()) return;
     const input = {token: this.data.token, label: this.data.roleLabel.trim()};
     const key = JSON.stringify(input);
     if (!this.joining || this.joining.key !== key) this.joining = {key, requestId: newRequestId()};
-    this.confirm('加入这个宝宝的家庭？', `将与「${this.data.preview.name}」的家人共用宝宝辅食数据。你原来的个人数据会保留，不会自动合并到这个家庭。请确认是同一个宝宝。`, '确认加入',
-      () => this.mutate('正在加入家庭…', () => familyService.join({...input, requestId: this.joining.requestId}), true));
+    return this.mutate('正在加入家庭…', () => familyService.join({...input, requestId: this.joining.requestId}), true);
   },
   async mutate(busyText, operation, switches = false) {
     if (!this.editable()) return;
     const request = this.request;
+    const fromInvitation = this.data.inviteMode;
     this.switching = switches;
     this.setData({busy: true, busyText, actionError: ''});
     try {
       const result = await operation();
       if (!this.check() || request !== this.request) return;
       this.scope = scopeKey(store.getSyncInfo());
-      this.setData({invite: null, inviteExpiry: '', preview: null, token: '', roleEditing: false, babyEditing: false});
+      this.setData({invite: null, inviteExpiry: '', preview: null, token: '', roleEditing: false, babyEditing: false,
+        inviteMode: false, inviteStep: 'confirm', inviteError: '', inviteUnavailable: false});
       this.present(result); this.loadedAt = Date.now();
+      if (fromInvitation) this.scrollToTop();
       wx.showToast({title: '已完成', icon: 'success'});
     } catch (error) {
-      if (this.check() && request === this.request) this.setData({actionError: error.message || '操作暂未完成，请重试。'});
+      if (this.check() && request === this.request) {
+        const message = error.message || '操作暂未完成，请重试。';
+        this.setData(this.data.inviteMode && error.code === 'INVITE_INVALID' ?
+          {preview: null, inviteStep: 'confirm', inviteExpiry: '', inviteError: message, inviteUnavailable: true, actionError: ''} : {actionError: message});
+      }
     } finally {
       this.switching = false;
       if (this.check() && request === this.request) this.setData({busy: false, busyText: ''});
@@ -224,5 +270,9 @@ Page({
     }
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
-  back() { if (!this.data.busy) ui.back(); }
+  back() {
+    if (this.data.busy) return;
+    if (this.data.inviteMode && this.data.inviteStep === 'role') this.backToInvitation();
+    else ui.back();
+  }
 });

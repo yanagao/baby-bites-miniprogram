@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "安排餐单",
+  "usingComponents": {
+    "t-navbar": "/miniprogram_npm/tdesign-miniprogram/navbar/navbar",
+    "t-icon": "/miniprogram_npm/tdesign-miniprogram/icon/icon",
+    "t-button": "/miniprogram_npm/tdesign-miniprogram/button/button",
+    "t-popup": "/miniprogram_npm/tdesign-miniprogram/popup/popup",
+    "t-dialog": "/miniprogram_npm/tdesign-miniprogram/dialog/dialog"
+  }
+}
