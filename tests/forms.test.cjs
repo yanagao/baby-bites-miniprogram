@@ -12,8 +12,8 @@ const copy = value => value === undefined ? undefined : JSON.parse(JSON.stringif
 
 // Run the actual pages and store with an isolated WeChat device for every test.
 // Storage and file failures are observable at the same API boundary as on-device.
-function setup() {
-  const storage = new Map();
+function setup(initial) {
+  const storage = new Map(initial ? [['baby-bites-v1', copy(initial)]] : []);
   let failWrites = false;
   let returnWarning = false;
   const hooks = {};
@@ -57,6 +57,7 @@ function setup() {
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './retired-starter-recipes') return require('../utils/retired-starter-recipes');
       if (name === './baby-age') return require('../utils/baby-age');
       if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './allergies') return require('../utils/allergies');
@@ -120,8 +121,14 @@ function setup() {
 
 const valueEvent = value => ({ detail: { value } });
 
+function setupWithExistingRecipe() {
+  // An explicitly saved legacy recipe remains editable after defaults retire.
+  return setup({version: 1, nickname: '宝宝', profileUpdatedAt: 0,
+    recipes: [{...copy(seed[0]), isExample: true, favorite: false, photo: '', createdAt: 1, updatedAt: 1}], logs: []});
+}
+
 test('meal date arrows cross leap days, stop at date bounds and keep changes unsaved', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', {id: firstRecipeId(app), date: '2024-03-01'});
   const move = delta => page.moveDate({currentTarget: {dataset: {delta}}});
   move(-1); assert.equal(page.data.date, '2024-02-29');
@@ -135,7 +142,7 @@ test('meal date arrows cross leap days, stop at date bounds and keep changes uns
 });
 
 test('quick meal preference and portion choices do not persist until save is explicitly tapped', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', {id: firstRecipeId(app)});
   page.tapRating({currentTarget: {dataset: {value: 3}}});
   page.tapPortion({currentTarget: {dataset: {value: 2}}});
@@ -215,7 +222,7 @@ test('canceling a recipe picker keeps the current value; confirmation changes th
 });
 
 test('canceling the date picker preserves the date; confirming saves the chosen date', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   const originalDate = page.data.date;
   page.openDate();
@@ -231,7 +238,7 @@ test('canceling the date picker preserves the date; confirming saves the chosen 
 });
 
 test('calendar date query is preserved for a new meal, validated, and never overrides an existing record date', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const now = selectors.today();
   const year = Number(now.slice(0, 4));
   const selectedDate = (year - 1) + '-12-01';
@@ -275,7 +282,7 @@ test('recipe return warning is enabled only while the form differs from its orig
 });
 
 test('meal return warning is cleared when edited text is restored to its original value', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   assert.equal(app.returnWarning(), false);
   page.note(valueEvent('临时备注'));
@@ -304,7 +311,7 @@ test('canceling a changed recipe and choosing to continue keeps all edits withou
 });
 
 test('canceling a meal and continuing retains the preference and note', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const page = app.open('record-editor', { id: firstRecipeId(app) });
   page.rate(valueEvent(1));
   page.note(valueEvent('今天没有吃太多'));
@@ -375,7 +382,7 @@ test('discarding a failed photo draft removes the staged file and leaves stored 
 });
 
 test('editing by logId updates the existing meal without adding a log or rewriting its unchanged legacy portion', () => {
-  const app = setup();
+  const app = setupWithExistingRecipe();
   const recipeId = firstRecipeId(app);
   const logId = app.store.addLog({ recipeId, rating: 2, date: '2020-01-01', portion: '光盘啦', note: '原备注' });
   const addsBeforeEditing = app.calls.addLog;
@@ -429,7 +436,7 @@ test('saving a new recipe returns immediately without a sharing choice or remote
 
 test('editing own, built-in and attributed recipes returns without publishing from the form', async () => {
   for (const kind of ['own', 'builtin', 'copy']) {
-    const app = setup(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
+    const app = setupWithExistingRecipe(), id = kind === 'builtin' ? firstRecipeId(app) : ownRecipe(app, kind === 'copy' ? {source: SHARED_SOURCE} : {});
     const page = app.open('editor', {id}); input(page, 'name', '调整后的做法'); await page.save();
     assert.equal(app.calls.back, 1); assert.deepEqual(app.calls.redirects, []); assert.deepEqual(app.calls.mine, []);
     assert.equal(app.store.getRecipe(id).name, '调整后的做法');
@@ -681,7 +688,7 @@ test('closing an unsaved compressed photo draft cleans its generated output once
 });
 
 test('an unplanned meal can be recorded with a meal slot and no optional feedback', () => {
-  const app = setup(), recipeId = firstRecipeId(app);
+  const app = setupWithExistingRecipe(), recipeId = firstRecipeId(app);
   const page = app.open('record-editor', {id: recipeId, date: '2024-03-01', meal: 'lunch'});
   assert.equal(page.data.meal, 'lunch');
   page.save();
@@ -697,7 +704,7 @@ test('an unplanned meal can be recorded with a meal slot and no optional feedbac
 });
 
 test('meal identity changes remain a draft and storage errors retain an unrated meal for retry', () => {
-  const app = setup(), page = app.open('record-editor', {id: firstRecipeId(app), meal: 'breakfast'});
+  const app = setupWithExistingRecipe(), page = app.open('record-editor', {id: firstRecipeId(app), meal: 'breakfast'});
   page.chooseMeal({currentTarget: {dataset: {meal: 'dinner'}}});
   assert.equal(app.store.getState().logs.length, 0);
   assert.equal(app.returnWarning(), true);

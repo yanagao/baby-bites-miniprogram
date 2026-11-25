@@ -2,7 +2,7 @@
 <view class="plan-page">
   <block wx:if="{{!locked}}">
     <view class="page-title">一周餐单</view>
-    <view class="plan-intro">{{familyActive ? '确认并同步后，家人即可一起查看和记录。' : '先选好每一餐，确认后保存在你的餐单里。'}}</view>
+    <view class="plan-intro">确认并同步后，餐单安排会展示在主页。{{familyActive ? '家人也可以一起查看和记录。' : ''}}</view>
     <picker mode="date" value="{{start}}" start="{{today}}" disabled="{{saving}}" bindchange="changeStart">
       <view class="plan-range"><t-icon name="calendar" size="22" /><text>{{rangeLabel}}</text><text class="plan-range-action">调整日期</text><t-icon name="chevron-right" size="18" /></view>
     </picker>

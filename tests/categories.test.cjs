@@ -164,8 +164,10 @@ test('new categories remain user-selected through save, reload, category filteri
   });
 });
 
-test('built-in recipes use new categories without changing their food texture', () => {
-  const app = setup();
+test('previously saved built-in recipes retain their categories and food texture', () => {
+  const app = setup({version: 1, nickname: '宝宝', profileUpdatedAt: 0, logs: [],
+    recipes: seed.map(recipe => ({...clone(recipe), isExample: true, favorite: true,
+      photo: '', createdAt: 1, updatedAt: 2}))});
   const recipes = app.store.getState().recipes;
   assert.equal(recipes.filter(recipe => recipe.category === '粥饭主食').length, 4);
   assert.equal(recipes.filter(recipe => recipe.category === '早餐饼').length, 2);

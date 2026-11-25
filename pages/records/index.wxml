@@ -18,7 +18,10 @@
   </view>
   <view class="selected-date-row">
     <view class="selected-date">{{selectedLabel}}</view>
-    <button class="record-day-add" disabled="{{future}}" data-scope="{{scope}}" bindtap="openRecordPicker">记一餐 <t-icon name="add" size="28rpx" /></button>
+    <view class="selected-day-actions">
+      <button class="day-action day-share-entry" disabled="{{!plannedCount}}" bindtap="openDayShare" hover-class="day-action-pressed" aria-label="分享这一天餐单"><t-icon name="share" size="28rpx" aria-hidden="true" /><text>分享这一天</text></button>
+      <button class="day-action record-day-add" disabled="{{future}}" data-scope="{{scope}}" bindtap="openRecordPicker" hover-class="day-action-pressed" aria-label="记一餐"><t-icon name="add" size="28rpx" aria-hidden="true" /><text>记一餐</text></button>
+    </view>
   </view>
   <view wx:if="{{!plannedCount}}" class="meal-day-hint">
     <view wx:if="{{!logs.length}}" class="meal-hint-title">{{selectedDate === today ? '今天还没安排餐单' : '这一天还没安排餐单'}}</view>
@@ -56,7 +59,7 @@
       </view>
     </view>
   </view>
-  <view wx:if="{{familyActive}}" class="meal-family-note"><t-icon name="usergroup" size="28rpx" />已加入 {{nickname}} 的家庭 · 餐单和记录在家庭内共享</view>
+  <view class="meal-family-note"><t-icon name="{{familyActive ? 'usergroup' : 'calendar'}}" size="28rpx" />餐单安排可在主页查看 · 用餐记录{{familyActive ? '仅家庭成员可见' : '仅自己可见'}}</view>
   <view wx:if="{{error && !completeVisible && !recordPickerVisible}}" class="meal-page-error">{{error}}</view>
   <view class="meal-history-heading"><view class="meal-slot-title">用餐记录</view><button wx:if="{{selectedDate !== today}}" class="back-today" bindtap="goToday">回到今天</button></view>
   <view class="weekly-summary"><text>本周 {{stats.logCount}} 条记录</text><text>记录了 {{stats.triedCount}} 道菜</text></view>
@@ -86,7 +89,7 @@
       <view wx:if="{{!pickerRecipes.length}}" class="picker-empty">{{recipes.length ? '没有找到匹配的菜谱' : '还没有菜谱，先把做过的菜收进食谱。'}}</view>
     </scroll-view>
     <view wx:if="{{error}}" class="meal-page-error">{{error}}</view>
-    <block wx:if="{{pickerMode === 'plan'}}"><view class="meal-plan-footnote">确认后保存，家庭成员同步后可查看。</view><t-button theme="primary" block shape="round" loading="{{savingPlan}}" disabled="{{!pickerSelected || savingPlan}}" bind:tap="savePickedPlan">确认安排</t-button></block>
+    <block wx:if="{{pickerMode === 'plan'}}"><view class="meal-plan-footnote">确认并同步后，餐单安排会展示在主页。</view><t-button theme="primary" block shape="round" loading="{{savingPlan}}" disabled="{{!pickerSelected || savingPlan}}" bind:tap="savePickedPlan">确认安排</t-button></block>
     <button wx:if="{{!recipes.length}}" class="picker-add-recipe" bindtap="addRecipe"><t-icon name="add" size="20" />添加一道菜谱</button>
   </view>
 </t-popup>
@@ -102,6 +105,17 @@
     <view class="meal-plan-footnote">可以先标记已做，之后再补充用餐情况。</view>
     <view wx:if="{{error}}" class="meal-page-error">{{error}}</view>
     <t-button theme="primary" block shape="round" loading="{{completing}}" disabled="{{completing}}" bind:tap="completeMeal">完成</t-button>
+  </view>
+</t-popup>
+<t-popup visible="{{dayShareVisible}}" placement="bottom" bind:visible-change="dayShareChange">
+  <view class="recipe-picker day-share-sheet">
+    <view class="recipe-picker-header"><view class="recipe-picker-title">{{dayShareLabel}}餐单</view><button class="picker-close" bindtap="closeDayShare" aria-label="关闭分享"><t-icon name="close" size="22" /></button></view>
+    <view wx:if="{{dayShareLoading}}" class="day-share-note">正在同步并准备餐单…</view>
+    <view wx:for="{{dayShareMeals}}" wx:key="meal" class="day-share-meal"><text class="day-share-meal-label">{{item.label}}</text><text>{{item.name}}</text></view>
+    <view wx:if="{{dayShareError}}" class="meal-page-error">{{dayShareError}}</view>
+    <view wx:if="{{!dayShareLoading && !dayShareError}}" class="day-share-note">朋友可以查看这一天的安排和菜谱做法。</view>
+    <t-button wx:if="{{dayShareError}}" theme="primary" shape="round" block bind:tap="openDayShare">重新准备分享</t-button>
+    <t-button wx:else theme="primary" shape="round" block icon="share" open-type="share" loading="{{dayShareLoading}}" disabled="{{dayShareLoading || !dayShareMeals.length}}">发送给朋友</t-button>
   </view>
 </t-popup>
 <bottom-navigation id="bottom-navigation" />

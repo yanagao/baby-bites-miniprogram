@@ -1034,3 +1034,42 @@ test('real family sync accepts canonical fallback when an ambiguous older restor
   advance(); alice.store.setNickname('冲突收敛后继续同步'); await syncRealFamilyClient(alice);
   assert.equal((await env.read('alice', aliceFamily.scope)).snapshot.data.nickname, '冲突收敛后继续同步');
 });
+
+test('retiring starter recipes keeps family protocol history and a later offline meal intact', async () => {
+  const {removeUnusedStarterRecipes} = require('../utils/retired-starter-recipes');
+  const catalog = require('../data/recipes');
+  const env = environment(), source = snapshot();
+  source.data.recipes = catalog.map(item => ({...clone(item), isExample: true,
+    favorite: false, photo: '', createdAt: NOW - 100, updatedAt: 0}));
+  source.data.logs = [];
+  const alice = await env.create('alice', source), bob = await env.join();
+  const initial = await env.read('alice', alice.scope);
+  const offline = clone((await env.read('bob', bob.scope)).snapshot);
+  assert.equal(initial.snapshot.data.recipes.length, 21);
+  assert.ok(initial.snapshot.data.recipes.every(item => item.createdBy === ownerFor('alice')),
+    'family creation assigns provenance even to untouched starter recipes');
+  const local = {...initial.snapshot, data: removeUnusedStarterRecipes(initial.snapshot.data)};
+  assert.equal(local.data.recipes.length, 0);
+  local.data.recipes.push(recipe('my-new-recipe'));
+  const upload = mergeSnapshots(local, initial.snapshot, true);
+  assert.equal(upload.data.recipes.length, 22, 'the family protocol keeps unmodified remote defaults');
+  assert.deepEqual(upload.deleted.recipes, []);
+  const saved = await env.commit('alice', alice.scope, initial.revision, upload);
+  assert.ok(saved.snapshot, JSON.stringify(saved));
+  assert.deepEqual(saved.snapshot.deleted.recipes, []);
+  assert.deepEqual(removeUnusedStarterRecipes(saved.snapshot.data).recipes.map(item => item.id), ['my-new-recipe']);
+
+  env.advance(10);
+  offline.data.logs.push({id: 'offline-starter-meal', recipeId: catalog[0].id,
+    date: '2026-11-02', rating: 3, note: '离线记下的一餐', portion: '', createdAt: NOW + 1, updatedAt: NOW + 1});
+  const merged = mergeSnapshots(offline, saved.snapshot, true);
+  const synced = await env.commit('bob', bob.scope, saved.revision, merged);
+  assert.ok(synced.snapshot, JSON.stringify(synced));
+  assert.deepEqual(synced.snapshot.deleted.recipes, []);
+  assert.deepEqual(synced.snapshot.deleted.logs, []);
+  const visible = removeUnusedStarterRecipes(synced.snapshot.data);
+  assert.deepEqual(visible.recipes.map(item => item.id).sort(), [catalog[0].id, 'my-new-recipe'].sort());
+  assert.equal(visible.logs.length, 1);
+  assert.equal(visible.logs[0].recipeId, catalog[0].id);
+  assert.deepEqual(visible.logs[0].recordedBy, {memberId: bob.family.memberId, label: '爸爸'});
+});

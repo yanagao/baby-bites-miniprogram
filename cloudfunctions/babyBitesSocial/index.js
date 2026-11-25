@@ -7,6 +7,7 @@ const {todayString, isValidBirthDate, ageInMonths} = require('./baby-age');
 const {checkProfile} = require('./profile-moderation');
 const {ACTIONS: FEEDBACK_ACTIONS, createFeedback} = require('./feedback');
 const {createFamily, COLLECTIONS: FAMILY_COLLECTIONS, scopeKey, personalScope} = require('./family');
+const {ACTIONS: MEAL_PLAN_ACTIONS, createMealPlans} = require('./meal-plans');
 const COLLECTIONS = {
   accounts: 'baby_bites_accounts', profiles: 'baby_bites_profiles',
   recipes: 'baby_bites_public_recipes', follows: 'baby_bites_follows', feedback: 'baby_bites_recipe_feedback', ...FAMILY_COLLECTIONS
@@ -152,6 +153,8 @@ function socialPhoto(fileID, env, profileId, recipeId) {
 
 function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes(16).toString('hex')}) {
   const db = cloud.database({throwOnNotFound: false});
+  // Public reads must not trigger createFamily's lazy legacy-data migration.
+  const readOnlyDatabase = {collection: name => db.collection(name)};
   const families = createFamily({cloud, db, now, validateSnapshot, ownedFile, reject});
   const collection = (name, database = db) => database.collection(COLLECTIONS[name]);
   const get = async (name, id, database = db) => (await collection(name, database).doc(id).get()).data;
@@ -290,14 +293,15 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     return {recipes, consumed};
   }
 
-  async function committedSnapshot(owner, env, allowMissing = false, knownAccount, expectedScope) {
+  async function committedSnapshot(owner, env, allowMissing = false, knownAccount, expectedScope, readOnly = false) {
     // Authorization must remain bound to the scope accepted at request entry.
     // Resolving whichever scope happens to be current here would retarget a
     // pending family deletion/publication into the caller's personal account.
-    const state = expectedScope ? await families.current(owner, env, expectedScope) : await families.resolve(owner, env);
+    const database = readOnly ? readOnlyDatabase : db;
+    const state = expectedScope ? await families.current(owner, env, expectedScope, database) : await families.resolve(owner, env, database);
     if (state.family) {
       const snapshot = await families.snapshot(state, env);
-      await families.assertCurrent(owner, env, state);
+      await families.assertCurrent(owner, env, state, database);
       return {snapshot, account: {...state.family, __scope: state.scope, __actor: owner}};
     }
     const account = knownAccount === undefined ? await get('accounts', owner) : knownAccount;
@@ -537,6 +541,16 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
 
   const feedback = createFeedback({cloud, db, get, write, collection, profile, isPublished, profileIdFor,
     defaultProfileName, committedSnapshot, activeRecipe, assertCommitted, publicInventory, now, unique});
+  const mealPlans = createMealPlans({get, profile, profileIdFor, recipeIdFor, isPublished, renderRecipe,
+    committedSnapshot, activeRecipe, publicProfile, scopeKey, isProfileId, pageOffset, reject,
+    assertCommitted: (owner, account, readOnly) => assertCommitted(readOnly ? readOnlyDatabase : db, owner, account),
+    async ensureProfile(owner, account) {
+      await db.runTransaction(async transaction => {
+        await assertCommitted(transaction, owner, account);
+        await writeDefaultProfile(transaction, owner, profileIdFor(owner));
+      });
+      return profile(profileIdFor(owner));
+    }});
 
   return async function handle(event) {
     const progress = {updated: 0, removed: 0};
@@ -555,15 +569,18 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       const today = todayString(now());
       const isBuiltin = builtinChecker();
       const scopedActions = ['mine', 'previewPublication', 'familyRecipeLink', 'publish', 'updatePublished', 'unpublish', 'syncPublications',
-        'follow', 'shareCode', 'recordSave', 'addCooksnap', 'deleteCooksnap'];
+        'follow', 'shareCode', 'recordSave', 'addCooksnap', 'deleteCooksnap', 'shareMealPlan'];
+      const scopeDatabase = event.action === 'profileMealPlans' || event.action === 'mealPlan' ? readOnlyDatabase : db;
       let scopeState;
       if ((event.expectedScope !== undefined && !['updateProfile', 'checkProfile'].includes(event.action)) || scopedActions.includes(event.action)) {
-        scopeState = await families.resolve(owner, ENV);
+        scopeState = await families.resolve(owner, ENV, scopeDatabase);
         families.expect(event, scopeState, false);
       }
 
-      const assertScope = transaction => scopeState ? families.current(owner, ENV, scopeState.scope, transaction || db) : Promise.resolve();
+      const assertScope = transaction => scopeState ? families.current(owner, ENV, scopeState.scope, transaction || scopeDatabase) : Promise.resolve();
       if (FEEDBACK_ACTIONS.has(event.action)) return await feedback(event, {owner, env: ENV, openid: OPENID, isBuiltin, assertScope,
+        expectedScope: scopeState && scopeState.scope});
+      if (MEAL_PLAN_ACTIONS.has(event.action)) return await mealPlans(event, {owner, env: ENV, today, isBuiltin, assertScope,
         expectedScope: scopeState && scopeState.scope});
 
       if (event.action === 'familyRecipeLink') {

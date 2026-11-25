@@ -17,6 +17,7 @@
     "pages/profile/index",
     "pages/following/index",
     "pages/public-recipe/index",
+    "pages/public-meal-plan/index",
     "pages/builtin-recipe/index",
     "pages/share-preview/index",
     "pages/feedback/index",

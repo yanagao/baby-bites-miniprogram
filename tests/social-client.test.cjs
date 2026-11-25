@@ -19,6 +19,11 @@ const source = name => fs.readFileSync(path.resolve(__dirname, '../utils/', name
 const publicRecipe = () => ({id: PUBLIC_ID, profileId: PROFILE_ID, authorName: '朋友的小厨房', name: '南瓜饭',
   category: '粥饭主食', texture: '软烂颗粒', minutes: 20, ingredients: [{name: '南瓜', amount: '20 克'}],
   steps: ['切碎蒸熟。'], imageKey: 'pumpkin', photoURL: '', updatedAt: 100, publishedAt: 100});
+function setupEditedBuiltIn() {
+  const recipe = {...copy(require('../data/recipes')[0]), isExample: true, createdAt: 1, updatedAt: 1};
+  const data = {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [recipe], logs: []};
+  return setup({storage: new Map([['baby-bites-v1', data]])});
+}
 function setup(options = {}) {
   const storage = options.storage || new Map();
   const files = new Map();
@@ -121,6 +126,8 @@ function setup(options = {}) {
       if (name === './baby-age') return {isValidBirthDate: value => require('../utils/baby-age').isValidBirthDate(value, options.today || '2026-10-29')};
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './meal-plans') return require('../utils/meal-plans');
+      if (name === './public-meal-plans') return require('../utils/public-meal-plans');
       if (name === '../config/cloud') return {env: 'social-test', socialEnabled: options.enabled !== false};
       throw Error(name);
     }});
@@ -444,7 +451,7 @@ test('invalid public recipe age groups fail before photo download or private wri
 
 test('built-in sharing is rejected without changing stored age metadata', async () => {
   for (const ageGroups of [undefined, [], ['9-11', '12-17']]) {
-    const app = setup();
+    const app = setupEditedBuiltIn();
     const snapshot = {version: 1, data: app.store.getState(), deleted: {recipes: [], logs: []}};
     const original = snapshot.data.recipes[0];
     if (ageGroups === undefined) delete original.ageGroups; else original.ageGroups = ageGroups;
@@ -778,7 +785,7 @@ test('publishing never runs while a local edit still awaits synchronization', as
 });
 
 test('edited built-in recipes remain personal and cannot be published', async () => {
-  const app = setup();
+  const app = setupEditedBuiltIn();
   const original = app.store.getState().recipes[0];
   app.store.saveRecipe({...original, name: '我修改过的内置菜谱'});
   app.hooks.sync = () => {
@@ -1433,7 +1440,7 @@ test('saved recipe share links use the original publication without publishing o
 });
 
 test('share links reject built-in recipes before any public lookup', async () => {
-  const app = setup(), original = app.store.getState().recipes[0];
+  const app = setupEditedBuiltIn(), original = app.store.getState().recipes[0];
   app.store.saveRecipe({...original, name: '改过名字的内置菜'});
   app.hooks.sync = () => { const info = app.store.getSyncInfo(); app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: info.sequence, revision: info.revision + 1}); };
   await assert.rejects(app.social.getRecipeShareLink(original.id), error => error.code === 'BUILTIN_RECIPE');
@@ -1477,4 +1484,66 @@ test('share links validate public response identities, names and signed photo UR
     app.hooks.request = args => args.data.action === 'mine' ? {published: [publicationFor(app, id)]} : {recipe};
     await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'INVALID_RECIPE');
   }
+});
+
+const publicMealDay = () => ({author: {id: PROFILE_ID, name: '分享的小厨房', exists: true}, date: '2026-11-24',
+  meals: [{meal: 'breakfast', label: '早餐', recipe: {...publicRecipe(), kind: 'public'}}]});
+
+test('public meal plans validate dates and IDs before requests and never cache deleted schedules', async () => {
+  const app = setup();
+  await assert.rejects(app.social.getMealPlan('bad', '2026-11-24'), /主页/);
+  await assert.rejects(app.social.getMealPlan(PROFILE_ID, '2026-02-30'), /日期/);
+  await assert.rejects(app.social.getProfileMealPlans(PROFILE_ID, 3001), /分页/);
+  assert.equal(app.calls.length, 0);
+  app.hooks.request = args => args.data.action === 'mealPlan' ? publicMealDay() : undefined;
+  const first = await app.social.getMealPlan(PROFILE_ID, '2026-11-24');
+  assert.equal(first.meals[0].recipe.id, PUBLIC_ID);
+  app.hooks.request = args => args.data.action === 'mealPlan' ? {error: {code: 'NOT_FOUND'}} : undefined;
+  await assert.rejects(app.social.getMealPlan(PROFILE_ID, '2026-11-24'), /移除|无法查看/);
+  assert.equal(app.calls.filter(call => call.action === 'mealPlan').length, 2);
+});
+
+test('meal plan responses use public fields only and reject mismatched identity or dates', async () => {
+  const app = setup();
+  app.hooks.request = () => ({...publicMealDay(), nickname: '私人宝宝称呼', logs: ['private'],
+    author: {...publicMealDay().author, owner: OWNER, babyBirthDate: '2025-01-01'},
+    meals: [{...publicMealDay().meals[0], note: '私人备注', recipe: {...publicMealDay().meals[0].recipe, note: '私有心得', photo: 'wxfile://usr/private.jpg'}}]});
+  const result = await app.social.getMealPlan(PROFILE_ID, '2026-11-24');
+  assert.doesNotMatch(JSON.stringify(result), /私人|私有|babyBirthDate|wxfile/);
+  app.hooks.request = () => ({...publicMealDay(), date: '2026-11-25'});
+  await assert.rejects(app.social.getMealPlan(PROFILE_ID, '2026-11-24'), /餐单信息/);
+  app.hooks.request = () => ({...publicMealDay(), author: {id: 'e'.repeat(32), name: '另一个主页'}});
+  await assert.rejects(app.social.getMealPlan(PROFILE_ID, '2026-11-24'), /餐单信息/);
+});
+
+test('sharing a day synchronizes before requesting its public link and rejects concurrent local edits', async () => {
+  const app = setup();
+  const id = app.store.saveRecipe({...publicRecipe(), id: undefined});
+  app.store.saveMealPlans([{date: '2026-11-24', meal: 'breakfast', recipeId: id}]);
+  app.hooks.sync = () => {
+    const info = app.store.getSyncInfo();
+    app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: info.sequence, revision: info.revision + 1});
+  };
+  app.hooks.request = args => args.data.action === 'shareMealPlan' ? publicMealDay() : undefined;
+  const result = await app.social.getMealPlanShareLink('2026-11-24');
+  assert.equal(result.author.id, PROFILE_ID);
+  assert.equal(typeof result.localVersion, 'string');
+  assert.deepEqual(app.calls.slice(0, 2).map(call => call.action), ['sync', 'shareMealPlan']);
+  assert.deepEqual(app.calls[1], {...PERSONAL, action: 'shareMealPlan', date: '2026-11-24'});
+  app.hooks.request = args => {
+    if (args.data.action !== 'shareMealPlan') return;
+    app.store.removeMealPlan('meal-2026-11-24-breakfast');
+    return publicMealDay();
+  };
+  await assert.rejects(app.social.getMealPlanShareLink('2026-11-24'), /已有更新/);
+});
+
+test('meal plan lists preserve unavailable recipes without exposing unvalidated rows', async () => {
+  const app = setup();
+  app.hooks.request = () => ({days: [{date: '2026-11-24', meals: [{meal: 'lunch', recipe: null}]}], nextOffset: null});
+  const result = await app.social.getProfileMealPlans(PROFILE_ID);
+  assert.equal(result.days[0].meals[0].label, '午餐');
+  assert.equal(result.days[0].meals[0].recipe, null);
+  app.hooks.request = () => ({days: [publicMealDay(), publicMealDay()], nextOffset: null});
+  await assert.rejects(app.social.getProfileMealPlans(PROFILE_ID), /餐单信息/);
 });

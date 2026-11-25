@@ -35,6 +35,7 @@ module.exports = function createProfilePage(isTab = false) { return {
   data: {
     isTab, socialEnabled: config.socialEnabled === true, loading: true, error: '', profile: null, isSelf: isTab, following: false, followedBy: false,
     contentTab: 'recipes', logs: [], recipeCount: 0, favoriteCount: 0, logCount: 0,
+    mealPlanDays: [], mealPlansLoading: false, mealPlansLoadingMore: false, mealPlansError: '', mealPlansNextOffset: null,
     publicationReady: false, publicationError: '',
     publishedCount: 0, followingCount: 0, followerCount: 0,
     recipes: [], nextOffset: null, loadingMore: false, editing: false, name: '', bio: '', saving: false, followBusy: false,
@@ -51,7 +52,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     this.returnAfterSave = !isTab && !this.profileId && options.returnToRecipe === '1';
     this.published = []; this.pendingShare = false;
     this.setupRequested = options.edit === '1'; this.shareRequested = options.share === '1';
-    this.request = 0; this.shareRequest = 0; account.bind(this);
+    this.request = 0; this.shareRequest = 0; this.mealPlansRequest = 0; this.contentRequest = 0; account.bind(this);
   },
   onShow() {
     if (isTab) syncTabBar(this);
@@ -62,12 +63,14 @@ module.exports = function createProfilePage(isTab = false) { return {
       !this.data.loading && !this.data.error && !this.data.publicationError && this._loadedAt &&
       Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === version;
     if (reusable && (isTab || (!this.setupRequested && !this.shareRequested))) {
-      this.refresh(); return;
+      this.refresh();
+      if (this.data.contentTab === 'mealPlans' && this.mealPlansNeedLoad()) return this.loadMealPlans();
+      return;
     }
     return this.load();
   },
   onReady() { if (isTab) syncTabBar(this); },
-  onUnload() { this.request++; this.disposeShare(); account.dispose(this); },
+  onUnload() { this.request++; this.cancelMealPlans(); this.disposeShare(); account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
   onPullDownRefresh() {
     if (this.data.editing || this.data.saving || this.data.followBusy || this.data.shareVisible) {
@@ -94,6 +97,7 @@ module.exports = function createProfilePage(isTab = false) { return {
   async loadProfile(options) {
     if (!account.check(this)) return;
     const request = ++this.request;
+    this.cancelMealPlans(true);
     const version = readVersion(isTab);
     this._loadAttempted = true;
     this._loadedVersion = version;
@@ -139,9 +143,10 @@ module.exports = function createProfilePage(isTab = false) { return {
         ...babyNicknameFields(editing ? store.getState() : null), loading: false, editing
       });
       if (result.isSelf) this.refresh();
-      else this.setData({contentTab: 'recipes', recipeCount: count(result.publishedCount), favoriteCount: 0, logCount: 0});
+      else this.setData({contentTab: this.data.contentTab === 'mealPlans' ? 'mealPlans' : 'recipes', recipeCount: count(result.publishedCount), favoriteCount: 0, logCount: 0});
       if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
       if (this.shareRequested && profile.exists !== false) { this.shareRequested = false; this.openShare(); }
+      if (this.data.contentTab === 'mealPlans') await this.loadMealPlans({force: !!(options && options.force)});
     } catch (error) {
       if (!account.check(this) || request !== this.request) return;
       // Identity failures invalidate the service cache during this attempt.
@@ -171,12 +176,78 @@ module.exports = function createProfilePage(isTab = false) { return {
       if (Object.keys(changed).length) this.setData(changed);
     } catch (error) { ui.error(error); }
   },
-  disposeLocalContent() { this.published = []; this._loadedAt = 0; this._loadAttempted = false; this._loadFlight = null; this._pullDownFlight = null; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
+  disposeLocalContent() { this.cancelMealPlans(true); this.published = []; this._loadedAt = 0; this._loadAttempted = false; this._loadFlight = null; this._pullDownFlight = null; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
   changeContentTab(event) {
     if (!account.check(this)) return;
     const value = event.currentTarget && event.currentTarget.dataset.value || event.detail && event.detail.value;
-    if (!['recipes', 'favorites', 'records'].includes(value) || (!this.data.isSelf && value !== 'recipes')) return;
-    this.setData({contentTab: value}); this.refresh();
+    if (!['recipes', 'favorites', 'records', 'mealPlans'].includes(value) || (!this.data.isSelf && !['recipes', 'mealPlans'].includes(value))) return;
+    const changed = value !== this.data.contentTab;
+    if (changed) { this.contentRequest++; this.cancelMealPlans(); }
+    this.setData({contentTab: value, ...(changed ? {loadingMore: false} : {})}); this.refresh();
+    if (value === 'mealPlans' && this.mealPlansNeedLoad()) return this.loadMealPlans();
+  },
+  mealPlansNeedLoad() {
+    const version = typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
+    const elapsed = Date.now() - this.mealPlansCheckedAt;
+    return !this.mealPlansAttempted || this.mealPlansVersion !== version || elapsed < 0 || elapsed >= 30000;
+  },
+  cancelMealPlans(clear = false) {
+    this.mealPlansRequest = (this.mealPlansRequest || 0) + 1;
+    if (clear || this.data.mealPlansLoading) this.mealPlansAttempted = false;
+    if (clear) { this.mealPlansLoaded = false; this.mealPlansFailedMore = false; }
+    this.setData({mealPlansLoading: false, mealPlansLoadingMore: false,
+      ...(clear ? {mealPlanDays: [], mealPlansError: '', mealPlansNextOffset: null} : {})});
+  },
+  async loadMealPlans(options = {}) {
+    if (!account.check(this) || this.data.contentTab !== 'mealPlans' || this.data.loading ||
+      this.data.mealPlansLoading || this.data.mealPlansLoadingMore) return;
+    const profile = this.data.profile;
+    if (!this.data.socialEnabled || !profile || profile.exists === false || !/^[a-f0-9]{32}$/.test(profile.id || '')) {
+      this.setData({mealPlanDays: [], mealPlansError: '', mealPlansNextOffset: null});
+      return;
+    }
+    const more = options.more === true && !this.mealPlansNeedLoad();
+    // A failed page requires an explicit retry, not another reach-bottom event.
+    if (options.more && this.data.mealPlansError && !options.force) return;
+    if (more && this.data.mealPlansNextOffset === null) return;
+    const offset = more ? this.data.mealPlansNextOffset : 0;
+    const request = ++this.mealPlansRequest;
+    const current = () => account.check(this) && request === this.mealPlansRequest &&
+      this.data.contentTab === 'mealPlans' && this.data.profile && this.data.profile.id === profile.id;
+    const markChecked = () => {
+      this.mealPlansAttempted = true;
+      this.mealPlansVersion = typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
+      this.mealPlansCheckedAt = Date.now();
+    };
+    markChecked();
+    this.setData({mealPlansLoading: !more, mealPlansLoadingMore: more, mealPlansError: ''});
+    try {
+      const result = await social.getProfileMealPlans(profile.id, offset, options.force ? {force: true} : undefined);
+      if (!current()) return;
+      const days = content.mealPlanDays(result.days);
+      const known = new Set(more ? this.data.mealPlanDays.map(day => day.date) : []);
+      const added = days.filter(day => { if (known.has(day.date)) return false; known.add(day.date); return true; });
+      this.mealPlansLoaded = true;
+      this.mealPlansFailedMore = false;
+      markChecked();
+      this.setData({mealPlanDays: more ? this.data.mealPlanDays.concat(added) : added,
+        mealPlansNextOffset: Number.isSafeInteger(result.nextOffset) && result.nextOffset > offset ? result.nextOffset : null});
+    } catch (error) {
+      if (!current()) return;
+      if (error.code === 'ACCOUNT_CHANGED') { account.invalidate(this); return; }
+      this.mealPlansFailedMore = more;
+      markChecked();
+      this.setData({mealPlansError: error.userMessage || error.message || '餐单暂时无法加载，请重试。'});
+    } finally {
+      if (current()) this.setData({mealPlansLoading: false, mealPlansLoadingMore: false});
+    }
+  },
+  retryMealPlans() { return this.loadMealPlans({more: this.mealPlansFailedMore, force: true}); },
+  openMealPlan(event) {
+    if (!account.check(this) || this.data.contentTab !== 'mealPlans' || this.data.loading || !this.data.profile) return;
+    const date = event.currentTarget && event.currentTarget.dataset.date;
+    if (!this.data.mealPlanDays.some(day => day.date === date)) return;
+    wx.navigateTo({url: '/pages/public-meal-plan/index?profileId=' + encodeURIComponent(this.data.profile.id) + '&date=' + encodeURIComponent(date)});
   },
   edit() {
     if (!account.check(this) || !this.data.isSelf || this.data.loading || this.data.saving) return;
@@ -299,16 +370,18 @@ module.exports = function createProfilePage(isTab = false) { return {
   },
   async loadMore() {
     if (!account.check(this)) return;
+    if (this.data.contentTab === 'mealPlans') return this.loadMealPlans({more: true});
     if (this.data.isSelf || this.data.loading || this.data.loadingMore || this.data.followBusy || this.data.nextOffset === null || !this.data.profile) return;
     const request = this.request;
+    const contentRequest = this.contentRequest;
     this.setData({loadingMore: true});
     try {
       const result = await social.getProfile(this.data.profile.id, this.data.nextOffset);
-      if (!account.check(this) || request !== this.request) return;
+      if (!account.check(this) || request !== this.request || contentRequest !== this.contentRequest) return;
       const known = new Set(this.data.recipes.map(item => item.id));
       this.setData({recipes: this.data.recipes.concat(result.recipes.filter(item => !known.has(item.id))), nextOffset: result.nextOffset == null ? null : result.nextOffset});
-    } catch (error) { if (!account.check(this) || request !== this.request) return; ui.error(error); if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this); }
-    finally { if (account.check(this) && request === this.request) this.setData({loadingMore: false}); }
+    } catch (error) { if (!account.check(this) || request !== this.request || contentRequest !== this.contentRequest) return; ui.error(error); if (error.code === 'ACCOUNT_CHANGED') account.invalidate(this); }
+    finally { if (account.check(this) && request === this.request && contentRequest === this.contentRequest) this.setData({loadingMore: false}); }
   },
   onReachBottom() { return this.loadMore(); },
   photoError(event) {

@@ -457,11 +457,11 @@ test('unconfigured start and syncNow never initialize cloud or bind local data',
   assert.equal(app.calls.upload.length, 0);
 });
 
-test('a new empty account keeps local examples without uploading them or applying an empty snapshot', async () => {
+test('a new empty account stays empty without uploading recipes or applying an empty snapshot', async () => {
   const app = setup();
   await app.sync.syncNow();
   assert.equal(app.sync.getStatus().state, 'synced');
-  assert.equal(app.store.getState().recipes.length, seed.length);
+  assert.equal(app.store.getState().recipes.length, 0);
   assert.equal(app.store.getSyncInfo().hasLocalData, false);
   assert.equal(app.calls.commit, 0);
   assert.equal(app.calls.upload.length, 0);
@@ -1413,4 +1413,100 @@ test('public reconciliation identity rejection still invalidates the synchronize
     assert.equal(app.sync.getStatus().identityInvalid, true);
     assert.equal(app.sync.getStatus().publicationPending, false);
   }
+});
+
+function retiredCatalogData() {
+  return state(seed.map(item => ({...copy(item), isExample: true, favorite: false, photo: '', createdAt: 1700000000000, updatedAt: 0})));
+}
+
+test('cloud retirement uploads a clean snapshot and does not restore defaults on another device', async () => {
+  const app = setup();
+  const legacy = retiredCatalogData();
+  legacy.recipes.push(recipe('my-recipe'));
+  legacy.logs.push({id: 'real-meal', recipeId: seed[0].id, date: '2024-04-01', rating: 3});
+  app.putRemote(OWNER, snapshot(legacy), 1);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.deepEqual(app.getRemote().data.recipes.map(r => r.id).sort(), ['my-recipe', seed[0].id].sort());
+  assert.equal(app.getRemote().data.logs.length, 1);
+  assert.deepEqual(app.getRemote().deleted.recipes, []);
+  assert.equal(app.calls.commit, 1);
+  await app.sync.syncNow();
+  assert.equal(app.calls.commit, 1);
+  const another = setup();
+  another.putRemote(OWNER, app.getRemote(), 2);
+  await another.sync.syncNow();
+  assert.deepEqual(Array.from(another.store.getState().recipes, r => r.id).sort(), ['my-recipe', seed[0].id].sort());
+  assert.equal(another.calls.commit, 0);
+});
+
+test('upgrading a same-revision cache still cleans its cloud defaults', async () => {
+  const data = retiredCatalogData();
+  const storage = cachedStorage(data, 5);
+  storage.get('baby-bites-account-' + OWNER).__sync.snapshotSchemaVersion = 3;
+  const app = setup({storage});
+  app.putRemote(OWNER, snapshot(data), 5);
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.getRemote().data.recipes.length, 0);
+  assert.equal(app.store.getState().recipes.length, 0);
+  assert.equal(app.calls.commit, 1);
+  assert.equal(app.store.getSyncInfo().dirty, false);
+});
+
+test('retirement retries keep another device edits and meal references without deletion tombstones', async () => {
+  const app = setup();
+  app.putRemote(OWNER, snapshot(retiredCatalogData()), 1);
+  app.hooks.beforeCommit = () => {
+    if (app.calls.commit !== 1) return;
+    const changed = retiredCatalogData();
+    Object.assign(changed.recipes[0], {name: '另一台设备改好的粥', updatedAt: 10});
+    changed.logs.push({id: 'remote-meal', recipeId: seed[1].id, date: '2024-04-01', rating: 2});
+    app.putRemote(OWNER, snapshot(changed), 2);
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.calls.commit, 2);
+  assert.equal(app.store.getRecipe(seed[0].id).name, '另一台设备改好的粥');
+  assert.ok(app.store.getRecipe(seed[1].id));
+  assert.equal(app.getRemote().data.logs.length, 1);
+  assert.deepEqual(app.getRemote().deleted.recipes, []);
+});
+
+test('family sync hides unused defaults while retaining protocol rows and preserving offline meal history', async () => {
+  const app = setup();
+  let shared = snapshot(retiredCatalogData()), revision = 1, commits = 0;
+  shared.data.recipes.forEach(item => { item.createdBy = OWNER; });
+  const identity = () => ({owner: OWNER, scope: FAMILY_SCOPE, revision, fileID: familyFileID('snapshots', revision + '.json')});
+  app.hooks.request = ({data}) => {
+    if (data.action === 'identity') return identity();
+    if (data.action === 'familyRead') return {...identity(), snapshot: copy(shared), photoURLs: {}};
+    if (data.action === 'commit') {
+      commits++;
+      const incoming = backend.validateSnapshot(app.cloudFiles.get(data.fileID), {env: ENV, owner: OWNER});
+      assert.ok(seed.every(item => incoming.data.recipes.some(r => r.id === item.id)), 'family retirement must not omit server recipes');
+      assert.deepEqual(incoming.deleted.recipes, []);
+      shared = incoming; revision++;
+      return {...identity(), snapshot: copy(shared), photoURLs: {}};
+    }
+  };
+  await app.sync.syncNow();
+  assert.equal(app.sync.getStatus().state, 'synced');
+  assert.equal(app.store.getState().recipes.length, 0);
+  assert.equal(app.store.getSyncInfo().dirty, false);
+  assert.equal(commits, 0);
+  const id = app.store.saveRecipe(recipe('', {name: '我自己录的菜'}));
+  await app.sync.syncNow();
+  assert.deepEqual(Array.from(app.store.getState().recipes, r => r.id), [id]);
+  assert.equal(commits, 1);
+  await app.sync.syncNow();
+  assert.equal(commits, 1, 'local cleanup must not cause repeated commits');
+  shared.data.logs.push({id: 'offline-family-meal', recipeId: seed[0].id, date: '2024-04-01', rating: 3});
+  revision++;
+  await app.sync.syncNow();
+  assert.ok(app.store.getRecipe(seed[0].id));
+  assert.equal(app.store.getState().recipes.length, 2);
+  assert.equal(app.store.getState().logs.length, 1);
+  assert.equal(commits, 1);
+  assert.equal(app.store.getSyncInfo().dirty, false);
 });

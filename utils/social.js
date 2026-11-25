@@ -8,6 +8,8 @@ const {withCover} = require('./recipe-covers');
 const coverLoader = require('./cover-loader');
 const {isValidBirthDate} = require('./baby-age');
 const {normalizeAgeGroups} = require('./recipe-ages');
+const {validPlanDate} = require('./meal-plans');
+const {normalizeMealPlan, normalizeDays, dayVersion} = require('./public-meal-plans');
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 const imports = new Map();
 const COOKSNAP_PHOTO_BYTES = 1024 * 1024;
@@ -24,7 +26,7 @@ const readFlights = new Map();
 // Record the version of the returned data, even if another write starts before
 // its caller resumes. The version stays off the server payload and view data.
 const mineResultVersions = new WeakMap();
-const MINE_MUTATIONS = new Set(['updateProfile', 'follow', 'publish', 'unpublish']);
+const MINE_MUTATIONS = new Set(['updateProfile', 'follow', 'publish', 'unpublish', 'shareMealPlan']);
 let cacheBytes = 0;
 let readVersion = 0;
 let mineReadVersion = 0;
@@ -349,6 +351,28 @@ function saveProfile(input) {
 }
 function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
+async function getProfileMealPlans(id, start = 0, options = {}) {
+  checkProfileId(id);
+  const position = offset(start);
+  if (position > 3000) fail('分页信息不正确，请刷新页面。', 'INVALID_INPUT');
+  return normalizeDays(await read('profileMealPlans', {profileId: id, offset: position}, options, false), position);
+}
+async function getMealPlan(id, date, options = {}) {
+  checkProfileId(id);
+  if (!validPlanDate(date)) fail('餐单日期不正确，请重新打开。', 'INVALID_INPUT');
+  return normalizeMealPlan(await read('mealPlan', {profileId: id, date}, options, false), id, date);
+}
+async function getMealPlanShareLink(date) {
+  if (!validPlanDate(date)) fail('餐单日期不正确，请重新打开。', 'INVALID_INPUT');
+  const owner = await ready();
+  const state = store.getState(), version = dayVersion(state, date);
+  if (!(state.mealPlans || []).some(plan => plan.date === date)) fail('请先安排这一天的餐单。', 'INVALID_INPUT');
+  if (store.getSyncInfo().dirty) fail('餐单尚未同步，请稍后重试。', 'SYNC_REQUIRED');
+  const result = await mutate('shareMealPlan', {date}, owner);
+  assertOwner(owner);
+  if (store.getSyncInfo().dirty || dayVersion(store.getState(), date) !== version) fail('餐单已有更新，请重新分享。', 'SYNC_REQUIRED');
+  return {...normalizeMealPlan(result, null, date), localVersion: version};
+}
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
 async function getRecipeShareLink(sourceRecipeId, options = {}) {
   const owner = await ready({ifNeeded: !options.force});
@@ -725,6 +749,6 @@ async function deleteCooksnap(id) {
   return {deleted: true};
 }
 
-module.exports = {getMine, getMineReadVersion, getFamilyRecipeLink, getRecipeShareLink, saveProfile, getProfile, getProfileSummary, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
+module.exports = {getMine, getMineReadVersion, getFamilyRecipeLink, getRecipeShareLink, saveProfile, getProfile, getProfileSummary, getProfileMealPlans, getMealPlan, getMealPlanShareLink, getReadVersion, getRecipe, previewPublication, publishRecipe, unpublishRecipe,
   setFollowing, getFollowing, getFollowers, getFeed, getDiscover, getShareCode, addToCookbook, findImportedRecipe,
   getRecipeFeedback, getFeedbackInbox, addCooksnap, deleteCooksnap};

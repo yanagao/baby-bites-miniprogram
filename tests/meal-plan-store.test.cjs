@@ -10,6 +10,9 @@ const {mergeSnapshots} = require('../utils/sync-merge');
 const storeFile = path.resolve(__dirname, '../utils/store.js');
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const DATE = '2024-04-02';
+const savedRecipes = () => ({version: 1, nickname: '宝宝', profileUpdatedAt: 0, logs: [],
+  recipes: require('../data/recipes').slice(0, 3).map((recipe, index) => ({...copy(recipe),
+    id: 'saved-recipe-' + index, isExample: false, favorite: false, photo: '', createdAt: 1, updatedAt: 1}))});
 
 function setup(initial) {
   const saved = new Map(initial ? [['baby-bites-v1', copy(initial)]] : []);
@@ -24,18 +27,21 @@ function setup(initial) {
   return {store, ids, writes: () => writes, fail(value = true) {failed = value;},
     persisted: () => copy(saved.get('baby-bites-v1'))};
 }
+// Meal-plan scenarios explicitly start with an existing personal recipe collection.
+const setupWithRecipes = () => setup(savedRecipes());
 const entry = (recipeId, meal = 'breakfast', date = DATE) => ({date, meal, recipeId});
 const snapshot = (data, deleted = {}) => ({version: 1, data: copy(data), deleted: {recipes: [], logs: [], ...copy(deleted)}});
 
-test('reading a legacy store does not invent plans or request a write', () => {
+test('reading an empty store does not invent recipes, plans or request a write', () => {
   const app = setup();
+  assert.deepEqual(app.store.getState().recipes, []);
   assert.equal(app.store.getState().mealPlans, undefined);
   assert.equal(app.store.getSyncSnapshot().deleted.mealPlans, undefined);
   assert.equal(app.writes(), 0);
 });
 
 test('confirming a draft persists only its selected slots and preserves other dates and meals', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   const first = app.store.saveMealPlans([entry(a), entry(b, 'dinner', shiftDate(DATE, 1))]);
   assert.equal(first.length, 2);
   assert.equal(app.store.getState().logs.length, 0);
@@ -50,7 +56,7 @@ test('confirming a draft persists only its selected slots and preserves other da
 });
 
 test('saving rejects stale slots including another person filling a previously empty slot', () => {
-  const app = setup(), [a, b, c] = app.ids;
+  const app = setupWithRecipes(), [a, b, c] = app.ids;
   const base = app.store.saveMealPlans([entry(a)]);
   app.store.saveMealPlans([entry(b)]);
   const before = app.store.getState(), persisted = app.persisted();
@@ -62,7 +68,7 @@ test('saving rejects stale slots including another person filling a previously e
 });
 
 test('failed plan persistence keeps data, tombstones and subscribers unchanged', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   app.store.saveMealPlans([entry(a)]);
   const before = app.store.getState(), synced = app.store.getSyncSnapshot(), persisted = app.persisted();
   let notified = 0; app.store.subscribe(() => notified++); app.fail();
@@ -73,14 +79,14 @@ test('failed plan persistence keeps data, tombstones and subscribers unchanged',
 });
 
 test('invalid dates, duplicate slots, missing recipes and excessive plans are rejected atomically', () => {
-  const app = setup(), [a] = app.ids, before = app.store.getState();
+  const app = setupWithRecipes(), [a] = app.ids, before = app.store.getState();
   for (const entries of [[entry(a, 'snack')], [entry(a, 'lunch', '2024-02-30')], [entry('missing')],
     [entry(a), entry(a)], Array(3001).fill(entry(a))]) assert.throws(() => app.store.saveMealPlans(entries));
   assert.deepEqual(app.store.getState(), before); assert.equal(app.writes(), 0);
 });
 
 test('completion without feedback is real history without fabricating a preference and is idempotent', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   app.store.saveMealPlans([entry(a)]);
   const id = app.store.completeMeal({planId: planId(DATE, 'breakfast')});
   const before = app.writes();
@@ -93,7 +99,7 @@ test('completion without feedback is real history without fabricating a preferen
 });
 
 test('an existing unplanned record is reused when its same dish is later planned', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const id = app.store.addLog({...entry(a), rating: 3, portion: '吃了大部分'});
   app.store.saveMealPlans([entry(a)]);
   assert.equal(app.store.completeMeal({planId: planId(DATE, 'breakfast')}), id);
@@ -101,7 +107,7 @@ test('an existing unplanned record is reused when its same dish is later planned
 });
 
 test('completed meals cannot be replaced or removed until their record is removed', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]);
   const id = app.store.completeMeal({planId: plan.id});
   assert.throws(() => app.store.saveMealPlans([entry(b)]), /用餐记录/);
@@ -113,7 +119,7 @@ test('completed meals cannot be replaced or removed until their record is remove
 });
 
 test('a completion moved to another date retains its history and cannot allocate a second completion identity', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]);
   const id = app.store.completeMeal({planId: plan.id});
   app.store.updateLog(id, {rating: 1, date: shiftDate(DATE, -1)});
@@ -130,7 +136,7 @@ test('a completion moved to another date retains its history and cannot allocate
 });
 
 test('future meals, stale displayed recipes and failed writes cannot create a completion', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   const tomorrow = shiftDate(selectors.today(), 1);
   app.store.saveMealPlans([entry(a), entry(a, 'dinner', tomorrow)]);
   assert.throws(() => app.store.completeMeal({planId: planId(tomorrow, 'dinner')}), /今天或之前/);
@@ -140,7 +146,7 @@ test('future meals, stale displayed recipes and failed writes cannot create a co
 });
 
 test('unplanned meals permit omitted feedback and preserve their meal when editing later', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const id = app.store.addLog({...entry(a, 'lunch'), rating: 0});
   assert.deepEqual(app.store.getState().mealPlans, []);
   app.store.updateLog(id, {rating: 3, date: DATE, portion: '全部吃完'});
@@ -150,7 +156,7 @@ test('unplanned meals permit omitted feedback and preserve their meal when editi
 });
 
 test('a later completion with no rating does not erase an earlier known preference', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   app.store.addLog({recipeId: a, date: shiftDate(DATE, -1), rating: 3});
   app.store.addLog({...entry(a), rating: 0});
   const state = app.store.getState();
@@ -161,7 +167,7 @@ test('a later completion with no rating does not erase an earlier known preferen
 });
 
 test('backup restore preserves meal plans, optional feedback and older backups without plans', async () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const legacy = app.store.exportBackup();
   app.store.saveMealPlans([entry(a)]); app.store.completeMeal({planId: planId(DATE, 'breakfast')});
   delete require.cache[require.resolve('../utils/backup')];
@@ -175,7 +181,7 @@ test('backup restore preserves meal plans, optional feedback and older backups w
 });
 
 test('backup import replaces an older completion after the same meal was deleted and completed with another dish', () => {
-  const source = setup(), [a, b] = source.ids;
+  const source = setupWithRecipes(), [a, b] = source.ids;
   const [plan] = source.store.saveMealPlans([entry(a)]);
   const logId = source.store.completeMeal({planId: plan.id, rating: 1});
   const oldStorage = source.persisted(), oldBackup = source.store.exportBackup();
@@ -194,7 +200,7 @@ test('backup import replaces an older completion after the same meal was deleted
 });
 
 test('importing a rebuilt meal atomically adds the missing deletion boundary for its next family sync', () => {
-  const source = setup(), [a, b] = source.ids;
+  const source = setupWithRecipes(), [a, b] = source.ids;
   const [plan] = source.store.saveMealPlans([entry(a)]);
   const logId = source.store.completeMeal({planId: plan.id, rating: 1});
   const oldStorage = source.persisted();
@@ -218,7 +224,7 @@ test('importing a rebuilt meal atomically adds the missing deletion boundary for
 });
 
 test('importing a rebuilt completion of the same dish preserves its new identity and claim through family merge', () => {
-  const source = setup(), [a] = source.ids;
+  const source = setupWithRecipes(), [a] = source.ids;
   const [plan] = source.store.saveMealPlans([entry(a)]);
   const logId = source.store.completeMeal({planId: plan.id, rating: 1});
   const oldStorage = source.persisted();
@@ -243,7 +249,7 @@ test('importing a rebuilt completion of the same dish preserves its new identity
 
 test('ordinary feedback imports preserve their generation and do not invent deletion boundaries', () => {
   for (const planned of [false, true]) {
-    const source = setup(), [a] = source.ids;
+    const source = setupWithRecipes(), [a] = source.ids;
     const [plan] = source.store.saveMealPlans([entry(a)]);
     const logId = planned ? source.store.completeMeal({planId: plan.id, rating: 1}) : source.store.addLog({...entry(a), rating: 1});
     const oldStorage = source.persisted(), mother = {memberId: 'a'.repeat(32), label: '妈妈'};
@@ -264,7 +270,7 @@ for (const [name, date, meal] of [
   ['meal', DATE, 'dinner'],
   ['date and meal', shiftDate(DATE, -1), 'dinner']
 ]) test(`backup import identifies a rebuilt completion by its original slot after changing its ${name}`, () => {
-  const source = setup(), [a, b, c] = source.ids;
+  const source = setupWithRecipes(), [a, b, c] = source.ids;
   const [origin, destination] = source.store.saveMealPlans([entry(a), entry(c, meal, date)]);
   const logId = source.store.completeMeal({planId: origin.id, rating: 1});
   const oldStorage = source.persisted(), oldBackup = source.store.exportBackup();
@@ -287,7 +293,7 @@ for (const [name, date, meal] of [
 });
 
 for (const change of ['replace', 'remove']) test(`a moved rebuilt completion survives a later ${change} of its original plan`, () => {
-  const source = setup(), [a, b, c] = source.ids;
+  const source = setupWithRecipes(), [a, b, c] = source.ids;
   const [origin] = source.store.saveMealPlans([entry(a)]);
   const logId = source.store.completeMeal({planId: origin.id, rating: 1});
   const oldStorage = source.persisted();
@@ -316,7 +322,7 @@ for (const change of ['replace', 'remove']) test(`a moved rebuilt completion sur
 for (const moved of [false, true]) test(`importing a ${moved ? 'moved ' : ''}rebuilt completion preserves a newer local plan`, t => {
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  const original = setup(), [a, b, c] = original.ids;
+  const original = setupWithRecipes(), [a, b, c] = original.ids;
   const [plan] = original.store.saveMealPlans([entry(a)]);
   const logId = original.store.completeMeal({planId: plan.id, rating: 1});
   const originalStorage = original.persisted();
@@ -340,7 +346,7 @@ for (const moved of [false, true]) test(`importing a ${moved ? 'moved ' : ''}reb
 });
 
 test('backup import still rejects ordinary log ID collisions across recipes', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   const logId = app.store.addLog({...entry(a), rating: 1});
   app.store.saveMealPlans([entry(a)]);
   const before = app.store.getState(), backup = JSON.parse(app.store.exportBackup());
@@ -352,7 +358,7 @@ test('backup import still rejects ordinary log ID collisions across recipes', ()
 });
 
 test('rebuilt completions require an exact stable ID and a new creation time, and unmoved records require their plan', () => {
-  const source = setup(), [a, b, c] = source.ids;
+  const source = setupWithRecipes(), [a, b, c] = source.ids;
   const [origin] = source.store.saveMealPlans([entry(a)]);
   const logId = source.store.completeMeal({planId: origin.id, rating: 1});
   const oldStorage = source.persisted();
@@ -385,7 +391,7 @@ test('rebuilt completions require an exact stable ID and a new creation time, an
 });
 
 test('rebuilt completion imports preserve tombstones and the replacement authorship without inheriting its predecessor', () => {
-  const original = setup(), [a, b] = original.ids;
+  const original = setupWithRecipes(), [a, b] = original.ids;
   const [plan] = original.store.saveMealPlans([entry(a)]);
   const logId = original.store.completeMeal({planId: plan.id, rating: 1});
   original.store.deleteLog(logId);
@@ -413,7 +419,7 @@ test('rebuilt completion imports preserve tombstones and the replacement authors
 });
 
 test('explicit restoration advances a known plan deletion and retains its tombstone', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]), backup = app.store.exportBackup();
   app.store.removeMealPlan(plan.id);
   const removed = app.store.getSyncSnapshot();
@@ -425,7 +431,7 @@ test('explicit restoration advances a known plan deletion and retains its tombst
 });
 
 test('deleting a recipe removes its plans and logs atomically and remembers all deletions', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]);
   const logId = app.store.completeMeal({planId: plan.id});
   app.store.deleteRecipe(a);
@@ -435,7 +441,7 @@ test('deleting a recipe removes its plans and logs atomically and remembers all 
 });
 
 test('different offline slots merge, same-slot conflicts resolve deterministically, and deletion wins ties', () => {
-  const app = setup(), [a, b] = app.ids;
+  const app = setupWithRecipes(), [a, b] = app.ids;
   const data = app.store.getState();
   const plan = (recipeId, meal, updatedAt) => ({...entry(recipeId, meal), id: planId(DATE, meal), createdAt: 1, updatedAt});
   const left = snapshot({...data, mealPlans: [plan(a, 'breakfast', 10), plan(a, 'lunch', 10)]}, {mealPlans: []});
@@ -450,7 +456,7 @@ test('different offline slots merge, same-slot conflicts resolve deterministical
 });
 
 test('a remote recipe deletion also removes newer offline plans and creates plan tombstones', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const [plan] = app.store.saveMealPlans([entry(a)]);
   const local = app.store.getSyncSnapshot();
   const remote = snapshot({...local.data, recipes: local.data.recipes.filter(recipe => recipe.id !== a), mealPlans: []},
@@ -461,7 +467,7 @@ test('a remote recipe deletion also removes newer offline plans and creates plan
 });
 
 test('concurrent completion of the same planned meal merges into one log', () => {
-  const first = setup(), [a] = first.ids;
+  const first = setupWithRecipes(), [a] = first.ids;
   const [plan] = first.store.saveMealPlans([entry(a)]), base = first.persisted();
   const id = first.store.completeMeal({planId: plan.id});
   const left = first.store.getSyncSnapshot();
@@ -471,7 +477,7 @@ test('concurrent completion of the same planned meal merges into one log', () =>
 });
 
 test('optional fields survive a same-revision snapshot acknowledgement and reloading its schema marker', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   app.store.bindAccount('a'.repeat(64)); app.store.saveMealPlans([entry(a)]);
   app.store.completeMeal({planId: planId(DATE, 'breakfast')});
   const snapshot = app.store.getSyncSnapshot(), info = app.store.getSyncInfo();
@@ -481,7 +487,7 @@ test('optional fields survive a same-revision snapshot acknowledgement and reloa
 });
 
 test('invalid schema combinations and plan identities cannot enter local storage', () => {
-  const app = setup(), [a] = app.ids, data = app.store.getState();
+  const app = setupWithRecipes(), [a] = app.ids, data = app.store.getState();
   const zero = {id: 'log', recipeId: a, date: DATE, rating: 0};
   assert.throws(() => app.store.validateData({...data, logs: [zero]}));
   const plan = {...entry(a), id: planId(DATE, 'breakfast'), createdAt: 1, updatedAt: 1};

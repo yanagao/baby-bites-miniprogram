@@ -1,11 +1,11 @@
 'use strict';
 
-const seed = require('../data/recipes');
+const {removeUnusedStarterRecipes} = require('./retired-starter-recipes');
 const selectors = require('./selectors');
 const {normalizeCategory} = require('./categories');
 const {normalizeAgeGroups} = require('./recipe-ages');
 const {normalizeAllergies} = require('./allergies');
-const {isBuiltInRecipe} = require('./recipe-origin');
+const {isBuiltInRecipe, getBuiltInRecipe} = require('./recipe-origin');
 const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const {isValidBirthDate} = require('./baby-age');
 const {validMeal, validPlanDate, validPlanId, planId} = require('./meal-plans');
@@ -17,7 +17,7 @@ const FAMILY_PREFIX = 'baby-bites-family-cache-';
 const ALLERGY_FILTER_PREFIX = 'baby-bites-allergy-filter-v1:';
 // Bump when snapshot parsing gains fields older clients discarded. Keep this
 // beside the data in __sync: older writers drop unknown metadata on persistence.
-const SNAPSHOT_SCHEMA_VERSION = 3;
+const SNAPSHOT_SCHEMA_VERSION = 4;
 const validOwner = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 let owner = null;
 let scope = null;
@@ -54,13 +54,7 @@ function timestamp(previous) { return Math.max(Date.now(), (Number(previous) || 
 function makeId(prefix) { sequence += 1; return `${prefix}-${Date.now()}-${sequence}-${Math.random().toString(36).slice(2, 10)}`; }
 
 function freshState() {
-  const now = Date.now();
-  return {
-    version: 1, nickname: '宝宝', profileUpdatedAt: 0,
-    recipes: seed.map((recipe, index) => Object.assign(clone(recipe), {
-      isExample: true, favorite: false, photo: '', createdAt: now - index, updatedAt: 0
-    })), logs: []
-  };
+  return emptyState();
 }
 
 function validDate(value) {
@@ -221,7 +215,15 @@ function validateSync(value, fallbackHasData) {
 }
 function readAccount(value) {
   if (!isObject(value) || value.version !== 1 || !value.__sync) fail('账号缓存格式不正确，原数据未被覆盖。');
-  return {data: validateData(value.data), sync: validateSync(value.__sync, true)};
+  return retireStarterCache(validateData(value.data), validateSync(value.__sync, true));
+}
+function retireStarterCache(data, metadata) {
+  const cleaned = removeUnusedStarterRecipes(data);
+  if (cleaned === data) return {data, sync: metadata};
+  // This is catalog retirement, not a user deletion. Do not add tombstones:
+  // another device may have since edited or used the same recipe.
+  return {data: cleaned, sync: {...metadata, snapshotSchemaVersion: 0,
+    sequence: metadata.sequence + 1, dirty: metadata.dirty || metadata.hasLocalData}};
 }
 function notify() {
   listeners.forEach(listener => { try { listener(getSyncInfo()); } catch (error) { /* Storage success is independent of observers. */ } });
@@ -268,11 +270,14 @@ function init() {
       }
       state = saved == null ? freshState() : validateData(saved);
       sync = validateSync(saved && saved.__sync, saved != null);
+      const retired = retireStarterCache(state, sync);
+      state = retired.data;
+      sync = retired.sync;
     }
   } catch (error) {
     state = freshState();
     readBlocked = true;
-    warning = '未能读取本机记录，原数据未被覆盖。当前显示示例菜谱，请连接网络确认账号或导入有效备份后再保存。';
+    warning = '未能读取本机记录，原数据未被覆盖。请连接网络确认账号或导入有效备份后再保存。';
   }
   return clone(state);
 }
@@ -350,6 +355,7 @@ function bindAccount(nextOwner) {
       if (readBlocked && !claim && !owner) fail(warning);
       target = {data: freshState(), sync: freshSync()};
     }
+    target = retireStarterCache(target.data, target.sync);
     // Data first, migration claim second, active pointer last. Memory changes
     // only after all writes succeed; a retry can recover a partial migration.
     wx.setStorageSync(ACCOUNT_PREFIX + nextOwner, storageValue(target.data, target.sync, nextOwner));
@@ -453,8 +459,9 @@ function applySyncedSnapshot(snapshot, options) {
   const family = scope && scope.kind === 'family';
   const merged = editedDuringSync ? mergeSnapshots(getSyncSnapshot(), incoming, family, family && pendingFamilyPhotoIds(options.sequence)) :
     {...incoming, data: {...incoming.data, ...mergeAllergies(state, incoming.data)}};
-  const validated = validateData(merged.data);
-  const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync,
+  const incomingData = validateData(merged.data);
+  const validated = removeUnusedStarterRecipes(incomingData);
+  const nextSync = Object.assign({}, sync, {revision: options.revision, dirty: editedDuringSync || !family && validated !== incomingData,
     hasLocalData: true, snapshotSchemaVersion: SNAPSHOT_SCHEMA_VERSION, deleted: merged.deleted});
   if (family) nextSync.photoEdits = (sync.photoEdits || []).filter(edit => edit.sequence > options.sequence);
   writeState(validated, nextSync, owner);
@@ -525,6 +532,21 @@ function addPublicRecipe(input, expectedOwner) {
   // second copy. A deliberate re-add advances beyond a known deletion.
   commit(next => { next.recipes.unshift(recipe); });
   return {recipeId, added: true};
+}
+
+function addBuiltInRecipe(id, expectedOwner) {
+  init();
+  if (!validOwner(expectedOwner) || owner !== expectedOwner) fail('微信账号已切换，请重新打开这道菜谱。');
+  const original = getBuiltInRecipe(id);
+  if (!original) fail('这道内置菜谱已不存在，请重新选择。');
+  // Explicitly adding one original must not reset a previously edited copy or
+  // bring back the retired starter catalog. Its fixed ID makes retries safe.
+  if (getRecipe(id)) return {recipeId: id, added: false};
+  const deletion = sync.deleted.recipes.find(item => item.id === id);
+  const now = timestamp(deletion && deletion.updatedAt);
+  const recipe = {...original, photo: '', favorite: false, isExample: true, createdAt: now, updatedAt: now};
+  commit(next => { next.recipes.unshift(recipe); });
+  return {recipeId: id, added: true};
 }
 
 function toggleFavorite(recipeId) {
@@ -679,7 +701,7 @@ function importBackup(text, options) {
   if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) fail('备份内容为空或超过 5 MB，请选择有效的备份。');
   let parsed;
   try { parsed = JSON.parse(text); } catch (error) { fail('这个文件不是有效的 JSON 备份。'); }
-  const incoming = validateData(parsed);
+  const incoming = removeUnusedStarterRecipes(validateData(parsed));
   // Only the portable importer may request repair after a failed local-file read.
   // Re-check the exact recipe at commit time so asynchronous file work cannot
   // replace a photo or edit made since that availability check.
@@ -788,12 +810,12 @@ function importBackup(text, options) {
 
 function exportBackup() {
   init();
-  if (readBlocked) fail('本机原数据暂时无法读取，不能将示例菜谱当作原数据导出。请先恢复有效备份。');
+  if (readBlocked) fail('本机原数据暂时无法读取，不能导出备份。请先恢复有效备份。');
   return JSON.stringify(getState(), null, 2);
 }
 
 module.exports = {
-  STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe,
+  STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe, addBuiltInRecipe,
   toggleFavorite, addLog, updateLog, deleteLog, saveMealPlans, removeMealPlan, completeMeal,
   setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, pendingFamilyPhotoIds, applySyncedSnapshot,

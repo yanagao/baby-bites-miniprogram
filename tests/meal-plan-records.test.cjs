@@ -15,7 +15,7 @@ const FAMILY = {kind: 'family', id: 'c'.repeat(64), membershipId: 'd'.repeat(32)
 const clone = value => value == null ? value : JSON.parse(JSON.stringify(value));
 const tap = values => ({currentTarget: {dataset: values}});
 
-function setup() {
+function setup(recipes = []) {
   const storage = new Map(), calls = {writes: 0, navigation: [], toasts: [], plans: [], completion: [], cloud: 0};
   let failWrites = false, definition;
   const wx = {
@@ -32,6 +32,7 @@ function setup() {
   vm.runInNewContext(fs.readFileSync(storeFile, 'utf8'), {wx, module, require: createRequire(storeFile)});
   const store = module.exports;
   store.bindAccount(OWNER);
+  recipes.forEach(recipe => store.saveRecipe({...clone(recipe), id: undefined}));
   const ids = store.getState().recipes.slice(0, 3).map(recipe => recipe.id);
   const nativeSavePlans = store.saveMealPlans, nativeComplete = store.completeMeal;
   store.saveMealPlans = (...args) => {calls.plans.push(clone(args)); return nativeSavePlans(...args);};
@@ -55,8 +56,12 @@ function setup() {
   return {page, store, calls, ids, selectDay, setPlan, failWrites(value = true) {failWrites = value;}};
 }
 
+// Selection and completion scenarios need recipes deliberately saved by a user.
+const setupWithRecipes = () => setup(require('../data/recipes').slice(0, 3));
+
 test('daily meal browsing stays local and shows three empty slots without inventing plans or logs', () => {
   const app = setup(), before = app.store.getState(), writes = app.calls.writes;
+  assert.equal(app.store.getState().recipes.length, 0);
   app.page.onShow(); app.page.onShow();
   assert.deepEqual(app.page.data.rows.map(row => row.value), ['breakfast', 'lunch', 'dinner']);
   assert.ok(app.page.data.rows.every(row => row.cards.length === 0));
@@ -65,7 +70,7 @@ test('daily meal browsing stays local and shows three empty slots without invent
 });
 
 test('selecting a recipe is only a plan draft until confirmation and cancellation discards it', () => {
-  const app = setup(), [a] = app.ids, scope = app.page.data.scope;
+  const app = setupWithRecipes(), [a] = app.ids, scope = app.page.data.scope;
   const before = app.store.getState(), writes = app.calls.writes;
   app.page.choosePlan(tap({meal: 'lunch', scope}));
   app.page.selectRecipe(tap({id: a, scope}));
@@ -81,7 +86,7 @@ test('selecting a recipe is only a plan draft until confirmation and cancellatio
 });
 
 test('a failed plan save keeps the draft open and selected for a successful retry', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   app.page.choosePlan(tap({meal: 'dinner'})); app.page.selectRecipe(tap({id: a}));
   const before = app.store.getState(); app.failWrites(); app.page.savePickedPlan();
   assert.equal(app.page.data.recordPickerVisible, true); assert.equal(app.page.data.savingPlan, false);
@@ -92,7 +97,7 @@ test('a failed plan save keeps the draft open and selected for a successful retr
 });
 
 test('a same-scope concurrent plan change cannot be overwritten by an old daily draft', () => {
-  const app = setup(), [a, b, c] = app.ids;
+  const app = setupWithRecipes(), [a, b, c] = app.ids;
   app.setPlan(a); app.page.choosePlan(tap({meal: 'breakfast'})); app.page.selectRecipe(tap({id: b}));
   app.store.saveMealPlans([{date: selectors.today(), meal: 'breakfast', recipeId: c}]);
   app.page.savePickedPlan();
@@ -101,7 +106,7 @@ test('a same-scope concurrent plan change cannot be overwritten by an old daily 
 });
 
 test('a planned meal can be completed with neither rating nor portion and cannot be double-submitted', () => {
-  const app = setup(), [a] = app.ids, plan = app.setPlan(a);
+  const app = setupWithRecipes(), [a] = app.ids, plan = app.setPlan(a);
   app.page.openCompletion(tap({id: plan.id, scope: app.page.data.scope}));
   assert.equal(app.page.data.completeVisible, true); assert.equal(app.store.getState().logs.length, 0);
   assert.equal(app.page.data.completionRating, 0); assert.equal(app.page.data.completionPortion, '');
@@ -113,7 +118,7 @@ test('a planned meal can be completed with neither rating nor portion and cannot
 });
 
 test('optional completion selections can be toggled off and a failed completion preserves the form', () => {
-  const app = setup(), plan = app.setPlan();
+  const app = setupWithRecipes(), plan = app.setPlan();
   app.page.openCompletion(tap({id: plan.id}));
   app.page.rateCompletion(tap({value: 3})); app.page.rateCompletion(tap({value: 3}));
   app.page.portionCompletion(tap({value: '吃了一些'})); app.page.portionCompletion(tap({value: '吃了一些'}));
@@ -128,7 +133,7 @@ test('optional completion selections can be toggled off and a failed completion 
 });
 
 test('a displayed completion cannot record a new dish after another family member changes the plan', () => {
-  const app = setup(), [a, b] = app.ids, plan = app.setPlan(a);
+  const app = setupWithRecipes(), [a, b] = app.ids, plan = app.setPlan(a);
   app.page.openCompletion(tap({id: plan.id}));
   app.store.saveMealPlans([{date: plan.date, meal: plan.meal, recipeId: b}]);
   app.page.completeMeal();
@@ -140,7 +145,7 @@ test('a displayed completion cannot record a new dish after another family membe
 
 test('stale meal cards cannot open a completion after their plan is replaced or removed', () => {
   for (const operation of ['replace', 'remove']) {
-    const app = setup(), [a, b] = app.ids, plan = app.setPlan(a);
+    const app = setupWithRecipes(), [a, b] = app.ids, plan = app.setPlan(a);
     if (operation === 'replace') app.store.saveMealPlans([{date: plan.date, meal: plan.meal, recipeId: b}]);
     else app.store.removeMealPlan(plan.id);
     app.page.openCompletion(tap({id: plan.id}));
@@ -151,7 +156,7 @@ test('stale meal cards cannot open a completion after their plan is replaced or 
 test('account and family ABA changes clear pending completion and draft even after returning to the same scope', () => {
   for (const change of ['account', 'family']) {
     for (const modal of ['complete', 'picker']) {
-      const app = setup(), [a, b] = app.ids, plan = app.setPlan(a);
+      const app = setupWithRecipes(), [a, b] = app.ids, plan = app.setPlan(a);
       if (modal === 'complete') app.page.openCompletion(tap({id: plan.id}));
       else {app.page.choosePlan(tap({meal: 'breakfast'})); app.page.selectRecipe(tap({id: b}));}
       if (change === 'account') {app.store.bindAccount(OTHER); app.store.bindAccount(OWNER);}
@@ -166,7 +171,7 @@ test('account and family ABA changes clear pending completion and draft even aft
 });
 
 test('an event from another displayed account cannot open or submit a meal action', () => {
-  const app = setup(), plan = app.setPlan(), oldScope = app.page.data.scope;
+  const app = setupWithRecipes(), plan = app.setPlan(), oldScope = app.page.data.scope;
   app.store.bindAccount(OTHER); app.page.refresh();
   app.page.choosePlan(tap({meal: 'lunch', scope: oldScope}));
   app.page.openRecordPicker(tap({scope: oldScope}));
@@ -176,7 +181,7 @@ test('an event from another displayed account cannot open or submit a meal actio
 });
 
 test('unplanned recording carries the chosen date and meal and leaves planning untouched', () => {
-  const app = setup(), [a] = app.ids;
+  const app = setupWithRecipes(), [a] = app.ids;
   const date = calendar.shiftDate(selectors.today(), -2); app.selectDay(date);
   app.page.openRecordPicker(); app.page.choosePickerMeal(tap({meal: 'dinner'}));
   app.page.selectRecipe(tap({id: a}));
@@ -185,7 +190,7 @@ test('unplanned recording carries the chosen date and meal and leaves planning u
 });
 
 test('future dates support choosing a plan but do not offer meal completion or an eaten record', () => {
-  const app = setup(), [a] = app.ids, date = calendar.shiftDate(selectors.today(), 1);
+  const app = setupWithRecipes(), [a] = app.ids, date = calendar.shiftDate(selectors.today(), 1);
   const plan = app.setPlan(a, 'breakfast', date); app.selectDay(date);
   app.page.openRecordPicker(); app.page.openCompletion(tap({id: plan.id}));
   assert.equal(app.page.data.future, true); assert.equal(app.page.data.recordPickerVisible, false);
@@ -195,7 +200,7 @@ test('future dates support choosing a plan but do not offer meal completion or a
 });
 
 test('historical records with no meal remain visible without being assigned a guessed breakfast lunch or dinner', () => {
-  const app = setup(), [a, b] = app.ids, date = selectors.today();
+  const app = setupWithRecipes(), [a, b] = app.ids, date = selectors.today();
   const legacy = app.store.addLog({recipeId: a, date, rating: 3});
   const lunch = app.store.addLog({recipeId: b, date, meal: 'lunch', rating: 0});
   app.page.refresh();
@@ -207,7 +212,7 @@ test('historical records with no meal remain visible without being assigned a gu
 });
 
 test('changing date cancels the old meal context and unloading blocks leftover action handlers', () => {
-  const app = setup(), [a] = app.ids, plan = app.setPlan(a);
+  const app = setupWithRecipes(), [a] = app.ids, plan = app.setPlan(a);
   app.page.openCompletion(tap({id: plan.id})); app.selectDay(calendar.shiftDate(selectors.today(), -1));
   assert.equal(app.page.data.completeVisible, false); app.page.completeMeal(); assert.equal(app.calls.completion.length, 0);
   app.page.choosePlan(tap({meal: 'dinner'})); app.page.selectRecipe(tap({id: a}));

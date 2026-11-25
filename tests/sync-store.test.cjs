@@ -1,7 +1,6 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const seed = require('../data/recipes');
 const path = require('node:path');
 const {mergeSnapshots} = require('../utils/sync-merge');
 const storePath = path.resolve(__dirname, '../utils/store.js');
@@ -33,12 +32,13 @@ function setup(initial = {}) {
   return {store: reload(), reload, saved, fail: name => { failKey = name; }, writes: () => writes};
 }
 function baseline() {
-  const app = setup();
-  return app.store.getState();
+  return dataWith([oneRecipe('saved-recipe', 1)]);
 }
 function snapshot(data, deleted = {recipes: [], logs: []}) { return {version: 1, data: copy(data), deleted: copy(deleted)}; }
 function oneRecipe(id, updatedAt, name = id) {
-  return Object.assign(baseline().recipes[0], {id, name, isExample: false, createdAt: 1, updatedAt});
+  return {id, name, category: '粥饭主食', minutes: 20, texture: '软烂颗粒',
+    ingredients: [{name: '南瓜', amount: '20 克'}], steps: ['切碎蒸熟。'],
+    note: '', photo: '', imageKey: '', favorite: false, isExample: false, createdAt: 1, updatedAt};
 }
 function empty() { return {version: 1, nickname: '宝宝', profileUpdatedAt: 0, recipes: [], logs: []}; }
 function dataWith(recipes) { return Object.assign(empty(), {recipes}); }
@@ -247,7 +247,7 @@ test('only a successfully persisted complete snapshot certifies its account cach
   const app = setup({[ACTIVE]: A, [key(A)]: accountCache()});
   app.store.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(app.store.getSyncInfo().snapshotCurrent, true);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 4);
   assert.deepEqual(app.reload().getState().allergies, ['鸡蛋']);
   const restarted = app.reload();
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
@@ -283,11 +283,11 @@ test('failed snapshot persistence keeps the unverified marker and data atomic un
   restarted.applySyncedSnapshot(snapshot(data), {owner: A, sequence: 0, revision: 3});
   assert.equal(restarted.getSyncInfo().snapshotCurrent, true);
   assert.deepEqual(restarted.getState().allergies, ['牛奶']);
-  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 3);
+  assert.equal(app.saved[key(A)].__sync.snapshotSchemaVersion, 4);
 });
 
 test('missing, unknown and malformed parser versions remain readable but cannot certify completeness', () => {
-  for (const version of [undefined, 0, 1, 2, 4, '3', null, -1, true, {}]) {
+  for (const version of [undefined, 0, 1, 2, 3, 5, '4', null, -1, true, {}]) {
     const data = {...empty(), allergies: ['花生'], allergiesUpdatedAt: 100};
     const app = setup({[ACTIVE]: A, [key(A)]: accountCache(data, version)});
     assert.equal(app.store.getSyncInfo().blocked, false);
@@ -329,14 +329,14 @@ test('recipe age metadata survives sync merge, account restore and explicit clea
   assert.equal(fresh.store.getRecipe(tagged.id), null);
 });
 
-test('new-device examples are not included in upload and legacy migration preserves identities and dates', () => {
+test('new devices have empty cookbooks and legacy migration preserves saved identities and dates', () => {
   const original = baseline();
   const fresh = setup();
-  assert.equal(fresh.store.getState().recipes.length, seed.length);
+  assert.deepEqual(fresh.store.getState().recipes, []);
   assert.equal(fresh.store.getSyncInfo().hasLocalData, false);
   assert.deepEqual(fresh.store.getSyncSnapshot().data.recipes, []);
   fresh.store.bindAccount(A);
-  assert.equal(fresh.store.getState().recipes.length, seed.length);
+  assert.deepEqual(fresh.store.getState().recipes, []);
   assert.deepEqual(fresh.store.getSyncSnapshot().data.recipes, []);
   const app = setup({[LEGACY]: original});
   app.store.bindAccount(A);
@@ -511,7 +511,7 @@ test('deletions win ties and cascade even through independently added newer meal
 
 test('cloud file IDs are accepted, but traversal, external URLs and malformed IDs are rejected', () => {
   const app = setup();
-  const base = app.store.getState();
+  const base = baseline();
   for (const photo of ['cloud://env-123.bucket-456/baby-bites/user/photo.jpg', 'cloud://env.bucket/photo_1.png']) {
     base.recipes[0].photo = photo;
     assert.equal(app.store.validateData(base).recipes[0].photo, photo);

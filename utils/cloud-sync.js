@@ -3,6 +3,7 @@
 const config = require('../config/cloud');
 const store = require('./store');
 const {mergeSnapshots} = require('./sync-merge');
+const {removeUnusedStarterRecipes} = require('./retired-starter-recipes');
 const publicationSync = require('./publication-sync');
 const {prepareRecipePhoto} = require('./recipe-photo');
 const MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024;
@@ -329,6 +330,11 @@ async function synchronize() {
       require('./family-photos').install(remoteInfo.photoURLs, synchronizingScopeKey);
     } else remote = remoteInfo.fileID ? await downloadSnapshot(remoteInfo.fileID, owner) : emptySnapshot();
     const snapshot = mergeSnapshots(local, remote, scope.kind === 'family', editedPhotoIds);
+    // Retire only after merging, so remote edits and meal references can keep
+    // a formerly bundled recipe. The family server treats omitted items as
+    // deletions: retain its compatibility rows on upload and retire them only
+    // in the local store, avoiding tombstones that erase offline meal history.
+    if (scope.kind !== 'family') snapshot.data = removeUnusedStarterRecipes(snapshot.data);
     await uploadPhotos(snapshot, owner, uploadedPhotos);
     assertOwner(owner);
     if (remoteInfo.fileID && stableJSON(snapshot) === stableJSON(mergeSnapshots(remote, remote))) {

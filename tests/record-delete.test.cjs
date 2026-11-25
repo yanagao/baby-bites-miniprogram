@@ -37,6 +37,7 @@ function setup() {
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './retired-starter-recipes') return require('../utils/retired-starter-recipes');
       if (name === './baby-age') return require('../utils/baby-age');
       if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './allergies') return require('../utils/allergies');
@@ -50,7 +51,7 @@ function setup() {
     if (duringDelete) duringDelete();
     return deleteLog(id);
   };
-  const recipeId = store.getState().recipes[0].id;
+  const recipeId = store.saveRecipe({...copy(seed[0]), id: undefined, isExample: false});
   const logId = store.addLog({ recipeId, rating: 2, date: '2020-01-01', portion: '光盘啦', note: '原备注' });
   const otherLogId = store.addLog({ recipeId, rating: 3, date: '2020-01-02', note: '' });
   function open(options = { logId }) {

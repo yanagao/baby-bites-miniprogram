@@ -9,6 +9,12 @@ const scopeOf = () => { const info = store.getSyncInfo(); return info.scopeKey |
 
 Page({
   onShareAppMessage() {
+    if (this.checkDayShare()) {
+      const share = this._dayShare;
+      return {title: calendar.dayLabel(share.date) + '餐单 · ' + share.author.name,
+        path: '/pages/public-meal-plan/index?profileId=' + share.author.id + '&date=' + share.date,
+        imageUrl: '/assets/cute/pocket-mascot.png'};
+    }
     return {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
   },
   data: {
@@ -16,6 +22,7 @@ Page({
     filter: 'all', selectedDate: '', today: '', weekStart: '', days: [], rows: [],
     monthLabel: '', selectedLabel: '', latestDate: '', canNextWeek: true, scope: '',
     familyActive: false, nickname: '宝宝', plannedCount: 0, planStatus: '', future: false,
+    dayShareVisible: false, dayShareLoading: false, dayShareError: '', dayShareMeals: [], dayShareLabel: '',
     recordPickerVisible: false, pickerMode: 'record', pickerMeal: 'breakfast', pickerMealLabel: '早餐',
     pickerSearch: '', pickerRecipes: [], pickerSelected: '', pickerDate: '', savingPlan: false, mealOptions: MEALS,
     completeVisible: false, completion: null, completionRating: 0, completionPortion: '', completing: false,
@@ -24,21 +31,22 @@ Page({
     filters: [{value: 'all', name: '全部'}, {value: '3', name: '很喜欢'}, {value: '2', name: '还不错'}, {value: '1', name: '不太喜欢'}]
   },
   onLoad() {
-    this._disposed = false; this._scope = scopeOf();
-    this._unsubscribe = store.subscribe(() => this.checkScope());
+    this._disposed = false; this._scope = scopeOf(); this._dayShareRequest = 0;
+    this._unsubscribe = store.subscribe(() => { this.checkScope(); this.checkDayShare(); });
   },
   onShow() { syncTabBar(this); this.refresh(); },
   onReady() { syncTabBar(this); },
-  onUnload() { this._disposed = true; if (this._unsubscribe) this._unsubscribe(); },
+  onUnload() { this._disposed = true; this._dayShareRequest++; this._dayShare = null; if (this._unsubscribe) this._unsubscribe(); },
   checkScope() {
     if (this._disposed) return false;
     const scope = scopeOf();
     if (this._scope === undefined) this._scope = scope;
     if (scope !== this._scope) {
+      this._dayShareRequest++; this._dayShare = null;
       this._scope = scope; this._pickerBase = null; this._pendingScope = null;
       this.setData({recordPickerVisible: false, completeVisible: false, completion: null,
         pickerRecipes: [], pickerSearch: '', pickerSelected: '', selectedDate: '', filter: 'all',
-        error: '', savingPlan: false, completing: false});
+        error: '', savingPlan: false, completing: false, dayShareVisible: false, dayShareLoading: false, dayShareMeals: [], dayShareError: ''});
       return false;
     }
     return true;
@@ -55,6 +63,7 @@ Page({
       const state = store.getState(), info = store.getSyncInfo(), today = selectors.today();
       const followToday = !this.data.selectedDate || this.data.selectedDate === this.data.today;
       const selectedDate = followToday ? today : this.data.selectedDate;
+      if (selectedDate !== this.data.selectedDate && this.data.dayShareVisible) this.closeDayShare();
       const start = calendar.weekStart(selectedDate);
       const allLogs = selectors.listLogs(state, 'all');
       const dayLogs = allLogs.filter(log => log.date === selectedDate);
@@ -94,7 +103,7 @@ Page({
   chooseDay(event) {
     const date = dataset(event).date;
     if (!calendar.parseDate(date) || !this.currentEvent(event)) return;
-    this.closeRecordPicker(); this.closeCompletion();
+    this.closeRecordPicker(); this.closeCompletion(); this.closeDayShare();
     this.setData({selectedDate: date, filter: 'all', error: ''}); this.refresh();
   },
   changeCalendarDate(event) { this.chooseDay({currentTarget: {dataset: {date: event.detail.value}}}); },
@@ -112,6 +121,7 @@ Page({
   goToday() { this.chooseDay({currentTarget: {dataset: {date: selectors.today()}}}); },
   selectConfirmedDate(date, scope) {
     if (this.checkScope() && scope === scopeOf() && calendar.parseDate(date)) {
+      if (date !== this.data.selectedDate) this.closeDayShare();
       this.setData({selectedDate: date, filter: 'all', error: ''}); this.refresh();
     }
   },
@@ -120,6 +130,43 @@ Page({
     const start = this.data.selectedDate < selectors.today() ? selectors.today() : this.data.selectedDate;
     wx.navigateTo({url: '/pages/meal-plan/index?start=' + start});
   },
+  checkDayShare() {
+    if (!this._dayShare) return false;
+    const share = this._dayShare;
+    const current = !this._disposed && share.scope === scopeOf() && share.date === this.data.selectedDate &&
+      !store.getSyncInfo().dirty && require('../../utils/public-meal-plans').dayVersion(store.getState(), share.date) === share.localVersion;
+    if (!current) {
+      this._dayShare = null;
+      if (!this._disposed && this.data.dayShareVisible) this.setData({dayShareMeals: [], dayShareError: '餐单已有更新，请重新准备分享。'});
+    }
+    return current;
+  },
+  async openDayShare() {
+    if (!this.checkScope() || this._disposed || this.data.dayShareLoading) return;
+    const date = this.data.selectedDate;
+    if (!(store.getState().mealPlans || []).some(plan => plan.date === date)) {
+      wx.showToast({title: '先安排这一天的餐单', icon: 'none'}); return;
+    }
+    const request = ++this._dayShareRequest, scope = scopeOf();
+    this._dayShare = null;
+    this.setData({dayShareVisible: true, dayShareLoading: true, dayShareError: '', dayShareMeals: [], dayShareLabel: calendar.dayLabel(date)});
+    const current = () => !this._disposed && request === this._dayShareRequest && scope === scopeOf() && date === this.data.selectedDate;
+    try {
+      const result = await require('../../utils/social').getMealPlanShareLink(date);
+      if (!current()) return;
+      this._dayShare = {...result, scope};
+      if (!this.checkDayShare()) return;
+      this.setData({dayShareMeals: result.meals.map(meal => ({meal: meal.meal, label: meal.label,
+        name: meal.recipe ? meal.recipe.name : '菜谱暂不可查看'}))});
+    } catch (error) {
+      if (current()) this.setData({dayShareError: error.userMessage || error.message || '餐单暂时无法分享，请重试。'});
+    } finally { if (current()) this.setData({dayShareLoading: false}); }
+  },
+  closeDayShare() {
+    this._dayShareRequest++; this._dayShare = null;
+    this.setData({dayShareVisible: false, dayShareLoading: false, dayShareError: '', dayShareMeals: []});
+  },
+  dayShareChange(event) { if (!event.detail.visible) this.closeDayShare(); },
   openRecordPicker(event) {
     if (!this.currentEvent(event) || this.data.selectedDate > selectors.today()) return;
     const meal = validMeal(dataset(event).meal) ? dataset(event).meal : 'breakfast';
