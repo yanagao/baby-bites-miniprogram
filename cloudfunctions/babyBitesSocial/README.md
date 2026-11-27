@@ -1,5 +1,13 @@
 # 小口袋公开主页与关注
 
+## 自定义头像（2026-11-27 已部署）
+
+`updateProfile` 新增可选 `avatarFileID`；省略时保留事务中最新头像，暂不支持清除头像。客户端使用微信 `chooseAvatar` 选图，在用户保存资料时上传到本人 `users/<owner>/photos/avatar-<unique>.jpg|png`。服务端只接受可信调用账号和当前云环境下的该路径，并按实际图片字节校验 JPG/PNG、大小不超过 1 MiB、宽高不超过 750 像素；随后使用已有 `security.imgSecCheck` 权限审核。文本及头像审核都通过后，才复制到服务端管理的 `social/<profileId>/avatars/<unique>.jpg|png`，与同次资料修改一并写入主页。拒绝或审核不可用不会覆盖原头像或保存此次资料，错误码分别为 `PROFILE_AVATAR_REJECTED`、`PROFILE_AVATAR_MODERATION_UNAVAILABLE`；文件校验失败为 `INVALID_PROFILE_AVATAR`。`checkProfile` 可校验同一输入，但不复制图片、不写主页，不能作为后续保存的审核凭据。
+
+含头像的保存成功响应额外返回 `avatarUpdated:true`，供新版客户端识别后端支持，避免旧后端忽略字段后误报头像保存成功。普通资料保存不包含该标识。`profile`、`author`、关注/粉丝列表增加可选 `avatarURL`，公开菜谱（包括发现、关注动态和旧分享预览）增加可选 `authorAvatarURL`，跟做作者使用 `author.avatarURL`，互动列表使用 `actorAvatarURL`。所有头像取自当前公开主页，已发布菜谱无需重发。仅签发经过所属主页公开路径校验的 300 秒 HTTPS 地址，原始 `avatarFileID` 和私有上传路径不进入公开 DTO；同一次请求内复用签名，签名失败或旧数据无头像时省略头像字段，客户端显示默认图。
+
+资料保存与分享码事务均保留并发完成的头像修改。保留既有存储权限；不新增集合、索引或开放目录规则。`profile-avatar.js` 已与本目录完整代码一起部署，云函数 Active，13 个运行文件下载回验一致；旧源码已备份，见[核验记录](../../../output/avatar-service-20261127/verification.json)。当前模拟器已成功保存用户所选头像并重新读取显示；客户端 1.8.0 已上传开发版，跨账号查看与物理真机仍需验收。
+
 ## 当日餐单与公开安排（2026-11-25 已部署，客户端 1.7.0 待审核发布）
 
 新增 `meal-plans.js` 与 `meal-plan-catalog.js`，需与本目录完整代码一同部署。沿用既有账户、家庭、公开主页及公开菜谱集合，无新增集合/索引或文件权限。Social 已于 2026-11-25 部署并核验 Active，下载的 12 个运行文件与本地一致；客户端 1.7.0 已上传开发版本，待审核发布，旧客户端接口保持兼容。见[核验报告](../../../output/release-1.7.0/verification.json)。
@@ -84,7 +92,7 @@
 | action | 参数 | 返回 |
 | --- | --- | --- |
 | `mine` | 无 | `{profile,published,publishedCount,followingCount,followerCount}` |
-| `updateProfile` | `name,bio,babyBirthDate?`（兼容旧 `babyAgeMonths?`） | `{profile}` |
+| `updateProfile` | `name,bio,babyBirthDate?,avatarFileID?`（兼容旧 `babyAgeMonths?`） | `{profile,avatarUpdated?:true}` |
 | `checkProfile` | 同 `updateProfile`，只校验与审核 | `{validated:true,saved:false}` |
 | `profile` | `profileId,offset?` | `{profile,isSelf,following,followedBy,publishedCount,followingCount,followerCount,recipes,nextOffset}` |
 | `profileSummary` | `profileId` | `{profile,isSelf,following,followedBy}`；不查询菜谱或统计，用于详情页作者关系 |

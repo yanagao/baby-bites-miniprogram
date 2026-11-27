@@ -1,0 +1,6 @@
+{
+  "collections": [
+    {"name": "baby_bites_analysis_grants", "permissions": {"read": false, "write": false}}
+  ],
+  "indexes": []
+}

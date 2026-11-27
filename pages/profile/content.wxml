@@ -10,7 +10,7 @@
 <view wx:elif="{{loading && !isSelf}}" class="profile-state muted">正在打开口袋主页…</view>
 <view wx:else class="profile-sheet">
   <view class="profile-identity">
-    <button class="profile-avatar-button" bindtap="edit" disabled="{{!isSelf || loading}}" aria-label="{{isSelf ? '编辑我的主页' : '用户头像'}}"><image class="profile-avatar" src="{{avatarPath}}" mode="aspectFit" /></button>
+    <button class="profile-avatar-button" bindtap="edit" disabled="{{!isSelf || loading}}" aria-label="{{isSelf ? '修改头像和资料' : '用户头像'}}"><image class="profile-avatar" src="{{avatarPath}}" mode="aspectFill" data-id="{{profile.id}}" data-url="{{avatarPath}}" binderror="avatarError" /></button>
     <view class="profile-name">{{profile && profile.name ? profile.name : isSelf ? '我的小口袋' : ''}}</view>
     <button wx:if="{{isSelf && (socialEnabled || familyActive)}}" class="profile-baby-age profile-baby-age-edit" bindtap="edit" disabled="{{loading || (!profile && !familyActive)}}" aria-label="设置宝宝生日">{{babyAgeLabel || '设置宝宝生日'}}<t-icon name="chevron-right" size="24rpx" /></button>
     <view wx:elif="{{babyAgeLabel}}" class="profile-baby-age">{{babyAgeLabel}}</view>
@@ -54,6 +54,11 @@
     <scroll-view class="profile-edit-scroll" scroll-y enhanced show-scrollbar="{{false}}">
       <view class="profile-edit-fields">
         <view wx:if="{{socialEnabled && !profile}}" class="profile-edit-offline muted">{{familyActive ? '公开主页暂时离线，家庭宝宝资料仍可保存' : '联网后可编辑生日与主页资料'}}</view>
+        <button wx:if="{{socialEnabled}}" class="profile-avatar-picker" open-type="chooseAvatar" bindchooseavatar="chooseAvatar" disabled="{{saving || !profile}}" data-edit-token="{{avatarEditToken}}" data-profile-id="{{profile.id}}" aria-label="更换头像">
+          <image class="profile-avatar-preview" src="{{avatarDraftPath || avatarPath}}" mode="aspectFill" data-id="{{profile.id}}" data-url="{{avatarDraftPath || avatarPath}}" data-edit-token="{{avatarEditToken}}" binderror="avatarPreviewError" />
+          <view class="profile-avatar-picker-copy"><text>更换头像</text><text class="profile-avatar-picker-hint">{{avatarDraftPath ? '已选择，保存后生效' : '选择你喜欢的照片'}}</text></view>
+          <t-icon name="chevron-right" size="30rpx" />
+        </button>
         <view wx:if="{{socialEnabled}}" class="profile-field-card {{saving || !profile ? 'profile-field-disabled' : ''}}">
           <t-input label="昵称" layout="vertical" borderless value="{{name}}" maxlength="20" disabled="{{saving || !profile}}" bind:change="changeName" placeholder="想让好友怎么称呼你" />
         </view>
@@ -69,14 +74,14 @@
           <view wx:if="{{socialEnabled}}" class="profile-field-card {{saving || !profile ? 'profile-field-disabled' : ''}}">
             <t-textarea label="一句介绍 · 选填" value="{{bio}}" maxlength="120" indicator disabled="{{saving || !profile}}" bind:change="changeBio" placeholder="分享你的小厨房日常" autosize fixed />
           </view>
-          <view wx:if="{{socialEnabled}}" class="profile-edit-note muted">昵称和介绍审核通过后会展示在分享后的主页。{{familyActive ? '收藏和用餐记录仅家庭内可见。' : '收藏和用餐记录仅自己可见。'}}</view>
+          <view wx:if="{{socialEnabled}}" class="profile-edit-note muted">头像、昵称和介绍会展示在分享后的主页。{{familyActive ? '收藏和用餐记录仅家庭内可见。' : '收藏和用餐记录仅自己可见。'}}</view>
         </block>
         <view wx:else class="profile-edit-note muted">{{familyActive ? '宝宝称呼和生日在家庭内共享，用于首页问候和宝宝月龄。' : '宝宝称呼仅自己可见，用于首页问候。'}}</view>
       </view>
     </scroll-view>
     <view class="profile-edit-footer">
       <view wx:if="{{profileSaveError || babyNicknameError}}" class="profile-edit-error" role="alert">{{profileSaveError || babyNicknameError}}</view>
-      <t-button theme="primary" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">{{saving ? (profileModerating ? '正在审核并保存…' : '正在保存…') : '保存资料'}}</t-button>
+      <t-button theme="primary" block loading="{{saving}}" disabled="{{saving}}" bind:tap="save">{{saving ? '保存中' : '保存资料'}}</t-button>
     </view>
   </view>
 </t-popup>
@@ -85,7 +90,7 @@
     <view class="profile-share-heading"><text>分享主页</text><button bindtap="closeShare" aria-label="关闭分享"><t-icon name="close" size="34rpx" /></button></view>
     <scroll-view class="profile-share-scroll" scroll-y enhanced show-scrollbar="{{false}}">
       <image wx:if="{{posterPath}}" src="{{posterPath}}" class="profile-share-image" mode="widthFix" show-menu-by-longpress bindtap="previewPoster" aria-label="长按识别或保存主页分享图" />
-      <view wx:else class="profile-share-placeholder"><image src="{{avatarPath}}" mode="aspectFit" /><view class="profile-share-name">{{profile.name}}</view><view class="muted">{{shareLoading ? '正在准备主页分享码…' : '分享我的口袋小厨房'}}</view></view>
+      <view wx:else class="profile-share-placeholder"><image src="{{avatarPath}}" mode="aspectFill" data-id="{{profile.id}}" data-url="{{avatarPath}}" binderror="avatarError" /><view class="profile-share-name">{{profile.name}}</view><view class="muted">{{shareLoading ? '正在准备主页分享码…' : '分享我的口袋小厨房'}}</view></view>
       <view wx:if="{{shareError}}" class="profile-share-note muted">{{shareError}}</view>
     </scroll-view>
     <view class="profile-share-actions"><t-button wx:if="{{posterPath}}" theme="primary" block disabled="{{savingPoster}}" loading="{{savingPoster}}" bind:tap="savePoster">保存分享图</t-button><t-button wx:elif="{{!shareLoading}}" theme="primary" block bind:tap="openShare">重新生成分享图</t-button><t-button theme="primary" variant="text" block open-type="share">发送给朋友</t-button><t-button wx:if="{{albumDenied}}" theme="primary" variant="text" size="small" bind:tap="albumSettings">设置相册权限</t-button></view>

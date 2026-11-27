@@ -16,7 +16,7 @@ function setup(options = {}, overrides = {}) {
   let owner = 'owner-a';
   const listeners = new Set(), waiting = new Map();
   const calls = {mine: 0, profiles: [], codes: [], downloads: [], removals: [], saves: [], settings: 0,
-    previews: [], toasts: [], updates: 0, errors: [], exported: [], text: [], textDraws: [], imageInfo: [], images: [], fills: [], gradients: [], circles: []};
+    previews: [], toasts: [], updates: 0, errors: [], exported: [], text: [], textDraws: [], imageInfo: [], images: [], fills: [], gradients: [], circles: [], clips: 0};
   let hold = overrides.hold;
   function boundary(stage, options, result) {
     if (hold === stage) waiting.set(stage, () => options.success(result));
@@ -24,6 +24,7 @@ function setup(options = {}, overrides = {}) {
   }
   let fillStyle;
   const context = {
+    save() {}, restore() {}, clip() { calls.clips++; },
     setFillStyle(value) { fillStyle = value; },
     fillRect(x, y, width, height) { calls.fills.push({x, y, width, height, fillStyle}); },
     drawImage(source, x, y, width, height) { calls.images.push({source, x, y, width, height}); },
@@ -132,6 +133,51 @@ test('poster normalizes iOS packaged image paths without corrupting absolute tem
     assert.equal(calls.images[0].width, calls.images[0].height, 'the square avatar must keep its aspect ratio');
     assert.deepEqual(calls.saves, []);
   });
+});
+
+test('posters crop custom avatars to a circle and never crop or replace the QR code', async () => {
+  const avatarURL = 'https://example.test/avatar.png';
+  const {poster, page, calls} = setup({}, {wx: {getImageInfo(options) {
+    options.success({path: 'wxfile://tmp/custom-avatar.png', width: 240, height: 120});
+  }}});
+  await poster.render(page, {profile: {...profile, avatarURL}, codeURL: 'https://example.test/code.png', envVersion: 'release'}, () => {});
+  assert.equal(calls.clips, 1);
+  assert.deepEqual(calls.images[0], {source: 'wxfile://tmp/custom-avatar.png', x: 190, y: 109, width: 220, height: 110});
+  assert.deepEqual(calls.images[1], {source: '/tmp/code.png', x: 113, y: 369, width: 374, height: 374});
+});
+
+test('a failed custom avatar falls back to the stable packaged image without blocking poster generation', async () => {
+  const avatarURL = 'https://example.test/unavailable.png', requests = [];
+  const {poster, page, calls} = setup({}, {wx: {getImageInfo(options) {
+    requests.push(options.src);
+    if (options.src === avatarURL) options.fail({errMsg: 'download failed'});
+    else options.success({path: options.src, width: 100, height: 100});
+  }}});
+  const result = await poster.render(page, {profile: {...profile, avatarURL}, codeURL: 'https://example.test/code.png'}, () => {});
+  assert.equal(result, '/tmp/poster.png');
+  assert.deepEqual(requests, [avatarURL, getProfileAvatar(profile.id)]);
+  assert.equal(calls.images[0].source, getProfileAvatar(profile.id));
+  assert.deepEqual(calls.removals, ['/tmp/code.png']);
+});
+
+test('new poster generations use the new avatar URL and an expired guard stops avatar fallback work', async () => {
+  const requests = [], changed = deferred(); let current = true;
+  const {poster, page, calls} = setup({}, {wx: {getImageInfo(options) {
+    requests.push(options.src);
+    if (options.src.endsWith('/pending.png')) { changed.promise.then(() => options.fail({errMsg: 'download failed'})); return; }
+    options.success({path: 'wxfile://tmp/' + requests.length + '.png'});
+  }}});
+  for (const filename of ['first.png', 'second.png']) {
+    await poster.render(page, {profile: {...profile, avatarURL: 'https://example.test/' + filename}, codeURL: 'https://example.test/code.png'}, () => {});
+  }
+  assert.deepEqual(requests, ['https://example.test/first.png', 'https://example.test/second.png']);
+  assert.notEqual(calls.images[0].source, calls.images[2].source);
+  const pending = poster.render(page, {profile: {...profile, avatarURL: 'https://example.test/pending.png'}, codeURL: 'https://example.test/code.png'}, () => {
+    if (!current) throw Error('页面已关闭');
+  });
+  await turn(); current = false; changed.resolve();
+  await assert.rejects(pending, /页面已关闭/);
+  assert.equal(requests.length, 3, 'a canceled generation must not fetch the fallback for an old session');
 });
 
 test('own and visitor profile share posters use their stable avatar while the downloaded QR remains untouched', async t => {

@@ -5,6 +5,7 @@ const {ownedFile, validateSnapshot, normalizeAgeGroups, reject} = require('./pri
 const {getImageKey, isBuiltinRecipeId} = require('./recipe-covers');
 const {todayString, isValidBirthDate, ageInMonths} = require('./baby-age');
 const {checkProfile} = require('./profile-moderation');
+const {validateAvatarFile, avatarFields, readCheckedAvatar, copyAvatar, createAvatarReader} = require('./profile-avatar');
 const {ACTIONS: FEEDBACK_ACTIONS, createFeedback} = require('./feedback');
 const {createFamily, COLLECTIONS: FAMILY_COLLECTIONS, scopeKey, personalScope} = require('./family');
 const {ACTIONS: MEAL_PLAN_ACTIONS, createMealPlans} = require('./meal-plans');
@@ -236,7 +237,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     return check;
   }
 
-  async function renderRecipe(recipe, env, knownAuthor, isBuiltin = builtinChecker()) {
+  async function renderRecipe(recipe, env, knownAuthor, isBuiltin = builtinChecker(), avatarURLFor) {
     const author = knownAuthor || await profile(recipe && recipe.profileId);
     if (!isPublished(recipe, author) || await isBuiltin(recipe)) return null;
     const ageGroups = normalizeAgeGroups(recipe.ageGroups);
@@ -253,6 +254,8 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     if (recipe.source) result.source = {
       profileId: recipe.source.profileId, recipeId: recipe.source.recipeId, authorName: recipe.source.authorName
     };
+    const authorAvatarURL = avatarURLFor && await avatarURLFor(author);
+    if (authorAvatarURL) result.authorAvatarURL = authorAvatarURL;
     if (recipe.photoFileID) {
       if (!socialPhoto(recipe.photoFileID, env, author._id, recipe._id)) reject('公开照片暂时不可用。', 'INVALID_PHOTO');
       const response = await cloud.getTempFileURL({fileList: [{fileID: recipe.photoFileID, maxAge: PHOTO_TTL}]});
@@ -270,7 +273,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
     return result;
   }
 
-  async function renderPage(records, env, knownAuthors = [], isBuiltin = builtinChecker()) {
+  async function renderPage(records, env, knownAuthors = [], isBuiltin = builtinChecker(), avatarURLFor) {
     // Reuse validated authors only inside this request; account and publication
     // permissions are still read afresh on the next request.
     const authorCache = new Map(knownAuthors);
@@ -278,7 +281,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       authorCache.set(id, await profile(id));
     }));
     const results = await Promise.all(records.map(item => authorCache.get(item.profileId) ?
-      renderRecipe(item, env, authorCache.get(item.profileId), isBuiltin) : null));
+      renderRecipe(item, env, authorCache.get(item.profileId), isBuiltin, avatarURLFor) : null));
     const recipes = [];
     let bytes = 0;
     let consumed = 0;
@@ -542,7 +545,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
   const feedback = createFeedback({cloud, db, get, write, collection, profile, isPublished, profileIdFor,
     defaultProfileName, committedSnapshot, activeRecipe, assertCommitted, publicInventory, now, unique});
   const mealPlans = createMealPlans({get, profile, profileIdFor, recipeIdFor, isPublished, renderRecipe,
-    committedSnapshot, activeRecipe, publicProfile, scopeKey, isProfileId, pageOffset, reject,
+    committedSnapshot, activeRecipe, scopeKey, isProfileId, pageOffset, reject,
     assertCommitted: (owner, account, readOnly) => assertCommitted(readOnly ? readOnlyDatabase : db, owner, account),
     async ensureProfile(owner, account) {
       await db.runTransaction(async transaction => {
@@ -568,6 +571,13 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       const ownProfileId = profileIdFor(owner);
       const today = todayString(now());
       const isBuiltin = builtinChecker();
+      const avatarURLFor = createAvatarReader(cloud, ENV);
+      const renderProfile = async (record, includeBirthDate = false) => {
+        const result = publicProfile(record, today, includeBirthDate);
+        const avatarURL = await avatarURLFor(record);
+        if (avatarURL) result.avatarURL = avatarURL;
+        return result;
+      };
       const scopedActions = ['mine', 'previewPublication', 'familyRecipeLink', 'publish', 'updatePublished', 'unpublish', 'syncPublications',
         'follow', 'shareCode', 'recordSave', 'addCooksnap', 'deleteCooksnap', 'shareMealPlan'];
       const scopeDatabase = event.action === 'profileMealPlans' || event.action === 'mealPlan' ? readOnlyDatabase : db;
@@ -578,9 +588,9 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
       }
 
       const assertScope = transaction => scopeState ? families.current(owner, ENV, scopeState.scope, transaction || scopeDatabase) : Promise.resolve();
-      if (FEEDBACK_ACTIONS.has(event.action)) return await feedback(event, {owner, env: ENV, openid: OPENID, isBuiltin, assertScope,
+      if (FEEDBACK_ACTIONS.has(event.action)) return await feedback(event, {owner, env: ENV, openid: OPENID, isBuiltin, assertScope, avatarURLFor,
         expectedScope: scopeState && scopeState.scope});
-      if (MEAL_PLAN_ACTIONS.has(event.action)) return await mealPlans(event, {owner, env: ENV, today, isBuiltin, assertScope,
+      if (MEAL_PLAN_ACTIONS.has(event.action)) return await mealPlans(event, {owner, env: ENV, isBuiltin, assertScope, renderProfile,
         expectedScope: scopeState && scopeState.scope});
 
       if (event.action === 'familyRecipeLink') {
@@ -604,7 +614,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const visible = await Promise.all(published.map(async item => isPublished(item, ownProfile) && !await isBuiltin(item)));
         const ownPublished = published.filter((item, index) => visible[index]);
         return {
-          profile: ownProfile ? publicProfile(ownProfile, today, true) : {id: ownProfileId, name: defaultProfileName(owner), bio: '', babyAgeMonths: null, babyBirthDate: null, exists: false},
+          profile: ownProfile ? await renderProfile(ownProfile, true) : {id: ownProfileId, name: defaultProfileName(owner), bio: '', babyAgeMonths: null, babyBirthDate: null, exists: false},
           published: ownPublished.map(item => ({
             id: item._id, sourceRecipeId: item.sourceRecipeId, sourceUpdatedAt: item.sourceUpdatedAt
           })),
@@ -624,25 +634,39 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         if (hasBirthDate && event.babyBirthDate !== null && !isValidBirthDate(event.babyBirthDate, today)) {
           reject('请填写 1900 年起且不晚于今天的有效生日。', 'INVALID_BABY_BIRTH_DATE');
         }
+        const hasAvatar = Object.prototype.hasOwnProperty.call(event, 'avatarFileID');
+        if (hasAvatar) validateAvatarFile(event.avatarFileID, ENV, owner);
         const checkedProfile = {name: event.name.trim(), bio: (event.bio || '').trim()};
         await checkProfile(cloud, OPENID, checkedProfile);
+        const checkedAvatar = hasAvatar ? await readCheckedAvatar(cloud, event.avatarFileID, ENV, owner) : null;
         // Read-only preflight uses the same checks. Saving always checks again;
         // no client-provided approval can authorize a later write.
         if (event.action === 'checkProfile') return {validated: true, saved: false};
         scopeState = await families.resolve(owner, ENV);
         families.expect(event, scopeState, false);
-        const record = await db.runTransaction(async transaction => {
+        const avatarFileID = checkedAvatar ? await copyAvatar(cloud, checkedAvatar, ENV, ownProfileId, unique) : '';
+        let record;
+        try { record = await db.runTransaction(async transaction => {
           await assertScope(transaction);
           const previous = await profile(ownProfileId, transaction);
           const record = {owner, name: checkedProfile.name, bio: checkedProfile.bio, updatedAt: now(),
             babyBirthDate: hasBirthDate ? event.babyBirthDate : storedBirthDate(previous),
-            babyAgeMonths: hasBirthDate ? null : hasBabyAge ? event.babyAgeMonths : legacyBabyAge(previous)};
+            babyAgeMonths: hasBirthDate ? null : hasBabyAge ? event.babyAgeMonths : legacyBabyAge(previous),
+            ...(hasAvatar ? {avatarFileID} : avatarFields(previous, ENV))};
           const codes = cachedCodes(previous, ENV);
           if (Object.keys(codes).length) record.shareCodes = codes;
           await write('profiles', ownProfileId, record, transaction);
           return record;
-        });
-        return {profile: publicProfile({_id: ownProfileId, ...record}, today, true)};
+        }); } catch (error) {
+          // Delete only our unused copy after a definite pre-commit rejection.
+          // A transport failure may have happened after the write committed.
+          if (avatarFileID && ['FAMILY_CHANGED', 'FAMILY_CONFLICT', 'INVALID_FAMILY', 'CLIENT_UPDATE_REQUIRED'].includes(error && error.code) &&
+            typeof cloud.deleteFile === 'function') {
+            try { await cloud.deleteFile({fileList: [avatarFileID]}); } catch (_) {}
+          }
+          throw error;
+        }
+        return {profile: await renderProfile({_id: ownProfileId, ...record}, true), ...(hasAvatar ? {avatarUpdated: true} : {})};
       }
 
       if (event.action === 'shareCode') {
@@ -683,7 +707,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
             codes[event.envVersion] = uploadedID;
             await write('profiles', author._id, {owner: current.owner, name: current.name, bio: current.bio || '',
               babyAgeMonths: legacyBabyAge(current), babyBirthDate: storedBirthDate(current),
-              updatedAt: current.updatedAt, shareCodes: codes}, transaction);
+              updatedAt: current.updatedAt, shareCodes: codes, ...avatarFields(current, ENV)}, transaction);
             return uploadedID;
           });
         }
@@ -799,13 +823,15 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           }
           photoURL = file.tempFileURL;
         }
+        const visibleAuthor = author ? await renderProfile(author) : authorView;
         await assertCommitted(db, owner, account);
         if (JSON.stringify(previewAuthor(await profile(ownProfileId), owner)) !== JSON.stringify(authorView)) rejectStalePreview();
         const current = await get('recipes', recipeIdFor(owner, id));
         if ((current ? current.generation : 0) !== (previous ? previous.generation : 0)) rejectStalePreview();
         return {recipe: {id: recipeIdFor(owner, id), profileId: ownProfileId, authorName: authorView.name,
+          ...(visibleAuthor.avatarURL ? {authorAvatarURL: visibleAuthor.avatarURL} : {}),
           ...fields, photoURL, updatedAt: recipe.updatedAt || recipe.createdAt || 0,
-          publishedAt: previous && previous.publishedAt || 0}, author: authorView,
+          publishedAt: previous && previous.publishedAt || 0}, author: visibleAuthor,
         previewToken: publicationPreviewToken({owner, account, recipe, fields, author: authorView, previous}),
         alreadyPublished: isPublished(previous, author) && (previous.publicationScope || 'personal') === scopeKey(account.__scope)};
       }
@@ -828,7 +854,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           // when an older client still calls publish for a saved copy.
           if (automatic) return {updated: false};
           const source = await get('recipes', recipe.source.recipeId);
-          const original = source && source.profileId === recipe.source.profileId && await renderRecipe(source, ENV, undefined, isBuiltin);
+          const original = source && source.profileId === recipe.source.profileId && await renderRecipe(source, ENV, undefined, isBuiltin, avatarURLFor);
           await assertCommitted(db, owner, account);
           if (!original) reject('原作者的菜谱暂时不可用。', 'NOT_FOUND');
           return {recipe: original};
@@ -838,7 +864,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           migratePersonal: !automatic && Boolean(account.__scope && account.__scope.kind === 'family' && previous && (previous.publicationScope || 'personal') === 'personal'),
           ...(automatic ? {} : {previewToken: event.previewToken})});
         if (!saved.updated && automatic) return {updated: false};
-        const rendered = await renderRecipe(saved.record || previous, ENV, undefined, isBuiltin);
+        const rendered = await renderRecipe(saved.record || previous, ENV, undefined, isBuiltin, avatarURLFor);
         if (!rendered) reject('菜谱刚有变化，请重新同步。', 'CONFLICT');
         return automatic ? {updated: true, recipe: rendered} : {recipe: rendered};
       }
@@ -887,7 +913,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const ids = followingIds(await get('follows', owner));
         const records = await Promise.all(ids.slice(offset, offset + PAGE_SIZE).map(id => profile(id)));
         const profiles = await Promise.all(records.filter(Boolean).map(async author => ({
-          ...publicProfile(author, today), following: true, followedBy: await followedBy(author, ownProfileId)
+          ...await renderProfile(author), following: true, followedBy: await followedBy(author, ownProfileId)
         })));
         return {profiles, nextOffset: offset + PAGE_SIZE < ids.length ? offset + PAGE_SIZE : null};
       }
@@ -907,7 +933,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           // Older unnamed accounts stay hidden until they save a profile or
           // actively follow again, which creates their default profile.
           if (!author) return null;
-          return {...publicProfile(author, today), following: ids.includes(author._id), followedBy: true};
+          return {...await renderProfile(author), following: ids.includes(author._id), followedBy: true};
         }))).filter(Boolean);
         const nextOffset = offset + PAGE_SIZE;
         return {profiles, nextOffset: records.length > PAGE_SIZE ? nextOffset : null};
@@ -923,14 +949,14 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
           const [authorFollows, ownFollows] = isSelf ? [null, null] : await Promise.all([
             get('follows', author.owner), get('follows', owner)
           ]);
-          return {profile: publicProfile(author, today, isSelf), isSelf,
+          return {profile: await renderProfile(author, isSelf), isSelf,
             following: !isSelf && followingIds(ownFollows).includes(author._id),
             followedBy: !isSelf && followingIds(authorFollows).includes(ownProfileId)};
         }
         const [rendered, authorFollows, ownFollows, followerCount, publishedCount] = await Promise.all([
           collection('recipes').where({profileId: author._id, published: true})
             .orderBy('sortKey', 'asc').skip(offset).limit(PAGE_SIZE + 1).get().then(async ({data: records}) => ({
-              records, page: await renderPage(records.slice(0, PAGE_SIZE), ENV, [[author._id, author]], isBuiltin)
+              records, page: await renderPage(records.slice(0, PAGE_SIZE), ENV, [[author._id, author]], isBuiltin, avatarURLFor)
             })),
           get('follows', author.owner),
           author.owner === owner ? null : get('follows', owner),
@@ -941,7 +967,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const {records, page} = rendered;
         const authorFollowing = followingIds(authorFollows);
         const ownFollowing = author.owner === owner ? authorFollowing : followingIds(ownFollows);
-        return {profile: publicProfile(author, today, author._id === ownProfileId), isSelf: author._id === ownProfileId,
+        return {profile: await renderProfile(author, author._id === ownProfileId), isSelf: author._id === ownProfileId,
           following: author.owner !== owner && ownFollowing.includes(author._id),
           followedBy: author.owner !== owner && authorFollowing.includes(ownProfileId),
           followingCount: authorFollowing.length,
@@ -955,9 +981,9 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         const record = await get('recipes', event.recipeId);
         const author = record && await profile(record.profileId);
         if (!isPublished(record, author)) reject('这道菜谱已取消公开或不存在。', 'NOT_FOUND');
-        const recipe = await renderRecipe(record, ENV, author, isBuiltin);
+        const recipe = await renderRecipe(record, ENV, author, isBuiltin, avatarURLFor);
         if (!recipe) reject('这道菜谱已取消公开或不存在。', 'NOT_FOUND');
-        return {recipe, author: publicProfile(author, today)};
+        return {recipe, author: await renderProfile(author)};
       }
 
       if (event.action === 'feed') {
@@ -974,7 +1000,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         }
         const records = (await Promise.all(batches)).flatMap(result => result.data)
           .sort((a, b) => a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0);
-        const page = await renderPage(records.slice(0, PAGE_SIZE), ENV, [], isBuiltin);
+        const page = await renderPage(records.slice(0, PAGE_SIZE), ENV, [], isBuiltin, avatarURLFor);
         return {recipes: page.recipes,
           nextCursor: records.length > page.consumed ? records[page.consumed - 1].sortKey : null};
       }
@@ -1011,7 +1037,7 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
               if (isPublished(item, author) && matchesSearch(item, author, search)) {
                 const latest = await get('recipes', item._id);
                 if (latest && latest.sortKey === item.sortKey && matchesSearch(latest, author, search)) {
-                  result = await renderRecipe(latest, ENV, author, isBuiltin);
+                  result = await renderRecipe(latest, ENV, author, isBuiltin, avatarURLFor);
                 }
               }
               return {result};
@@ -1041,7 +1067,8 @@ function createHandler({cloud, now = Date.now, unique = () => crypto.randomBytes
         'INVALID_SNAPSHOT', 'INVALID_PHOTO', 'STORAGE_FAILED', 'SYNC_REQUIRED', 'PROFILE_REQUIRED',
         'NOT_FOUND', 'CONFLICT', 'FOLLOW_LIMIT', 'ACCOUNT_CHANGED', 'SHARE_CODE_UNAVAILABLE',
         'SHARE_CODE_FAILED', 'SHARE_CODE_NOT_PUBLISHED', 'PROFILE_NAME_REJECTED',
-        'PROFILE_BIO_REJECTED', 'PROFILE_MODERATION_UNAVAILABLE', 'SELF_FEEDBACK', 'INVALID_COOKSNAP',
+        'PROFILE_BIO_REJECTED', 'PROFILE_MODERATION_UNAVAILABLE', 'INVALID_PROFILE_AVATAR', 'PROFILE_AVATAR_REJECTED',
+        'PROFILE_AVATAR_MODERATION_UNAVAILABLE', 'SELF_FEEDBACK', 'INVALID_COOKSNAP',
         'INVALID_COOKSNAP_PHOTO', 'COOKSNAP_TEXT_REJECTED', 'COOKSNAP_PHOTO_REJECTED',
         'COOKSNAP_MODERATION_UNAVAILABLE', 'FEEDBACK_NOT_SAVED', 'CLIENT_UPDATE_REQUIRED', 'PREVIEW_REQUIRED', 'PREVIEW_STALE',
         'FAMILY_CHANGED', 'INVALID_FAMILY', 'FAMILY_CONFLICT', 'RECIPE_AUTHOR_REQUIRED', 'SOURCE_RECIPE_ONLY']);

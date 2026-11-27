@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createHash} = require('node:crypto');
 const {createRequire} = require('node:module');
 const validator = require('../cloudfunctions/babyBitesSync/validate');
 const requireStore = createRequire(path.resolve(__dirname, '../utils/store.js'));
@@ -29,6 +30,7 @@ function setup(options = {}) {
   const files = new Map();
   const calls = [];
   const hooks = {};
+  let downloadSequence = 0;
   let syncOwner = OWNER;
   let syncState = 'synced';
   let now = Date.now();
@@ -72,9 +74,9 @@ function setup(options = {}) {
     }); },
     downloadFile(args) { dispatch(args, async () => {
       calls.push({action: 'download', url: args.url});
-      if (hooks.download) await hooks.download();
-      const tempFilePath = 'wxfile://tmp/photo';
-      files.set(tempFilePath, PNG);
+      const tempFilePath = 'wxfile://tmp/photo-' + ++downloadSequence;
+      const result = hooks.download ? await hooks.download(args) : null;
+      files.set(tempFilePath, result && result.bytes || PNG);
       return {tempFilePath, statusCode: 200};
     }); },
     cloud: {init() {}, uploadFile(args) { dispatch(args, async () => {
@@ -97,7 +99,7 @@ function setup(options = {}) {
   const storeModule = {exports: {}};
   vm.runInNewContext(source('store.js'), {module: storeModule, require: requireStore, wx, console});
   const store = storeModule.exports;
-  store.bindAccount(OWNER);
+  if (!options.unbound) store.bindAccount(OWNER);
   if (options.scope) store.bindScope(OWNER, options.scope);
   const sync = {getStatus() { return copy(syncStatus); }, subscribe(listener) { syncListeners.add(listener); return () => syncListeners.delete(listener); }, async syncNow(syncOptions) {
     calls.push({action: 'sync'});
@@ -126,6 +128,9 @@ function setup(options = {}) {
       if (name === './baby-age') return {isValidBirthDate: value => require('../utils/baby-age').isValidBirthDate(value, options.today || '2026-10-29')};
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './recipe-identity') return require('../utils/recipe-identity');
+      if (name === './profile-photo') return require('../utils/profile-photo');
+      if (name === './profile-avatar') return require('../utils/profile-avatar');
       if (name === './meal-plans') return require('../utils/meal-plans');
       if (name === './public-meal-plans') return require('../utils/public-meal-plans');
       if (name === '../config/cloud') return {env: 'social-test', socialEnabled: options.enabled !== false};
@@ -847,6 +852,164 @@ test('opening an already saved family copy does not queue another save receipt',
   assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
 });
 
+const publicIdFor = (creator, localId) => createHash('sha256').update('public-recipe:' + creator + ':' + localId).digest('hex');
+function syncOriginalRecipe(app, recipe) {
+  const info = app.store.getSyncInfo(), snapshot = copy(app.store.getSyncSnapshot());
+  snapshot.data.recipes.push(recipe);
+  app.store.applySyncedSnapshot(snapshot, {owner: info.owner, scopeKey: info.scopeKey,
+    sequence: info.sequence, revision: info.revision + 1});
+}
+
+test('saving an own public recipe reuses its private original without overwriting edits or recording another save', async () => {
+  const app = setup();
+  const id = app.store.saveRecipe({...publicRecipe(), id: undefined, name: '我调整后的南瓜饭',
+    note: '宝宝喜欢更软一点', favorite: true, photo: 'wxfile://usr/own-photo.png'}, 3);
+  app.store.saveMealPlans([{date: '2026-11-27', meal: 'lunch', recipeId: id}]);
+  app.files.set('wxfile://usr/own-photo.png', PNG);
+  const publicId = publicIdFor(OWNER, id), before = copy(app.store.getState());
+  assert.equal(app.social.findImportedRecipe(publicId).id, id);
+  const result = await app.social.addToCookbook(publicId);
+  await flushTasks();
+  assert.deepEqual(copy(result), {recipeId: id, added: false});
+  assert.deepEqual(copy(app.store.getState()), before);
+  assert.equal(app.store.getRecipe('shared-' + publicId), null);
+  assert.deepEqual(app.calls.filter(item => ['recipe', 'download', 'recordSave'].includes(item.action)), []);
+  assert.deepEqual([...app.files.keys()], ['wxfile://usr/own-photo.png']);
+  assert.equal(app.storage.has('baby-bites-save-receipts:' + OWNER), false);
+});
+
+test('saving a family member public recipe reuses the current family original with the member identity', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope}), id = 'family-member-original';
+  syncOriginalRecipe(app, {...publicRecipe(), id, createdBy: OTHER, createdAt: 1, updatedAt: 2,
+    note: '全家调整后的做法', favorite: true, isExample: false, photo: ''});
+  const publicId = publicIdFor(OTHER, id), before = copy(app.store.getState());
+  assert.equal(app.social.findImportedRecipe(publicId).id, id);
+  assert.equal(app.social.findImportedRecipe(publicIdFor(OWNER, id)), null);
+  const result = await app.social.addToCookbook(publicId);
+  await flushTasks();
+  assert.deepEqual(copy(result), {recipeId: id, added: false});
+  assert.deepEqual(copy(app.store.getState()), before);
+  assert.deepEqual(app.calls.filter(item => ['recipe', 'download', 'recordSave'].includes(item.action)), []);
+  assert.equal([...app.storage.keys()].some(key => key.startsWith('baby-bites-save-receipts:')), false);
+});
+
+test('a source copy restored under a nonstandard local ID is reused with all local edits intact', async () => {
+  const app = setup(), publicId = publicIdFor(OTHER, 'friends-original');
+  const id = app.store.saveRecipe({...publicRecipe(), id: undefined, name: '我改过的做法',
+    steps: ['少放水，慢慢蒸软。'], note: '仅本地保存的心得', favorite: true, photo: 'wxfile://usr/restored-photo.png',
+    source: {profileId: PROFILE_ID, recipeId: publicId, authorName: '朋友的小厨房'}});
+  const before = copy(app.store.getState());
+  assert.notEqual(id, 'shared-' + publicId);
+  assert.equal(app.social.findImportedRecipe(publicId).id, id);
+  const result = await app.social.addToCookbook(publicId);
+  await flushTasks();
+  assert.deepEqual(copy(result), {recipeId: id, added: false});
+  assert.deepEqual(copy(app.store.getState()), before);
+  assert.equal(app.social.findImportedRecipe(publicIdFor(OWNER, id)), null, 'an attributed copy is not a new original');
+  assert.deepEqual(app.calls.filter(item => ['recipe', 'download', 'recordSave'].includes(item.action)), []);
+});
+
+test('recipes with the same name but different original identities are not merged', async () => {
+  const app = setup(), publicId = publicIdFor(OTHER, 'new-friends-original');
+  const ownId = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '自己的同名菜'});
+  const savedId = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '另一位作者的同名菜',
+    source: {profileId: 'e'.repeat(32), recipeId: publicIdFor(OTHER, 'another-original'), authorName: '另一位作者'}});
+  const ownBefore = copy(app.store.getRecipe(ownId)), savedBefore = copy(app.store.getRecipe(savedId));
+  app.hooks.request = args => {
+    if (args.data.action === 'recipe') return {recipe: {...publicRecipe(), id: publicId}};
+    if (args.data.action === 'recordSave') return {recorded: true};
+  };
+  assert.equal(app.social.findImportedRecipe(publicId), null);
+  const result = await app.social.addToCookbook(publicId);
+  await flushTasks();
+  assert.deepEqual(copy(result), {recipeId: 'shared-' + publicId, added: true});
+  assert.deepEqual(copy(app.store.getRecipe(ownId)), ownBefore);
+  assert.deepEqual(copy(app.store.getRecipe(savedId)), savedBefore);
+  assert.equal(app.store.getRecipe(result.recipeId).source.recipeId, publicId);
+  assert.equal(app.calls.filter(item => item.action === 'recordSave').length, 1);
+});
+
+test('an original arriving through sync during photo download wins the import without retaining photos or save receipts', async t => {
+  for (const family of [false, true]) await t.test(family ? 'family original' : 'personal original', async () => {
+    const scope = family ? {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)} : undefined;
+    const app = setup({scope}), id = 'synced-original', creator = family ? OTHER : OWNER;
+    const publicId = publicIdFor(creator, id);
+    const original = {...publicRecipe(), id, name: '同步来的原菜谱', note: '保留同步内容', favorite: true,
+      photo: '', isExample: false, createdAt: 1, updatedAt: 2, ...(family ? {createdBy: creator} : {})};
+    let synced;
+    app.hooks.request = args => args.data.action === 'recipe' ?
+      {recipe: {...publicRecipe(), id: publicId, photoURL: 'https://storage.example/photo.png'}} : undefined;
+    app.hooks.download = () => { syncOriginalRecipe(app, original); synced = copy(app.store.getState()); };
+    const result = await app.social.addToCookbook(publicId);
+    await flushTasks();
+    assert.deepEqual(copy(result), {recipeId: id, added: false});
+    assert.deepEqual(copy(app.store.getState()), synced);
+    assert.equal(app.store.getRecipe('shared-' + publicId), null);
+    assert.equal(app.calls.filter(item => item.action === 'download').length, 1);
+    assert.equal(app.files.size, 0, 'both the temporary download and unused persistent copy are removed');
+    assert.equal(app.calls.some(item => item.action === 'recordSave'), false);
+    assert.equal([...app.storage.keys()].some(key => key.startsWith('baby-bites-save-receipts:')), false);
+  });
+});
+
+test('original matching only searches the active account and family scope', () => {
+  const app = setup(), id = app.store.saveRecipe({...publicRecipe(), id: undefined});
+  const publicId = publicIdFor(OWNER, id), original = copy(app.store.getRecipe(id));
+  assert.equal(app.social.findImportedRecipe(publicId).id, id);
+  app.store.bindAccount(OTHER);
+  assert.equal(app.social.findImportedRecipe(publicId), null);
+  app.store.bindAccount(OWNER);
+  assert.equal(app.social.findImportedRecipe(publicId).id, id);
+  app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+  assert.equal(app.social.findImportedRecipe(publicId), null);
+  app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+  assert.deepEqual(copy(app.social.findImportedRecipe(publicId)), original);
+});
+
+test('different public recipes import concurrently with independent photos and only-needed synchronization', async () => {
+  const app = setup(), requests = new Map(), downloads = new Map(), syncOptions = [];
+  const ids = [publicIdFor(OTHER, 'first-dish'), publicIdFor(OTHER, 'second-dish')];
+  const urls = ['https://storage.example/first.png', 'https://storage.example/second.png'];
+  const photos = [Buffer.concat([PNG, Buffer.from([41])]), Buffer.concat([PNG, Buffer.from([82])])];
+  app.hooks.sync = options => { syncOptions.push(copy(options)); };
+  app.hooks.request = args => {
+    if (args.data.action === 'recipe') return new Promise(resolve => requests.set(args.data.recipeId, resolve));
+    if (args.data.action === 'recordSave') return {recorded: true};
+  };
+  app.hooks.download = args => new Promise(resolve => downloads.set(args.url, resolve));
+  const first = app.social.addToCookbook(ids[0]), second = app.social.addToCookbook(ids[1]);
+  assert.equal(app.social.addToCookbook(ids[0]), first);
+  await flushTasks();
+  assert.equal(requests.size, 2, 'both recipe requests start before either response arrives');
+  assert.deepEqual(syncOptions, [{ifNeeded: true}, {ifNeeded: true}]);
+  ids.forEach((id, index) => requests.get(id)({recipe: {...publicRecipe(), id,
+    name: index ? '第二道菜' : '第一道菜', photoURL: urls[index]}}));
+  await flushTasks();
+  assert.equal(downloads.size, 2, 'both photos start downloading before either completes');
+  assert.equal(app.social.findImportedRecipe(ids[0]), null);
+  assert.equal(app.social.findImportedRecipe(ids[1]), null);
+  downloads.get(urls[1])({bytes: photos[1]});
+  const secondResult = await second;
+  assert.equal(secondResult.recipeId, 'shared-' + ids[1]);
+  assert.equal(app.social.findImportedRecipe(ids[0]), null, 'the first import remains independent and pending');
+  downloads.get(urls[0])({bytes: photos[0]});
+  const firstResult = await first;
+  await flushTasks();
+  assert.equal(firstResult.recipeId, 'shared-' + ids[0]);
+  const saved = ids.map(id => app.social.findImportedRecipe(id));
+  assert.notEqual(saved[0].photo, saved[1].photo);
+  saved.forEach((recipe, index) => {
+    assert.equal(recipe.source.recipeId, ids[index]);
+    assert.equal(recipe.name, index ? '第二道菜' : '第一道菜');
+    assert.deepEqual(app.files.get(recipe.photo), photos[index]);
+  });
+  assert.equal(app.calls.filter(item => item.action === 'recipe').length, 2);
+  assert.equal(app.calls.filter(item => item.action === 'download').length, 2);
+  assert.equal(app.files.size, 2, 'only the two persistent recipe photos remain');
+  assert.deepEqual(new Set(app.calls.filter(item => item.action === 'recordSave').map(item => item.recipeId)), new Set(ids));
+});
+
 function readyUserRecipe(app) {
   const id = app.store.saveRecipe({...publicRecipe(), id: undefined, note: '不分享的小心得'});
   app.hooks.sync = () => {
@@ -1074,16 +1237,50 @@ test('feedback rejects malformed photos, wrong recipes and nonadvancing paginati
   }
 });
 
+test('feedback keeps safe optional author avatars and drops unsafe avatar values', async () => {
+  for (const avatarURL of ['https://storage.example/avatar.png?sign=123', undefined, '', 'http://storage.example/avatar.png',
+    'cloud://secret', 'javascript:alert(1)', 'https://storage.example\\@other.test/avatar', 'https://storage.example/avatar\n.png']) {
+    const app = setup();
+    app.hooks.request = () => {
+      const result = feedbackResult();
+      result.cooksnaps[0].author.avatarURL = avatarURL;
+      result.cooksnaps[0].author.avatarFileID = 'cloud://private';
+      return result;
+    };
+    const first = await app.social.getRecipeFeedback(PUBLIC_ID);
+    const cached = await app.social.getRecipeFeedback(PUBLIC_ID);
+    const expected = cooksnapView().author;
+    if (avatarURL === 'https://storage.example/avatar.png?sign=123') expected.avatarURL = avatarURL;
+    assert.deepEqual(copy(first.cooksnaps[0].author), expected);
+    assert.deepEqual(copy(cached.cooksnaps[0].author), expected);
+  }
+});
+
 test('author inbox keeps saves anonymous and exposes only the public cooksnap fields', async () => {
   const app = setup();
   app.hooks.request = () => ({saveCount: 1, cooksnapCount: 1, nextOffset: null, items: [
-    {id: COOKSNAP_ID, type: 'save', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 100, actorName: 'must not leak', owner: OTHER, photoURL: 'private', text: 'private'},
-    {id: PUBLIC_ID, type: 'cooksnap', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 200, actorName: '家长', photoURL: cooksnapView().photoURL, text: '做成了', owner: OWNER}
+    {id: COOKSNAP_ID, type: 'save', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 100, actorName: 'must not leak', actorAvatarURL: 'https://storage.example/private-avatar.png', owner: OTHER, photoURL: 'private', text: 'private'},
+    {id: PUBLIC_ID, type: 'cooksnap', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 200, actorName: '家长', actorAvatarURL: 'https://storage.example/avatar.png', photoURL: cooksnapView().photoURL, text: '做成了', owner: OWNER}
   ]});
   const result = await app.social.getFeedbackInbox();
   assert.deepEqual(copy(result.items[0]), {id: COOKSNAP_ID, type: 'save', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 100, photoURL: '', text: ''});
   assert.equal(Object.hasOwn(result.items[1], 'owner'), false);
   assert.equal(result.items[1].actorName, '家长');
+  assert.equal(result.items[1].actorAvatarURL, 'https://storage.example/avatar.png');
+});
+
+test('author inbox drops absent and unsafe cooksnap actor avatars', async () => {
+  for (const actorAvatarURL of [undefined, '', null, 'http://storage.example/avatar.png', 'cloud://secret',
+    'https://storage.example\\@other.test/avatar', 'https://storage.example/avatar\n.png']) {
+    const app = setup();
+    app.hooks.request = () => ({saveCount: 0, cooksnapCount: 1, nextOffset: null, items: [
+      {id: PUBLIC_ID, type: 'cooksnap', recipeId: PUBLIC_ID, recipeName: '南瓜饭', createdAt: 200,
+        actorName: '家长', actorAvatarURL, photoURL: cooksnapView().photoURL, text: '做成了'}
+    ]});
+    const result = await app.social.getFeedbackInbox();
+    assert.equal(Object.hasOwn(result.items[0], 'actorAvatarURL'), false);
+    assert.equal(result.items[0].actorName, '家长');
+  }
 });
 
 test('cooksnap submission coalesces taps, uploads an owned image, and strips extra response data', async () => {
@@ -1350,138 +1547,185 @@ test('same actor leaving and returning to a family invalidates a pending public 
   await assert.rejects(app.social.getMine(), error => error.code === 'ACCOUNT_CHANGED');
 });
 
-function publicationFor(app, localId) {
-  const recipe = app.store.getRecipe(localId);
-  return {id: PUBLIC_ID, sourceRecipeId: localId, sourceUpdatedAt: recipe.updatedAt || recipe.createdAt || 0};
-}
-
-test('direct share links use the automatically published version and only return public share-card fields', async () => {
-  const app = setup(), id = readyUserRecipe(app), syncOptions = [], sync = app.hooks.sync;
-  app.hooks.sync = options => { syncOptions.push(copy(options)); sync(); };
-  const response = {...publicRecipe(), name: '服务器上的公开菜名', photoURL: 'https://storage.example/public.jpg', note: 'SECRET', babyBirthDate: '2025-01-01'};
-  app.hooks.request = args => args.data.action === 'mine' ? {published: [publicationFor(app, id)]} : args.data.action === 'recipe' ? {recipe: response} : undefined;
+test('share links read only existing public card fields while local changes and photos remain unsynchronized', async () => {
+  const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+  app.store.saveRecipe({...app.store.getRecipe(id), name: '本地新菜名', photo: 'wxfile://usr/unsynced.png', note: 'SECRET'});
+  const before = copy(app.store.getSyncSnapshot());
+  app.hooks.sync = () => { throw Error('sharing must not wait for sync'); };
+  app.setSyncState('pending');
+  const response = {...publicRecipe(), id: publicId, name: '服务器上的旧公开菜名',
+    photoURL: 'https://storage.example/public.jpg', note: 'SECRET', babyBirthDate: '2025-01-01'};
+  app.hooks.request = args => { assert.equal(args.data.action, 'recipe'); return {recipe: response}; };
   const result = await app.social.getRecipeShareLink(id);
-  assert.deepEqual(copy(result), {recipe: {id: PUBLIC_ID, name: response.name, photoURL: response.photoURL}, localVersion: JSON.stringify(app.store.getRecipe(id))});
-  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'mine', 'recipe']);
-  assert.equal(app.calls.some(item => ['publish', 'previewPublication', 'updateProfile'].includes(item.action)), false);
-  assert.doesNotMatch(JSON.stringify(result.recipe), /SECRET|note|babyBirthDate|favorite|logs/);
+  assert.deepEqual(copy(result), {recipe: {id: publicId, name: response.name, photoURL: response.photoURL}});
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe']);
+  assert.equal(app.calls[1].recipeId, publicId);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET|note|babyBirthDate|favorite|logs|localVersion/);
+  assert.deepEqual(copy(app.store.getSyncSnapshot()), before);
+  assert.equal(app.store.getSyncInfo().dirty, true);
   await app.social.getRecipeShareLink(id, {force: true});
-  assert.deepEqual(syncOptions, [{ifNeeded: true}, {ifNeeded: false}]);
-  assert.equal(app.calls.filter(item => item.action === 'mine').length, 2);
-  assert.equal(app.calls.filter(item => item.action === 'recipe').length, 2);
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe', 'recipe']);
 });
 
-test('share links reject absent, stale or mismatched publication metadata without falling back to an old link', async () => {
-  for (const mode of ['missing', 'stale', 'wrong-source', 'invalid-id']) {
-    const app = setup(), id = readyUserRecipe(app);
+test('sync revision changes never restart pending share-card reads or break same-identity request coalescing', async () => {
+  for (const field of ['revision', 'publicationVersion']) {
+    const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    let release, attempts = 0;
+    const response = {recipe: {...publicRecipe(), id: publicId, name: '本次已读取的公开菜名'}};
     app.hooks.request = args => {
-      if (args.data.action !== 'mine') return;
-      const publication = publicationFor(app, id);
-      if (mode === 'stale') publication.sourceUpdatedAt--;
-      if (mode === 'wrong-source') publication.sourceRecipeId = 'another-recipe';
-      if (mode === 'invalid-id') publication.id = 'invalid';
-      return {published: mode === 'missing' ? [] : [publication]};
+      assert.equal(args.data.action, 'recipe');
+      if (++attempts === 1) return new Promise(resolve => { release = resolve; });
+      return {recipe: {...response.recipe, name: '不应自动重读'}};
     };
-    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'PUBLICATION_PENDING', mode);
-    assert.equal(app.calls.some(item => ['recipe', 'publish', 'previewPublication'].includes(item.action)), false, mode);
+    const first = app.social.getRecipeShareLink(id), second = app.social.getRecipeShareLink(id);
+    await flushTasks(); assert.equal(attempts, 1);
+    const version = app.social.getReadVersion();
+    app.emitSync({owner: OWNER, state: 'pending', [field]: 20});
+    assert.ok(app.social.getReadVersion() > version);
+    const third = app.social.getRecipeShareLink(id); await flushTasks();
+    assert.equal(attempts, 1, field + ' changes must keep the original request');
+    release(response);
+    const results = await Promise.all([first, second, third]);
+    results.forEach(result => assert.equal(result.recipe.name, response.recipe.name));
+    assert.equal(attempts, 1, field + ' changes must not retry after the response');
+    assert.equal(app.calls.some(item => item.action === 'sync'), false);
+    await app.social.getRecipeShareLink(id, {force: true});
+    assert.equal(attempts, 2, 'an explicit later read still fetches the current card');
   }
 });
 
-test('share links reject dirty local data when synchronization has not completed', async () => {
-  const app = setup(), id = app.store.saveRecipe({...publicRecipe(), id: undefined});
-  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'SYNC_REQUIRED');
-  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+test('missing public links fail as read errors and explicit retries never trigger synchronization or publication', async () => {
+  for (const code of ['NOT_FOUND', 'NOT_PUBLIC', 'RECIPE_NOT_FOUND']) {
+    const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    app.hooks.sync = () => { throw Error('sharing must not synchronize'); };
+    app.hooks.request = args => { assert.equal(args.data.action, 'recipe'); return {error: {code}}; };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === code);
+    assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe']);
+    app.hooks.request = () => ({recipe: {...publicRecipe(), id: publicId}});
+    assert.equal((await app.social.getRecipeShareLink(id, {force: true})).recipe.id, publicId);
+    assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe', 'recipe']);
+  }
 });
 
-test('local changes during either share-link lookup remain rejected even after the new edit finishes syncing', async () => {
-  for (const phase of ['mine', 'recipe']) for (const syncAfterEdit of [false, true]) {
-    const app = setup(), id = readyUserRecipe(app);
+test('ordinary content edits during identity or card reads do not invalidate an existing share link', async () => {
+  for (const phase of ['identity', 'recipe']) {
+    const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    const edit = () => app.store.saveRecipe({...app.store.getRecipe(id), name: '等待时修改的名字',
+      photo: 'wxfile://usr/new-photo.jpg', note: '新心得'});
+    if (phase === 'identity') app.hooks.identity = () => { edit(); return {owner: OWNER, revision: 0, fileID: ''}; };
     app.hooks.request = args => {
-      const publication = publicationFor(app, id);
-      if (args.data.action === phase) {
-        app.store.saveRecipe({...app.store.getRecipe(id), name: '等待时刚修改的菜名'});
-        if (syncAfterEdit) app.hooks.sync();
-      }
-      return args.data.action === 'mine' ? {published: [publication]} : args.data.action === 'recipe' ? {recipe: publicRecipe()} : undefined;
+      assert.equal(args.data.action, 'recipe');
+      if (phase === 'recipe') edit();
+      return {recipe: {...publicRecipe(), id: publicId, name: '已公开的名字'}};
     };
-    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'SYNC_REQUIRED', phase + ':' + syncAfterEdit);
-    assert.equal(app.calls.some(item => ['publish', 'previewPublication'].includes(item.action)), false);
+    const result = await app.social.getRecipeShareLink(id);
+    assert.equal(result.recipe.name, '已公开的名字'); assert.equal(result.recipe.id, publicId);
+    assert.equal(app.store.getRecipe(id).name, '等待时修改的名字');
+    assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe']);
   }
 });
 
 test('account switches and account ABA during share-link awaits cannot reuse the previous account response', async () => {
-  for (const phase of ['mine', 'recipe']) for (const returnToOriginal of [false, true]) {
-    const app = setup(), id = readyUserRecipe(app);
+  for (const phase of ['identity', 'recipe']) for (const returnToOriginal of [false, true]) {
+    const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    const change = () => { app.store.bindAccount(OTHER); if (returnToOriginal) app.store.bindAccount(OWNER); };
+    if (phase === 'identity') app.hooks.identity = () => { change(); return {owner: OWNER, revision: 0, fileID: ''}; };
     app.hooks.request = args => {
-      const publication = publicationFor(app, id);
-      if (args.data.action === phase) { app.store.bindAccount(OTHER); if (returnToOriginal) app.store.bindAccount(OWNER); }
-      return args.data.action === 'mine' ? {published: [publication]} : args.data.action === 'recipe' ? {recipe: publicRecipe()} : undefined;
+      if (phase === 'recipe') change();
+      return {recipe: {...publicRecipe(), id: publicId}};
     };
     await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED', phase + ':' + returnToOriginal);
+    assert.equal(app.calls.some(item => item.action === 'sync'), false);
   }
   const app = setup(), id = readyUserRecipe(app); app.setSyncOwner(OTHER);
   await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED');
-  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+  assert.deepEqual(app.calls.map(item => item.action), ['identity']);
 });
 
-test('saved recipe share links use the original publication without publishing or looking up a duplicate', async () => {
+test('saved recipe share links read the original publication without synchronizing or looking up a duplicate', async () => {
   const app = setup(), id = readyUserRecipe(app);
-  app.store.saveRecipe({...app.store.getRecipe(id), name: '我调整后的本地菜名', source: {recipeId: PUBLIC_ID, profileId: PROFILE_ID, authorName: '原作者'}});
+  app.store.saveRecipe({...app.store.getRecipe(id), name: '我调整后的本地菜名',
+    source: {recipeId: PUBLIC_ID, profileId: PROFILE_ID, authorName: '原作者'}});
   app.hooks.request = args => {
     assert.equal(args.data.action, 'recipe'); assert.equal(args.data.recipeId, PUBLIC_ID);
     return {recipe: {...publicRecipe(), name: '原作者的菜名'}};
   };
   const result = await app.social.getRecipeShareLink(id);
-  assert.deepEqual(copy(result.recipe), {id: PUBLIC_ID, name: '原作者的菜名', photoURL: ''});
-  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'recipe']);
+  assert.deepEqual(copy(result), {recipe: {id: PUBLIC_ID, name: '原作者的菜名', photoURL: ''}});
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe']);
   app.hooks.request = () => ({error: {code: 'NOT_FOUND'}});
   await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'NOT_FOUND');
-  assert.equal(app.calls.some(item => item.action === 'publish'), false);
+  assert.equal(app.calls.some(item => ['sync', 'publish', 'previewPublication', 'mine', 'familyRecipeLink'].includes(item.action)), false);
 });
 
-test('share links reject built-in recipes before any public lookup', async () => {
+test('built-in and deleted local recipes fail before any share-card lookup', async () => {
   const app = setupEditedBuiltIn(), original = app.store.getState().recipes[0];
   app.store.saveRecipe({...original, name: '改过名字的内置菜'});
-  app.hooks.sync = () => { const info = app.store.getSyncInfo(); app.store.applySyncedSnapshot(app.store.getSyncSnapshot(), {owner: OWNER, sequence: info.sequence, revision: info.revision + 1}); };
   await assert.rejects(app.social.getRecipeShareLink(original.id), error => error.code === 'BUILTIN_RECIPE');
-  assert.deepEqual(app.calls.map(item => item.action), ['sync']);
+  const id = readyUserRecipe(app); app.store.deleteRecipe(id);
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'RECIPE_NOT_FOUND');
+  assert.deepEqual(app.calls, []);
 });
 
-test('family members can forward an existing original-author link without taking over authorship', async () => {
+test('family members read the original creator card directly without checking publication freshness', async () => {
   const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
-  const app = setup({scope}), id = readyUserRecipe(app);
-  app.store.saveRecipe({...app.store.getRecipe(id), createdBy: OTHER});
-  app.hooks.request = args => args.data.action === 'familyRecipeLink' ? {publication: {...publicationFor(app, id), createdBy: OTHER}} : undefined;
+  const app = setup({scope}), id = readyUserRecipe(app), publicId = publicIdFor(OTHER, id);
+  app.store.saveRecipe({...app.store.getRecipe(id), createdBy: OTHER, name: '家庭尚未同步的新名称'});
+  app.hooks.sync = () => { throw Error('sharing must not synchronize'); };
+  app.hooks.request = args => {
+    assert.equal(args.data.action, 'recipe'); assert.equal(args.data.recipeId, publicId);
+    return {recipe: {...publicRecipe(), id: publicId, name: '家人已公开的旧名称'}};
+  };
   const result = await app.social.getRecipeShareLink(id);
-  assert.equal(result.recipe.id, PUBLIC_ID);
-  assert.deepEqual(app.calls.map(item => item.action), ['sync', 'identity', 'familyRecipeLink', 'recipe']);
-  for (const item of app.calls.filter(item => ['familyRecipeLink', 'recipe'].includes(item.action))) {
-    assert.deepEqual(item.expectedScope, scope); assert.equal(item.expectedOwner, OWNER); assert.equal(item.protocolVersion, 2);
-  }
-  assert.equal(app.store.getRecipe(id).createdBy, OTHER);
+  assert.equal(result.recipe.id, publicId); assert.equal(result.recipe.name, '家人已公开的旧名称');
+  assert.deepEqual(app.calls.map(item => item.action), ['identity', 'recipe']);
+  const request = app.calls[1];
+  assert.deepEqual(request.expectedScope, scope); assert.equal(request.expectedOwner, OWNER); assert.equal(request.protocolVersion, 2);
+  assert.equal(app.store.getRecipe(id).createdBy, OTHER); assert.equal(app.store.getSyncInfo().dirty, true);
 });
 
-test('family share links reject stale publications and same-family leave-and-rejoin responses', async () => {
+test('family share links keep leave-and-rejoin protection and never guess missing creation attribution', async () => {
   const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
-  for (const phase of ['familyRecipeLink', 'recipe']) {
-    const app = setup({scope}), id = readyUserRecipe(app);
-    app.hooks.request = args => {
-      const publication = {...publicationFor(app, id), createdBy: OWNER};
-      if (args.data.action === phase) { app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, scope); }
-      return args.data.action === 'familyRecipeLink' ? {publication} : undefined;
-    };
+  for (const phase of ['identity', 'recipe']) {
+    const app = setup({scope}), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    app.store.saveRecipe({...app.store.getRecipe(id), createdBy: OWNER});
+    const change = () => { app.store.bindScope(OWNER, {kind: 'personal', id: OWNER}); app.store.bindScope(OWNER, scope); };
+    if (phase === 'identity') app.hooks.identity = () => { change(); return {owner: OWNER, scope, revision: 0, fileID: ''}; };
+    app.hooks.request = () => { if (phase === 'recipe') change(); return {recipe: {...publicRecipe(), id: publicId}}; };
     await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_CHANGED', phase);
+    assert.equal(app.calls.some(item => item.action === 'sync'), false);
   }
   const app = setup({scope}), id = readyUserRecipe(app);
-  app.hooks.request = () => ({publication: {...publicationFor(app, id), createdBy: OTHER, sourceUpdatedAt: 1}});
   await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'PUBLICATION_PENDING');
-  assert.equal(app.calls.some(item => item.action === 'recipe'), false);
+  assert.deepEqual(app.calls, []);
+});
+
+test('sharing waits for account availability without starting a synchronization', async () => {
+  const app = setup({unbound: true}), id = app.store.saveRecipe({...publicRecipe(), id: undefined});
+  await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'ACCOUNT_REQUIRED');
+  assert.deepEqual(app.calls, []);
+});
+
+test('deletion or a changed original source during share reads cannot retain the old card', async () => {
+  for (const phase of ['identity', 'recipe']) for (const change of ['delete', 'source']) {
+    const app = setup(), id = readyUserRecipe(app), publicId = publicIdFor(OWNER, id);
+    const update = () => {
+      if (change === 'delete') app.store.deleteRecipe(id);
+      else app.store.saveRecipe({...app.store.getRecipe(id),
+        source: {recipeId: PUBLIC_ID, profileId: PROFILE_ID, authorName: '不同的原作者'}});
+    };
+    if (phase === 'identity') app.hooks.identity = () => { update(); return {owner: OWNER, revision: 0, fileID: ''}; };
+    app.hooks.request = () => { if (phase === 'recipe') update(); return {recipe: {...publicRecipe(), id: publicId}}; };
+    await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'RECIPE_CHANGED', phase + ':' + change);
+    assert.equal(app.calls.some(item => item.action === 'sync'), false);
+  }
 });
 
 test('share links validate public response identities, names and signed photo URLs', async () => {
-  for (const change of [recipe => { recipe.id = 'f'.repeat(64); }, recipe => { recipe.name = ''; }, recipe => { recipe.photoURL = 'http://unsafe.example/photo'; }]) {
-    const app = setup(), id = readyUserRecipe(app), recipe = publicRecipe(); change(recipe);
-    app.hooks.request = args => args.data.action === 'mine' ? {published: [publicationFor(app, id)]} : {recipe};
+  for (const change of [recipe => { recipe.id = 'f'.repeat(64); }, recipe => { recipe.name = ''; },
+    recipe => { recipe.name = 'x'.repeat(61); }, recipe => { recipe.photoURL = 'http://unsafe.example/photo'; }]) {
+    const app = setup(), id = readyUserRecipe(app), recipe = {...publicRecipe(), id: publicIdFor(OWNER, id)}; change(recipe);
+    app.hooks.request = () => ({recipe});
     await assert.rejects(app.social.getRecipeShareLink(id), error => error.code === 'INVALID_RECIPE');
   }
 });
@@ -1546,4 +1790,171 @@ test('meal plan lists preserve unavailable recipes without exposing unvalidated 
   assert.equal(result.days[0].meals[0].recipe, null);
   app.hooks.request = () => ({days: [publicMealDay(), publicMealDay()], nextOffset: null});
   await assert.rejects(app.social.getProfileMealPlans(PROFILE_ID), /餐单信息/);
+});
+
+const AVATAR_PATH = 'wxfile://tmp/chosen-avatar.png';
+const avatarInput = changes => ({name: ' 小厨房 ', bio: ' 家常辅食 ', avatarPath: AVATAR_PATH, ...changes});
+const avatarSaved = () => ({avatarUpdated: true, profile: {id: PROFILE_ID, name: '小厨房', avatarURL: 'https://storage.example/public-avatar.png'}});
+
+test('profile avatar save uploads a local photo only on save and sends only its owned cloud ID', async () => {
+  const app = setup(); app.files.set(AVATAR_PATH, PNG);
+  assert.deepEqual(app.calls, []);
+  app.hooks.request = args => args.data.action === 'updateProfile' ? avatarSaved() : undefined;
+  const before = app.social.getMineReadVersion();
+  const result = await app.social.saveProfile(avatarInput());
+  const upload = app.calls.find(item => item.action === 'upload');
+  assert.match(upload.cloudPath, new RegExp('^users/' + OWNER + '/photos/avatar-[0-9]+-[0-9]+-[a-z0-9]+\\.png$'));
+  assert.equal(upload.filePath, AVATAR_PATH);
+  assert.deepEqual(app.calls.find(item => item.action === 'updateProfile'), {
+    action: 'updateProfile', name: '小厨房', bio: '家常辅食', avatarFileID: 'cloud://social-test.bucket/' + upload.cloudPath, ...PERSONAL
+  });
+  assert.equal(result.profile.avatarURL, avatarSaved().profile.avatarURL);
+  assert.ok(app.social.getMineReadVersion() > before);
+  assert.equal(app.calls.filter(item => item.action === 'sync').length, 0);
+  assert.ok(app.files.has(AVATAR_PATH));
+});
+
+test('omitting avatarPath preserves the current avatar and never forwards caller-supplied cloud IDs or URLs', async () => {
+  const app = setup();
+  await app.social.saveProfile({name: '小厨房', bio: '', avatarURL: 'https://other.example/avatar.jpg', avatarFileID: 'cloud://untrusted/other'});
+  assert.deepEqual(app.calls, [{action: 'identity', protocolVersion: 2}, {action: 'updateProfile', name: '小厨房', bio: '', ...PERSONAL}]);
+});
+
+test('family profile avatars remain owned by the member while the request retains the active family scope', async () => {
+  const scope = {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)};
+  const app = setup({scope}); app.files.set(AVATAR_PATH, PNG);
+  app.hooks.request = args => args.data.action === 'updateProfile' ? avatarSaved() : undefined;
+  await app.social.saveProfile(avatarInput());
+  const upload = app.calls.find(item => item.action === 'upload'), update = app.calls.find(item => item.action === 'updateProfile');
+  assert.ok(upload.cloudPath.startsWith('users/' + OWNER + '/photos/avatar-'));
+  assert.deepEqual(update.expectedScope, scope); assert.equal(update.expectedOwner, OWNER);
+  assert.equal(app.calls.some(item => item.action === 'sync'), false);
+});
+
+test('compressed avatars are removed after upload success or failure while the selected photo remains retryable', async () => {
+  for (const succeeds of [true, false]) {
+    const app = setup(); app.files.set(AVATAR_PATH, PNG);
+    app.hooks.imageInfo = args => args.src === AVATAR_PATH ? {width: 4000, height: 3000} : {width: 750, height: 562};
+    if (!succeeds) app.hooks.upload = () => { throw Error('offline'); };
+    app.hooks.request = args => args.data.action === 'updateProfile' ? avatarSaved() : undefined;
+    if (succeeds) await app.social.saveProfile(avatarInput());
+    else await assert.rejects(app.social.saveProfile(avatarInput()), error => error.code === 'PROFILE_AVATAR_UPLOAD_FAILED');
+    assert.deepEqual(app.calls.find(item => item.action === 'compress'), {action: 'compress', width: 750, height: 562});
+    assert.equal(app.files.has('wxfile://tmp/compressed-photo'), false); assert.ok(app.files.has(AVATAR_PATH));
+  }
+});
+
+test('invalid avatar paths are rejected before identity, filesystem, upload or profile requests', () => {
+  for (const avatarPath of ['', null, undefined, {}, 'cloud://social-test.bucket/users/avatar.png',
+    'https://example.com/avatar.png', 'https://tmp.evil.example/avatar.png', '//remote/avatar.png', 'relative.png', 'wxfile://tmp/bad\npath']) {
+    const app = setup();
+    assert.throws(() => app.social.saveProfile(avatarInput({avatarPath})), error => error.code === 'INVALID_PROFILE_AVATAR');
+    assert.deepEqual(app.calls, []);
+  }
+});
+
+test('duplicate avatar saves share upload and mutation, and a failed save reuses the upload with changed profile text', async () => {
+  const app = setup(); app.files.set(AVATAR_PATH, PNG);
+  let release, attempts = 0;
+  app.hooks.upload = args => new Promise(resolve => { release = () => resolve({fileID: 'cloud://social-test.bucket/' + args.cloudPath}); });
+  app.hooks.request = args => {
+    if (args.data.action !== 'updateProfile') return;
+    if (++attempts === 1) throw Error('lost response');
+    return avatarSaved();
+  };
+  const first = app.social.saveProfile(avatarInput()), duplicate = app.social.saveProfile(avatarInput());
+  assert.equal(first, duplicate);
+  const rejected = assert.rejects(first, error => error.code === 'NETWORK');
+  await flushTasks(); assert.equal(app.calls.filter(item => item.action === 'upload').length, 1);
+  release(); await rejected;
+  assert.ok(app.files.has(AVATAR_PATH));
+  await app.social.saveProfile(avatarInput({bio: '修改后的简介'}));
+  assert.equal(app.calls.filter(item => item.action === 'upload').length, 1);
+  const updates = app.calls.filter(item => item.action === 'updateProfile');
+  assert.equal(updates.length, 2); assert.equal(updates[1].bio, '修改后的简介');
+  assert.equal(updates[0].avatarFileID, updates[1].avatarFileID);
+});
+
+test('avatar saves require explicit backend confirmation and preserve the uploaded file for a supported retry', async () => {
+  for (const response of [{ok: true}, {profile: avatarSaved().profile}, {avatarUpdated: true}, {avatarUpdated: 'true', profile: {}}]) {
+    const app = setup(); app.files.set(AVATAR_PATH, PNG);
+    app.hooks.request = args => args.data.action === 'updateProfile' ? response : undefined;
+    await assert.rejects(app.social.saveProfile(avatarInput()), error => error.code === 'PROFILE_AVATAR_UPDATE_UNAVAILABLE');
+    app.hooks.request = args => args.data.action === 'updateProfile' ? {avatarUpdated: true, profile: {id: PROFILE_ID, avatarURL: ''}} : undefined;
+    const result = await app.social.saveProfile(avatarInput());
+    assert.equal(result.avatarUpdated, true); assert.equal(result.profile.avatarURL, '');
+    assert.equal(app.calls.filter(item => item.action === 'upload').length, 1);
+  }
+});
+
+test('avatar upload failures and wrong upload ownership never submit a profile mutation', async () => {
+  for (const failure of ['network', 'owner', 'path', 'environment']) {
+    const app = setup(); app.files.set(AVATAR_PATH, PNG);
+    app.hooks.upload = args => {
+      if (failure === 'network') throw Error('upload unavailable');
+      const id = 'cloud://' + (failure === 'environment' ? 'other-env' : 'social-test') + '.bucket/' +
+        (failure === 'owner' ? args.cloudPath.replace(OWNER, OTHER) : failure === 'path' ? args.cloudPath + '-wrong' : args.cloudPath);
+      return {fileID: id};
+    };
+    await assert.rejects(app.social.saveProfile(avatarInput()), error => error.code ===
+      (failure === 'network' ? 'PROFILE_AVATAR_UPLOAD_FAILED' : 'INVALID_PROFILE_AVATAR'));
+    assert.equal(app.calls.some(item => item.action === 'updateProfile'), false);
+    assert.ok(app.files.has(AVATAR_PATH));
+    delete app.hooks.upload;
+    app.hooks.request = args => args.data.action === 'updateProfile' ? avatarSaved() : undefined;
+    await app.social.saveProfile(avatarInput());
+    assert.equal(app.calls.filter(item => item.action === 'upload').length, 2);
+  }
+});
+
+test('avatar moderation failures keep the selected photo and map to actionable messages', async () => {
+  for (const code of ['INVALID_PROFILE_AVATAR', 'PROFILE_AVATAR_REJECTED', 'PROFILE_AVATAR_MODERATION_UNAVAILABLE']) {
+    const app = setup(); app.files.set(AVATAR_PATH, PNG);
+    app.hooks.request = args => args.data.action === 'updateProfile' ? {error: {code, message: 'private moderation diagnostic'}} : undefined;
+    await assert.rejects(app.social.saveProfile(avatarInput()), error => error.code === code && /头像/.test(error.message) && !/private/.test(error.message));
+    assert.ok(app.files.has(AVATAR_PATH));
+  }
+});
+
+test('account and family changes during each avatar await reject old results and do not submit after the change', async t => {
+  for (const mode of ['account', 'account-aba', 'family', 'family-aba']) {
+    for (const phase of ['identity', 'info', 'image', 'read', 'upload', 'response']) await t.test(mode + ':' + phase, async () => {
+      const app = setup(); app.files.set(AVATAR_PATH, PNG);
+      const change = () => {
+        if (mode.startsWith('account')) { app.store.bindAccount(OTHER); if (mode === 'account-aba') app.store.bindAccount(OWNER); }
+        else {
+          app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+          if (mode === 'family-aba') app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+        }
+      };
+      if (phase === 'identity') app.hooks.identity = () => { change(); return {owner: OWNER, revision: 0}; };
+      if (phase === 'info') app.hooks.info = change;
+      if (phase === 'image') app.hooks.imageInfo = () => { change(); return {width: 640, height: 480}; };
+      if (phase === 'read') app.hooks.read = change;
+      if (phase === 'upload') app.hooks.upload = args => { change(); return {fileID: 'cloud://social-test.bucket/' + args.cloudPath}; };
+      app.hooks.request = args => {
+        if (args.data.action !== 'updateProfile') return;
+        if (phase === 'response') change();
+        return avatarSaved();
+      };
+      await assert.rejects(app.social.saveProfile(avatarInput()), error => error.code === 'ACCOUNT_CHANGED');
+      assert.equal(app.calls.filter(item => item.action === 'updateProfile').length, phase === 'response' ? 1 : 0);
+      assert.ok(app.files.has(AVATAR_PATH));
+    });
+  }
+});
+
+test('avatar upload retry metadata cannot cross an account or family ABA transition', async () => {
+  for (const family of [false, true]) {
+    const app = setup(); app.files.set(AVATAR_PATH, PNG);
+    app.hooks.request = args => args.data.action === 'updateProfile' ? {error: {code: 'PROFILE_AVATAR_REJECTED'}} : undefined;
+    await assert.rejects(app.social.saveProfile(avatarInput()));
+    if (family) {
+      app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
+      app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
+    } else { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); }
+    app.hooks.request = args => args.data.action === 'updateProfile' ? avatarSaved() : undefined;
+    await app.social.saveProfile(avatarInput());
+    assert.equal(app.calls.filter(item => item.action === 'upload').length, 2);
+  }
 });

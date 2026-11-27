@@ -69,3 +69,18 @@ test('tile author avatars follow stable profile IDs without mutating recipes or 
   setRecipe(null);
   assert.equal(component.data.authorAvatar, '/assets/cute/pocket-mascot.png');
 });
+
+test('tile custom avatars fall back persistently and stale errors cannot replace another author or URL', () => {
+  const {component, setRecipe} = setup(), id = 'a'.repeat(32), nextId = 'b'.repeat(32);
+  const first = 'https://example.test/first.png', second = 'https://example.test/second.png';
+  const recipe = Object.freeze({id: 'recipe', profileId: id, authorAvatarURL: first, authorName: '作者'});
+  const error = (profileId, url) => ({currentTarget: {dataset: {id: profileId, url}}});
+  setRecipe(recipe); assert.equal(component.data.authorAvatar, first);
+  component.avatarError(error(id, first)); assert.equal(component.data.authorAvatar, getProfileAvatar(id));
+  setRecipe({...recipe, authorName: '修改昵称'}); assert.equal(component.data.authorAvatar, getProfileAvatar(id));
+  setRecipe({...recipe, authorAvatarURL: second}); assert.equal(component.data.authorAvatar, second);
+  component.avatarError(error(id, first)); assert.equal(component.data.authorAvatar, second);
+  setRecipe({...recipe, profileId: nextId}); assert.equal(component.data.authorAvatar, first);
+  component.avatarError(error(id, first)); assert.equal(component.data.authorAvatar, first);
+  assert.equal(recipe.authorAvatarURL, first);
+});

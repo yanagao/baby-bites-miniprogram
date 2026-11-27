@@ -1,6 +1,6 @@
 <t-navbar title="我做过这道菜" left-arrow placeholder delta="{{0}}" bind:go-back="back" />
 <view class="cooksnap-editor-page">
-  <view wx:if="{{loading}}" class="cooksnap-loading">正在打开这道菜谱…</view>
+  <view wx:if="{{loading}}" class="cooksnap-loading">加载中</view>
   <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button wx:if="{{!isSelf}}" slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
   <block wx:elif="{{recipe}}">
     <view class="cooksnap-recipe"><view class="cooksnap-eyebrow">{{submitted ? '跟做已分享' : '这次做了'}} · {{author.name}} 的菜谱</view><view class="cooksnap-title">{{recipe.name}}</view></view>

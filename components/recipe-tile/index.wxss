@@ -11,6 +11,6 @@
 .recipe-tile-favorite {position:absolute;right:10rpx;bottom:10rpx;width:36rpx;height:36rpx;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.96);color:#f28b70;}
 .recipe-tile-author {display:flex;align-items:center;gap:8rpx;margin:11rpx 3rpx 0;font-size:var(--font-caption);color:#82969a;min-height:48rpx;}
 .recipe-tile-avatar {width:48rpx;height:48rpx;flex:none;display:flex;align-items:center;justify-content:center;background:#eff8f8;border-radius:50%;overflow:hidden;}
-.recipe-tile-avatar-image {display:block;width:40rpx;height:40rpx;}
+.recipe-tile-avatar-image {display:block;width:100%;height:100%;border-radius:50%;}
 .recipe-tile-author>text {min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 .recipe-tile-pressed {opacity:.72;}

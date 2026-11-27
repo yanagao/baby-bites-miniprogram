@@ -23,7 +23,7 @@ function invalidate(page) {
     publicationError: '', contentTab: 'recipes', babyAgeMonths: null, babyAgeLabel: '',
     babyBirthDate: null, birthdayDirty: false, birthdayAgeLabel: '', birthDateToday: '',
     babyNickname: '', babyNicknameBase: '', babyNicknameDirty: false, babyNicknameError: '',
-    profileSaveError: '', profileModerating: false, avatarPath: '/assets/cute/pocket-mascot.png'});
+    profileSaveError: '', profileModerating: false, avatarPath: '/assets/cute/pocket-mascot.png', avatarDraftPath: ''});
   const update = {error: MESSAGE};
   Object.keys(cleared).forEach(key => { if (key in page.data) update[key] = cleared[key]; });
   page.setData(update);

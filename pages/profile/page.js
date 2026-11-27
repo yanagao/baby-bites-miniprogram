@@ -39,7 +39,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     publicationReady: false, publicationError: '',
     publishedCount: 0, followingCount: 0, followerCount: 0,
     recipes: [], nextOffset: null, loadingMore: false, editing: false, name: '', bio: '', saving: false, followBusy: false,
-    profileSaveError: '', profileModerating: false, avatarPath: getProfileAvatar(),
+    profileSaveError: '', profileModerating: false, avatarPath: getProfileAvatar(), avatarDraftPath: '', avatarEditToken: 0,
     babyAgeMonths: null, babyAgeLabel: '', babyBirthDate: null, birthdayDirty: false, familyActive: false,
     birthdayAgeLabel: '', birthDateToday: '',
     ...babyNicknameFields(null),
@@ -52,7 +52,8 @@ module.exports = function createProfilePage(isTab = false) { return {
     this.returnAfterSave = !isTab && !this.profileId && options.returnToRecipe === '1';
     this.published = []; this.pendingShare = false;
     this.setupRequested = options.edit === '1'; this.shareRequested = options.share === '1';
-    this.request = 0; this.shareRequest = 0; this.mealPlansRequest = 0; this.contentRequest = 0; account.bind(this);
+    this.request = 0; this.shareRequest = 0; this.mealPlansRequest = 0; this.contentRequest = 0;
+    this._avatarEditSequence = 0; this._failedAvatar = null; account.bind(this);
   },
   onShow() {
     if (isTab) syncTabBar(this);
@@ -60,8 +61,8 @@ module.exports = function createProfilePage(isTab = false) { return {
     if (this._loadFlight && this._loadFlight.request === this.request) return this._loadFlight.work;
     const version = readVersion(isTab);
     const reusable = isTab ? this._loadAttempted && this._loadedVersion === version :
-      !this.data.loading && !this.data.error && !this.data.publicationError && this._loadedAt &&
-      Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === version;
+      !this.data.loading && !this.data.error && !this.data.publicationError && this.data.profile &&
+      this._loadedVersion === version;
     if (reusable && (isTab || (!this.setupRequested && !this.shareRequested))) {
       this.refresh();
       if (this.data.contentTab === 'mealPlans' && this.mealPlansNeedLoad()) return this.loadMealPlans();
@@ -70,7 +71,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     return this.load();
   },
   onReady() { if (isTab) syncTabBar(this); },
-  onUnload() { this.request++; this.cancelMealPlans(); this.disposeShare(); account.dispose(this); },
+  onUnload() { this.request++; this.cancelMealPlans(); this.disposeShare(); this.setData({avatarDraftPath: ''}); account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
   onPullDownRefresh() {
     if (this.data.editing || this.data.saving || this.data.followBusy || this.data.shareVisible) {
@@ -106,7 +107,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     const currentProfileId = this.data.profile && this.data.profile.id;
     const sameProfile = typeof currentProfileId === 'string' && /^[a-f0-9]{32}$/.test(currentProfileId) &&
       (this.profileId ? this.profileId === currentProfileId : this.data.isSelf);
-    this.setData({loading: true, error: '', avatarPath: getProfileAvatar(sameProfile ? currentProfileId : ''), loadingMore: false, saving: false, profileSaveError: '', profileModerating: false, publicationReady: false, publicationError: ''});
+    this.setData({loading: true, error: '', avatarPath: sameProfile ? this.data.avatarPath : getProfileAvatar(), avatarDraftPath: '', loadingMore: false, saving: false, profileSaveError: '', profileModerating: false, publicationReady: false, publicationError: ''});
     this.refresh();
     try {
       let result, mine;
@@ -132,7 +133,8 @@ module.exports = function createProfilePage(isTab = false) { return {
       const resultVersion = isTab && mine && typeof social.getMineReadVersion === 'function' ? social.getMineReadVersion(mine) : undefined;
       this._loadedVersion = resultVersion === undefined ? version : resultVersion;
       this.setData({
-        profile, avatarPath: getProfileAvatar(profile.id), isSelf: !!result.isSelf, following: !!result.following, followedBy: !!result.followedBy,
+        profile, avatarPath: this.profileAvatar(profile), avatarDraftPath: '', avatarEditToken: ++this._avatarEditSequence,
+        isSelf: !!result.isSelf, following: !!result.following, followedBy: !!result.followedBy,
         publishedCount: Number.isSafeInteger(result.publishedCount) ? count(result.publishedCount) :
           result.nextOffset == null ? (result.recipes || []).length : null,
         followingCount: count(result.followingCount), followerCount: count(result.followerCount),
@@ -176,7 +178,7 @@ module.exports = function createProfilePage(isTab = false) { return {
       if (Object.keys(changed).length) this.setData(changed);
     } catch (error) { ui.error(error); }
   },
-  disposeLocalContent() { this.cancelMealPlans(true); this.published = []; this._loadedAt = 0; this._loadAttempted = false; this._loadFlight = null; this._pullDownFlight = null; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this.setData({familyActive: false}); },
+  disposeLocalContent() { this.cancelMealPlans(true); this.published = []; this._loadedAt = 0; this._loadAttempted = false; this._loadFlight = null; this._pullDownFlight = null; this.pendingShare = false; this.shareRequested = false; this.returnAfterSave = false; this.publicSavedForEdit = false; this._failedAvatar = null; this.setData({familyActive: false, avatarDraftPath: '', avatarEditToken: ++this._avatarEditSequence}); },
   changeContentTab(event) {
     if (!account.check(this)) return;
     const value = event.currentTarget && event.currentTarget.dataset.value || event.detail && event.detail.value;
@@ -188,8 +190,7 @@ module.exports = function createProfilePage(isTab = false) { return {
   },
   mealPlansNeedLoad() {
     const version = typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
-    const elapsed = Date.now() - this.mealPlansCheckedAt;
-    return !this.mealPlansAttempted || this.mealPlansVersion !== version || elapsed < 0 || elapsed >= 30000;
+    return !this.mealPlansAttempted || this.mealPlansVersion !== version;
   },
   cancelMealPlans(clear = false) {
     this.mealPlansRequest = (this.mealPlansRequest || 0) + 1;
@@ -253,12 +254,46 @@ module.exports = function createProfilePage(isTab = false) { return {
     if (!account.check(this) || !this.data.isSelf || this.data.loading || this.data.saving) return;
     try {
       this.publicSavedForEdit = false;
-      this.setData({editing: true, profileSaveError: '', profileModerating: false, name: this.data.profile ? this.data.profile.name : '', bio: this.data.profile && this.data.profile.bio || '',
+      this.disposeShare();
+      this.setData({editing: true, profileSaveError: '', profileModerating: false, avatarDraftPath: '', avatarEditToken: ++this._avatarEditSequence,
+        name: this.data.profile ? this.data.profile.name : '', bio: this.data.profile && this.data.profile.bio || '',
         ...babyAgeFields(this.data.profile, true), ...babyNicknameFields(store.getState())});
     } catch (error) { ui.error(error); }
   },
   cancelEdit() { if (account.check(this) && !this.data.saving) { this.pendingShare = false; this.publicSavedForEdit = false;
-    this.setData({editing: false, profileSaveError: '', profileModerating: false, ...babyAgeFields(this.data.profile, this.data.isSelf), ...babyNicknameFields(null)}); this.returnToRecipe(); } },
+    this.setData({editing: false, profileSaveError: '', profileModerating: false, avatarDraftPath: '', avatarEditToken: ++this._avatarEditSequence,
+      ...babyAgeFields(this.data.profile, this.data.isSelf), ...babyNicknameFields(null)}); this.returnToRecipe(); } },
+  profileAvatar(profile) {
+    const failed = this._failedAvatar;
+    return getProfileAvatar(profile && profile.id, profile &&
+      !(failed && failed.id === profile.id && failed.url === profile.avatarURL) ? profile.avatarURL : '');
+  },
+  avatarError(event) {
+    if (!account.check(this) || !this.data.profile) return;
+    const source = event.currentTarget && event.currentTarget.dataset;
+    if (!source || source.id !== this.data.profile.id || source.url !== this.data.avatarPath) return;
+    this._failedAvatar = {id: source.id, url: source.url};
+    this.setData({avatarPath: getProfileAvatar(source.id)});
+  },
+  chooseAvatar(event) {
+    if (!account.check(this) || !this.data.editing || !this.data.isSelf || !this.data.socialEnabled ||
+      !this.data.profile || this.data.saving) return;
+    const source = event.currentTarget && event.currentTarget.dataset;
+    if (!source || Number(source.editToken) !== this.data.avatarEditToken || source.profileId !== this.data.profile.id) return;
+    const path = event.detail && event.detail.avatarUrl;
+    if (typeof path !== 'string' || !path || path.length > 2000 || /[\u0000-\u001f\u007f]/.test(path) ||
+      !/^(?:wxfile:\/\/|https?:\/\/(?:tmp|usr)\/|\/)/.test(path)) {
+      this.setData({profileSaveError: '头像未能读取，请重新选择。'}); return;
+    }
+    this.setData({avatarDraftPath: path, profileSaveError: ''});
+  },
+  avatarPreviewError(event) {
+    if (!account.check(this) || !this.data.editing || this.data.saving) return;
+    const source = event.currentTarget && event.currentTarget.dataset;
+    if (!source || Number(source.editToken) !== this.data.avatarEditToken) return;
+    if (!this.data.avatarDraftPath) return this.avatarError(event);
+    if (source.url === this.data.avatarDraftPath) this.setData({avatarDraftPath: '', profileSaveError: '头像未能读取，请重新选择。'});
+  },
   returnToRecipe(saved = false) {
     if (!this.returnAfterSave || !account.check(this) || typeof getCurrentPages !== 'function') return false;
     const pages = getCurrentPages();
@@ -300,12 +335,13 @@ module.exports = function createProfilePage(isTab = false) { return {
     const profile = this.data.profile;
     const familyActive = inFamily();
     const familyBabyPatch = {...(this.data.babyNicknameDirty ? {nickname} : {}), ...(familyActive && this.data.birthdayDirty ? {babyBirthDate: this.data.babyBirthDate} : {})};
-    const publicChanged = this.data.socialEnabled && !!profile && (name !== profile.name.trim() || bio !== (profile.bio || '').trim() || (!familyActive && this.data.birthdayDirty));
+    const publicChanged = this.data.socialEnabled && !!profile && (Boolean(this.data.avatarDraftPath) || name !== profile.name.trim() || bio !== (profile.bio || '').trim() || (!familyActive && this.data.birthdayDirty));
     const privateOnly = (this.data.babyNicknameDirty || (familyActive && this.data.birthdayDirty)) && !publicChanged &&
       ((!this.pendingShare && !this.returnAfterSave) || this.publicSavedForEdit);
     if (!privateOnly && (!this.data.socialEnabled || !profile)) { ui.error(new Error('生日与主页资料暂不可编辑，请稍后重试')); return; }
     if (!privateOnly && !name) { ui.error(new Error('请填写昵称')); return; }
     const input = {name, bio};
+    if (this.data.avatarDraftPath) input.avatarPath = this.data.avatarDraftPath;
     if (this.data.birthdayDirty) {
       if (this.data.babyBirthDate !== null && !babyAge.isValidBirthDate(this.data.babyBirthDate)) {
         ui.error(new Error('请选择有效的宝宝生日，不能晚于今天。')); return;
@@ -321,7 +357,9 @@ module.exports = function createProfilePage(isTab = false) { return {
         const savedProfile = result && result.profile ? result.profile : {...profile, ...input, exists: true,
           ...(Object.prototype.hasOwnProperty.call(input, 'babyBirthDate') ? {babyAgeMonths: babyAge.ageInMonths(input.babyBirthDate)} : {})};
         this.publicSavedForEdit = true;
-        this.setData({profile: savedProfile, avatarPath: getProfileAvatar(savedProfile.id), profileModerating: false, name: savedProfile.name, bio: savedProfile.bio || '', ...(familyActive ? {} : babyAgeFields(savedProfile, true))});
+        this.disposeShare();
+        this.setData({profile: savedProfile, avatarPath: this.profileAvatar(savedProfile), avatarDraftPath: '', profileModerating: false,
+          name: savedProfile.name, bio: savedProfile.bio || '', ...(familyActive ? {} : babyAgeFields(savedProfile, true))});
       }
       if (!account.check(this) || request !== this.request) return;
       if (Object.keys(familyBabyPatch).length) {
@@ -334,7 +372,8 @@ module.exports = function createProfilePage(isTab = false) { return {
       }
       if (!account.check(this) || request !== this.request) return;
       const savedPublic = this.publicSavedForEdit;
-      this.setData({editing: false, saving: false, profileModerating: false, profileSaveError: '', ...babyAgeFields(this.data.profile, true), ...babyNicknameFields(null)});
+      this.setData({editing: false, saving: false, profileModerating: false, profileSaveError: '', avatarDraftPath: '',
+        ...babyAgeFields(this.data.profile, true), ...babyNicknameFields(null)});
       this.publicSavedForEdit = false;
       if (privateOnly && !savedPublic) { wx.showToast({title: familyActive ? '宝宝资料已保存' : '宝宝称呼已保存', icon: 'success'}); this.refresh(); return; }
       if (this.pendingShare) { this.shareRequested = true; this.pendingShare = false; }
@@ -427,7 +466,7 @@ module.exports = function createProfilePage(isTab = false) { return {
     this.setData({shareVisible: true, shareLoading: true});
     const guard = () => {
       if (!account.check(this) || request !== this.shareRequest || !this.data.shareVisible ||
-        !this.data.profile || this.data.profile.id !== profile.id) throw Error('分享页面已关闭，请重新生成。');
+        !this.data.profile || this.data.profile.id !== profile.id || this.data.profile.avatarURL !== profile.avatarURL) throw Error('分享页面已关闭，请重新生成。');
     };
     try {
       const info = wx.getAccountInfoSync();

@@ -68,13 +68,12 @@ function setup(options = {}) {
     getReadVersion: () => readVersion,
     async getRecipeShareLink(id, options) {
       calls.shareLinks.push({id, ...options});
-      const localVersion = JSON.stringify(store.getRecipe(id));
-      if (hooks.link) return hooks.link(id, options, localVersion);
+      if (hooks.link) return hooks.link(id, options);
       const source = store.getRecipe(id).source;
       const result = hooks.recipe ? await hooks.recipe(source ? source.recipeId : PUBLIC_ID) :
         {recipe: {...clone(publicRecipe), id: source ? source.recipeId : PUBLIC_ID}};
       published = true;
-      return {...result, localVersion};
+      return result;
     },
     async getMine() {
       calls.mine++;

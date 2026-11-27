@@ -22,7 +22,8 @@
     "pages/share-preview/index",
     "pages/feedback/index",
     "pages/cooksnap-editor/index",
-    "pages/family/index"
+    "pages/family/index",
+    "pages/ai-analysis/index"
   ],
   "window": {
     "navigationBarTitleText": "小口袋",

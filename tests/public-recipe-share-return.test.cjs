@@ -18,7 +18,7 @@ function setup() {
   let owner = 'owner-a', scope = 'family-a', version = 1, imported = null, allergies = [];
   const listeners = new Set();
   const appHideListeners = new Set();
-  const calls = {recipes: [], summaries: 0, feedback: [], routes: [], images: [], updates: 0, loading: 0};
+  const calls = {recipes: [], summaries: 0, feedback: [], routes: [], images: [], updates: 0, loading: 0, stopped: 0};
   const hooks = {};
   const store = {getSyncInfo: () => ({owner, scopeKey: scope}), getState: () => ({recipes: [], logs: [], allergies}),
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
@@ -32,10 +32,10 @@ function setup() {
         cooksnaps: [{id: String(offset), createdAt: 1, text: '喜欢', photoURL: 'https://example.test/photo.jpg'}]};
     },
     findImportedRecipe: () => imported,
-    setFollowing: async (_, following) => ({following, followedBy: true}),
-    addToCookbook: async () => { imported = {id: 'local-copy'}; return {recipeId: imported.id, added: true}; }
+    setFollowing: async (_, following) => { version++; return {following, followedBy: true}; },
+    addToCookbook: async () => { version++; imported = {id: 'local-copy'}; return {recipeId: imported.id, added: true}; }
   };
-  const wx = {showShareMenu() {}, hideShareMenu() {}, showToast() {}, previewImage() {},
+  const wx = {showShareMenu() {}, hideShareMenu() {}, showToast() {}, previewImage() {}, stopPullDownRefresh() { calls.stopped++; },
     getImageInfo(options) {
       calls.images.push(options.src);
       if (hooks.image) return hooks.image(options);
@@ -188,18 +188,21 @@ test('native recipe sharing and cancellation preserve the loaded view, paginatio
   });
 });
 
-test('share-return reuse is consumed once and ordinary returns still revalidate public visibility', async () => {
+test('ordinary returns reuse loaded content until a data change requires public visibility revalidation', async () => {
   const app = setup(), {page, calls, hooks} = app; await page.onShow();
   nativeShare(app); await page.onShow();
   assert.equal(calls.recipes.length, 1);
   hooks.recipe = () => { throw Error('菜谱已取消公开'); };
+  await page.onShow(); await page.onShow();
+  assert.equal(calls.recipes.length, 1); assert.equal(page.data.recipe.id, recipe.id);
+  app.invalidate();
   await page.onShow();
   assert.equal(calls.recipes.length, 2); assert.equal(page.data.recipe, null);
   assert.match(page.data.error, /取消公开/);
   assert.equal(page.onShareAppMessage().path, '/pages/home/index');
 });
 
-test('canceling without hide cannot exempt a later ordinary background return after an author change', async t => {
+test('canceling without hide cannot exempt a later invalidated background return after an author change', async t => {
   for (const reason of [0, 1, 3, undefined]) for (const change of ['rename', 'NOT_PUBLIC']) {
     await t.test(String(reason) + ' ' + change, async () => {
       const app = setup(); await app.page.onShow(); app.page.onShareAppMessage();
@@ -208,6 +211,7 @@ test('canceling without hide cannot exempt a later ordinary background return af
         if (change === 'NOT_PUBLIC') throw Object.assign(Error('原作者已取消公开'), {code: 'NOT_PUBLIC'});
         return {recipe: {...recipe, name: '原作者修改后的名字'}, author};
       };
+      app.invalidate();
       app.hideApp(reason); if (app.page.onHide) app.page.onHide(); await app.page.onShow();
       assert.equal(app.calls.recipes.length, 2);
       if (change === 'rename') assert.equal(app.page.data.recipe.name, '原作者修改后的名字');
@@ -216,12 +220,68 @@ test('canceling without hide cannot exempt a later ordinary background return af
   }
 });
 
-test('share return refreshes changed local allergy and imported-copy state without querying the server', async () => {
-  const app = setup(); await app.page.onShow(); nativeShare(app);
+test('ordinary return refreshes changed local allergy and imported-copy state without querying the server', async () => {
+  const app = setup(); await app.page.onShow();
   app.setAllergies(['南瓜']); app.setImported({id: 'new-local-copy'});
   await app.page.onShow();
   assert.equal(app.calls.recipes.length, 1); assert.equal(app.calls.summaries, 1); assert.equal(app.calls.feedback.length, 1);
   assert.match(app.page.data.allergyWarning, /南瓜/); assert.equal(app.page.data.importedId, 'new-local-copy');
+});
+
+test('repeated ordinary returns after a long visit preserve pagination and image state without reads or redraws', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const app = setup(); await app.page.onShow(); await app.page.moreFeedback();
+  app.page.photoError(); app.page.cooksnapPhotoError({currentTarget: {dataset: {id: '1'}}});
+  const before = clone(app.page.data), counts = clone(app.calls);
+  for (const elapsed of [31000, 300000, 3600000]) {
+    now += elapsed; await app.page.onShow();
+    assert.deepEqual(app.page.data, before); assert.deepEqual(clone(app.calls), counts);
+  }
+});
+
+test('repeated shows during the initial recipe read share one request and keep its result', async () => {
+  const app = setup(); let release;
+  app.hooks.recipe = () => new Promise(resolve => { release = resolve; });
+  const first = app.page.onShow(), second = app.page.onShow(), third = app.page.onShow();
+  assert.equal(first, second); assert.equal(first, third);
+  assert.equal(app.calls.recipes.length, 1); assert.equal(app.calls.loading, 1);
+  release({recipe, author}); await Promise.all([first, second, third]);
+  assert.equal(app.page.data.recipe.id, recipe.id); assert.equal(app.calls.summaries, 1);
+  await app.page.onShow(); assert.equal(app.calls.recipes.length, 1);
+});
+
+test('pull-down refresh explicitly revalidates a withdrawn recipe and always stops its indicator', async () => {
+  const app = setup(); await app.page.onShow();
+  let reject;
+  app.hooks.recipe = () => new Promise((_, fail) => { reject = fail; });
+  const first = app.page.onPullDownRefresh(), second = app.page.onPullDownRefresh();
+  assert.equal(first, second); assert.equal(app.calls.recipes.length, 2);
+  assert.equal(app.calls.recipes[1].options.force, true);
+  reject(Error('菜谱已取消公开')); await first;
+  assert.equal(app.calls.stopped, 1); assert.equal(app.page.data.recipe, null);
+  assert.match(app.page.data.error, /取消公开/);
+  app.hooks.recipe = null; await app.page.onPullDownRefresh();
+  assert.equal(app.calls.stopped, 2); assert.equal(app.page.data.recipe.id, recipe.id);
+  await app.page.onShow(); assert.equal(app.calls.recipes.length, 3);
+});
+
+test('pull-down refresh does not interrupt follow, save or cooksnap deletion', async () => {
+  for (const key of ['followBusy', 'adding', 'deletingCooksnap']) {
+    const app = setup(); await app.page.onShow(); app.page.setData({[key]: true});
+    await app.page.onPullDownRefresh();
+    assert.equal(app.calls.recipes.length, 1); assert.equal(app.calls.stopped, 1);
+  }
+});
+
+test('an explicit refresh supersedes a pending read without allowing its late result to restore old data', async () => {
+  const app = setup(); let release;
+  app.hooks.recipe = () => new Promise(resolve => { release = resolve; });
+  const first = app.page.onShow();
+  app.hooks.recipe = () => ({recipe: {...recipe, name: '新做法'}, author});
+  await app.page.onPullDownRefresh();
+  release({recipe, author}); await first;
+  assert.equal(app.page.data.recipe.name, '新做法'); assert.equal(app.calls.recipes.length, 2);
+  await app.page.onShow(); assert.equal(app.calls.recipes.length, 2);
 });
 
 test('a social change during sharing requires fresh public detail and related state', async () => {
@@ -264,17 +324,30 @@ test('a pending relationship read cannot make an invalidated displayed recipe cu
   assert.equal(app.calls.recipes.length, 2); assert.equal(app.calls.summaries, 2);
 });
 
+test('a return after invalidation refreshes the recipe even while its old relationship read is pending', async () => {
+  const app = setup(); let release;
+  app.hooks.summary = () => new Promise(resolve => { release = resolve; });
+  const first = app.page.onShow(); await turn(); app.invalidate();
+  app.hooks.recipe = () => ({recipe: {...recipe, name: '更新后的做法'}, author});
+  app.hooks.summary = () => ({isSelf: false, following: true});
+  await app.page.onShow();
+  assert.equal(app.calls.recipes.length, 2); assert.equal(app.page.data.recipe.name, '更新后的做法');
+  release({isSelf: false, following: false}); await first;
+  assert.equal(app.page.data.following, true);
+  await app.page.onShow(); assert.equal(app.calls.recipes.length, 2);
+});
+
 test('explicit reload consumes a pending share-return marker and remains forced', async () => {
   const {page, calls} = setup(); await page.onShow(); page.onShareAppMessage();
   await page.reload(); assert.equal(calls.recipes[1].options.force, true);
-  await page.onShow(); assert.equal(calls.recipes.length, 3);
+  await page.onShow(); assert.equal(calls.recipes.length, 2);
 });
 
-test('a cancelled share without a show event cannot suppress a later business-navigation refresh', async t => {
+test('returning from author, source, cancelled cooksnap and saved-copy navigation keeps loaded content', async t => {
   for (const action of ['openAuthor', 'openSource', 'openCooksnap', 'openOwn']) await t.test(action, async () => {
     const app = setup(); app.setImported({id: 'copy'}); await app.page.onShow(); app.page.onShareAppMessage();
     app.page[action](); assert.equal(app.calls.routes.length, 1);
-    await app.page.onShow(); assert.equal(app.calls.recipes.length, 2);
+    await app.page.onShow(); assert.equal(app.calls.recipes.length, 1);
   });
 });
 
@@ -286,12 +359,12 @@ test('following or saving after an unconsumed share cannot leave a stale reuse m
   });
 });
 
-test('photo previews cannot pick up a canceled share marker when they open a native page', async t => {
+test('returning from recipe or cooksnap photo previews keeps loaded content', async t => {
   for (const action of ['previewPhoto', 'previewCooksnap']) await t.test(action, async () => {
     const app = setup(); await app.page.onShow(); app.page.data.recipe.photoURL = 'https://example.test/recipe.jpg';
     app.page.onShareAppMessage();
     app.page[action]({currentTarget: {dataset: {id: '0'}}}); app.hideApp(2);
-    await app.page.onShow(); assert.equal(app.calls.recipes.length, 2);
+    await app.page.onShow(); assert.equal(app.calls.recipes.length, 1);
   });
 });
 

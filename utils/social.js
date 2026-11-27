@@ -3,6 +3,9 @@
 const config = require('../config/cloud');
 const store = require('./store');
 const {isBuiltInRecipe} = require('./recipe-origin');
+const {publicRecipeId} = require('./recipe-identity');
+const {validProfilePhotoPath, prepareProfilePhoto} = require('./profile-photo');
+const {isSafeAvatarURL} = require('./profile-avatar');
 const cloudSync = require('./cloud-sync');
 const {withCover} = require('./recipe-covers');
 const coverLoader = require('./cover-loader');
@@ -18,11 +21,14 @@ const saveReceiptMemory = new Map();
 const saveReceiptFlights = new Map();
 const cooksnapUploads = new Map();
 const cooksnapFlights = new Map();
+const profileAvatarUploads = new Map();
+const profileSaveFlights = new Map();
 const READ_TTL = 30 * 1000;
 const MAX_CACHE_ENTRIES = 32;
 const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const readCache = new Map();
 const readFlights = new Map();
+const shareRecipeFlights = new Map();
 // Record the version of the returned data, even if another write starts before
 // its caller resumes. The version stays off the server payload and view data.
 const mineResultVersions = new WeakMap();
@@ -57,6 +63,7 @@ store.subscribe(info => {
     observedOwner = info.owner; ownerEpoch += 1;
     observedRevision = info.revision; observedPublication = 0; observedIdentityInvalid = false;
     cooksnapUploads.clear();
+    profileAvatarUploads.clear();
     forgetIdentity();
   }
 });
@@ -132,6 +139,9 @@ const errors = {
   PROFILE_NAME_REJECTED: '昵称未通过内容审核，请修改后重试。',
   PROFILE_BIO_REJECTED: '简介未通过内容审核，请修改后重试。',
   PROFILE_MODERATION_UNAVAILABLE: '内容审核暂时不可用，资料尚未保存，请稍后重试。',
+  INVALID_PROFILE_AVATAR: '头像照片无效，请重新选择 JPG 或 PNG 照片。',
+  PROFILE_AVATAR_REJECTED: '头像未通过内容审核，请更换照片后重试。',
+  PROFILE_AVATAR_MODERATION_UNAVAILABLE: '头像审核暂时不可用，请稍后重试。',
   INVALID_BABY_AGE: '宝宝月龄请填写 0–120 之间的整数，留空可取消展示。',
   INVALID_BABY_BIRTH_DATE: '请选择有效的宝宝生日，不能晚于今天。',
   INVALID_INPUT: '信息不完整，请刷新页面后重试。',
@@ -347,7 +357,73 @@ function saveProfile(input) {
     }
     profile.babyBirthDate = birthDate;
   }
+  if (Object.prototype.hasOwnProperty.call(input, 'avatarPath')) {
+    if (!validProfilePhotoPath(input.avatarPath)) fail('请重新选择本机头像照片。', 'INVALID_PROFILE_AVATAR');
+    return saveProfileAvatar(profile, input.avatarPath);
+  }
   return mutate('updateProfile', profile);
+}
+function saveProfileAvatar(profile, avatarPath) {
+  const initial = {id: store.getSyncInfo().owner, epoch: ownerEpoch};
+  const key = initial.epoch + ':' + initial.id + ':' + avatarPath;
+  const flightKey = key + ':' + JSON.stringify(profile);
+  if (profileSaveFlights.has(flightKey)) return profileSaveFlights.get(flightKey);
+  const work = Promise.resolve().then(async () => {
+    assertOwner(initial);
+    const owner = await readyIdentity(true);
+    assertOwner(initial);
+    assertOwner(owner);
+    let upload = profileAvatarUploads.get(key);
+    if (!upload) {
+      if (profileAvatarUploads.size >= MAX_CACHE_ENTRIES) {
+        for (const [oldKey, old] of profileAvatarUploads) {
+          if (!old.work) { profileAvatarUploads.delete(oldKey); break; }
+        }
+      }
+      upload = {fileID: '', work: null};
+      profileAvatarUploads.set(key, upload);
+    }
+    if (!upload.fileID) {
+      if (!upload.work) {
+        upload.work = uploadProfileAvatar(avatarPath, owner).then(fileID => {
+          assertOwner(owner);
+          upload.fileID = fileID;
+        }).finally(() => { upload.work = null; });
+      }
+      await upload.work;
+    }
+    assertOwner(initial);
+    assertOwner(owner);
+    const result = await mutate('updateProfile', {...profile, avatarFileID: upload.fileID}, owner);
+    assertOwner(owner);
+    if (!object(result) || result.avatarUpdated !== true || !object(result.profile)) {
+      fail('头像服务暂未完成更新，请稍后重试。', 'PROFILE_AVATAR_UPDATE_UNAVAILABLE');
+    }
+    if (profileAvatarUploads.get(key) === upload) profileAvatarUploads.delete(key);
+    return result;
+  }).finally(() => { if (profileSaveFlights.get(flightKey) === work) profileSaveFlights.delete(flightKey); });
+  profileSaveFlights.set(flightKey, work);
+  return work;
+}
+async function uploadProfileAvatar(avatarPath, owner) {
+  let prepared;
+  try {
+    prepared = await prepareProfilePhoto(wx, avatarPath, {assertCurrent: () => assertOwner(owner)});
+    assertOwner(owner);
+    fileSequence++;
+    const cloudPath = 'users/' + owner.id + '/photos/avatar-' + Date.now() + '-' + fileSequence + '-' +
+      Math.random().toString(36).slice(2, 12) + '.' + prepared.extension;
+    const uploaded = await call(wx.cloud, 'uploadFile', {cloudPath, filePath: prepared.filePath, config: {env: config.env}});
+    assertOwner(owner);
+    if (!uploaded || !ownsUploadedPhoto(uploaded.fileID, owner, cloudPath)) {
+      fail('头像上传归属无法确认，请重试。', 'INVALID_PROFILE_AVATAR');
+    }
+    return uploaded.fileID;
+  } catch (error) {
+    assertOwner(owner);
+    if (error && error.userMessage) throw error;
+    fail('头像上传失败，请检查网络后重试。', 'PROFILE_AVATAR_UPLOAD_FAILED');
+  } finally { if (prepared) await prepared.cleanup(); }
 }
 function getProfile(id, start, options) { checkProfileId(id); return read('profile', {profileId: id, offset: offset(start)}, options); }
 function getProfileSummary(id, options) { checkProfileId(id); return read('profileSummary', {profileId: id}, options); }
@@ -374,34 +450,39 @@ async function getMealPlanShareLink(date) {
   return {...normalizeMealPlan(result, null, date), localVersion: version};
 }
 function getRecipe(id) { checkRecipeId(id); return read('recipe', {recipeId: id}, {}, false); }
-async function getRecipeShareLink(sourceRecipeId, options = {}) {
-  const owner = await ready({ifNeeded: !options.force});
+async function getRecipeShareLink(sourceRecipeId) {
+  requireEnabled();
+  const info = store.getSyncInfo();
+  if (!info.owner) fail('账号信息尚未加载，请稍后重试分享。', 'ACCOUNT_REQUIRED');
+  const initial = {id: info.owner, epoch: ownerEpoch};
   const local = store.getRecipe(sourceRecipeId);
-  if (!local || store.getSyncInfo().dirty) fail(errors.SYNC_REQUIRED, 'SYNC_REQUIRED');
+  if (!local) fail('这道菜谱已被移除，请返回后重新打开。', 'RECIPE_NOT_FOUND');
   if (isBuiltInRecipe(local)) fail(errors.BUILTIN_RECIPE, 'BUILTIN_RECIPE');
-  const localVersion = JSON.stringify(local);
+  // Public IDs are stable across content edits. Reading the existing card must
+  // not upload private changes or wait for automatic publication to catch up.
+  const id = local.source ? local.source.recipeId : publicRecipeId(
+    info.scope && info.scope.kind === 'family' ? local.createdBy : info.owner, local.id);
+  if (!publicId(id)) fail('暂时无法读取这道菜谱的分享链接，请稍后重试。', 'PUBLICATION_PENDING');
+  const owner = await readyIdentity(true);
   const check = () => {
+    assertOwner(initial);
     assertOwner(owner);
-    if (store.getSyncInfo().dirty || JSON.stringify(store.getRecipe(sourceRecipeId)) !== localVersion) {
-      fail('菜谱已有更新，请同步后重新分享。', 'SYNC_REQUIRED');
+    if (!store.matchesPublicRecipe(store.getRecipe(sourceRecipeId), id)) {
+      fail('菜谱已移除或分享来源已变化，请重新打开。', 'RECIPE_CHANGED');
     }
   };
-  let id;
-  if (local.source && publicId(local.source.recipeId)) {
-    id = local.source.recipeId;
-  } else {
-    const value = owner.scope && owner.scope.kind === 'family'
-      ? await getFamilyRecipeLink(sourceRecipeId, {force: true}) : await getMine({force: true});
-    check();
-    const publication = owner.scope && owner.scope.kind === 'family' ? value.publication
-      : Array.isArray(value.published) && value.published.find(item => item.sourceRecipeId === sourceRecipeId);
-    if (!publication || !publicId(publication.id) || publication.sourceUpdatedAt !== (local.updatedAt || local.createdAt || 0)) {
-      const status = cloudSync.getStatus();
-      fail(status && status.publicationMessage || '菜谱正在同步公开，请稍后重试。', 'PUBLICATION_PENDING');
-    }
-    id = publication.id;
+  check();
+  // A private sync or publication update must not restart a card read. Coalesce
+  // only the same account/scope epoch and public identity, without readVersion.
+  const key = owner.epoch + ':' + id;
+  let work = shareRecipeFlights.get(key);
+  if (!work) {
+    work = request('recipe', {recipeId: id}, owner);
+    shareRecipeFlights.set(key, work);
   }
-  const value = await getRecipe(id);
+  let value;
+  try { value = await work; }
+  finally { if (shareRecipeFlights.get(key) === work) shareRecipeFlights.delete(key); }
   check();
   const recipe = value && value.recipe;
   if (!object(recipe) || recipe.id !== id || typeof recipe.name !== 'string' || !recipe.name.trim() || recipe.name.length > 60 ||
@@ -409,7 +490,7 @@ async function getRecipeShareLink(sourceRecipeId, options = {}) {
     fail('菜谱分享信息暂时无法读取，请重试。', 'INVALID_RECIPE');
   }
   // The share card needs only server-verified public fields, never local notes.
-  return {recipe: {id, name: recipe.name, photoURL: recipe.photoURL || ''}, localVersion};
+  return {recipe: {id, name: recipe.name, photoURL: recipe.photoURL || ''}};
 }
 async function shareReady(sourceRecipeId) {
   const owner = await ready();
@@ -480,7 +561,7 @@ function getShareCode(id, envVersion) {
   if (!['develop', 'trial', 'release'].includes(envVersion)) fail('暂时无法确认小程序版本，请重新打开后重试。', 'INVALID_INPUT');
   return invoke('shareCode', {profileId: id, envVersion});
 }
-function findImportedRecipe(id) { return publicId(id) ? store.getRecipe('shared-' + id) : null; }
+function findImportedRecipe(id) { return publicId(id) ? store.findPublicRecipe(id) : null; }
 function fs() { return wx.getFileSystemManager(); }
 async function removeLocal(filePath) {
   if (!filePath) return;
@@ -533,7 +614,8 @@ async function copyPhoto(url, owner) {
   }
 }
 async function importRecipe(id) {
-  const owner = await ready();
+  const owner = await ready({ifNeeded: true});
+  assertOwner(owner);
   const existing = findImportedRecipe(id);
   if (existing) return {recipeId: existing.id, added: false};
   const response = await request('recipe', {recipeId: id}, owner);
@@ -632,7 +714,8 @@ function normalizeCooksnap(item) {
   if (!object(item) || !publicId(item.id) || !publicId(item.recipeId) || !object(item.author) ||
     !profileId(item.author.id) || !feedbackText(item.author.name, 30) || !feedbackText(item.text, 120) ||
     !feedbackPhoto(item.photoURL) || !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 || typeof item.isSelf !== 'boolean') invalidFeedback();
-  return {id: item.id, recipeId: item.recipeId, author: {id: item.author.id, name: item.author.name},
+  return {id: item.id, recipeId: item.recipeId, author: {id: item.author.id, name: item.author.name,
+    ...(isSafeAvatarURL(item.author.avatarURL) ? {avatarURL: item.author.avatarURL} : {})},
     photoURL: item.photoURL, text: item.text, createdAt: item.createdAt, isSelf: item.isSelf};
 }
 function feedbackPage(result, field, normalize) {
@@ -654,12 +737,13 @@ async function getFeedbackInbox(start = 0, options) {
       !feedbackText(item.recipeName, 60) || !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 ||
       (item.type === 'cooksnap' && (!feedbackText(item.actorName, 30) || !feedbackText(item.text, 120) || !feedbackPhoto(item.photoURL)))) invalidFeedback();
     return {id: item.id, type: item.type, recipeId: item.recipeId, recipeName: item.recipeName, createdAt: item.createdAt,
-      ...(item.type === 'cooksnap' ? {actorName: item.actorName, photoURL: item.photoURL, text: item.text} : {photoURL: '', text: ''})};
+      ...(item.type === 'cooksnap' ? {actorName: item.actorName, photoURL: item.photoURL, text: item.text,
+        ...(isSafeAvatarURL(item.actorAvatarURL) ? {actorAvatarURL: item.actorAvatarURL} : {})} : {photoURL: '', text: ''})};
   });
   if (result.nextOffset !== null && result.nextOffset <= offset(start)) invalidFeedback();
   return result;
 }
-function ownsCooksnapPhoto(fileID, owner, cloudPath) {
+function ownsUploadedPhoto(fileID, owner, cloudPath) {
   const match = typeof fileID === 'string' && /^cloud:\/\/([A-Za-z0-9_-]+)\.([A-Za-z0-9._-]+)\/(.+)$/.exec(fileID);
   return !!match && match[1] === config.env && match[3] === cloudPath &&
     cloudPath.indexOf('users/' + owner.id + '/photos/') === 0;
@@ -700,7 +784,7 @@ async function prepareCooksnapPhoto(photoPath, owner) {
     const cloudPath = 'users/' + owner.id + '/photos/cooksnap-' + Date.now() + '-' + fileSequence + '-' + Math.random().toString(36).slice(2, 12) + '.' + extension;
     const upload = await call(wx.cloud, 'uploadFile', {cloudPath, filePath: photoPath, config: {env: config.env}});
     assertOwner(owner);
-    if (!upload || !ownsCooksnapPhoto(upload.fileID, owner, cloudPath)) fail('照片上传归属无法确认，请重试。', 'INVALID_COOKSNAP_PHOTO');
+    if (!upload || !ownsUploadedPhoto(upload.fileID, owner, cloudPath)) fail('照片上传归属无法确认，请重试。', 'INVALID_COOKSNAP_PHOTO');
     return upload.fileID;
   } catch (error) {
     if (error && error.userMessage) throw error;

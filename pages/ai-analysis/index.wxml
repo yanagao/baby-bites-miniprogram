@@ -1,0 +1,49 @@
+<t-navbar z-index="100" title="外部 AI 授权" placeholder left-arrow />
+<view class="analysis-page">
+  <view wx:if="{{loading}}" class="analysis-state">加载中</view>
+  <block wx:else>
+    <view wx:if="{{error}}" class="analysis-error"><t-notice-bar visible theme="warning" content="{{error}}" /></view>
+    <block wx:if="{{!locked && statusLoaded}}">
+      <view class="analysis-card">
+        <view class="analysis-title">授权范围</view>
+        <view class="analysis-note">持有密钥的工具可以读取当前宝宝已同步的月龄、过敏食物、用餐记录和相关食材。授权有效期为 7 天，期间新同步的记录也在范围内。</view>
+        <view wx:if="{{pendingSync}}" class="analysis-note">本机有未同步修改，完成同步后外部 AI 才能读取这些记录。</view>
+        <view wx:if="{{!apiBaseUrl}}" class="analysis-note">外部访问地址尚未配置，配置完成后可生成授权。</view>
+        <view wx:if="{{activeGrant}}" class="analysis-grant">
+          <view>授权有效至 {{grantExpiry}}</view>
+          <view wx:if="{{tokenAvailable}}" class="analysis-note">离开本页前请复制密钥。生成新授权会立即停用旧密钥。</view>
+          <view wx:else class="analysis-note">已有授权仍可使用。若要再次复制密钥，请生成新授权，并更新工具里保存的旧密钥。</view>
+        </view>
+        <view class="analysis-actions">
+          <t-button block theme="primary" shape="round" disabled="{{!!busy || !apiBaseUrl}}" loading="{{busy === 'createGrant'}}" bind:tap="createGrant">{{busy === 'createGrant' ? '生成中' : activeGrant ? '生成新授权' : '生成只读授权'}}</t-button>
+          <t-button wx:if="{{activeGrant}}" block theme="default" shape="round" disabled="{{!!busy}}" loading="{{busy === 'revokeGrant'}}" bind:tap="revokeGrant">{{busy === 'revokeGrant' ? '撤销中' : '撤销授权'}}</t-button>
+        </view>
+      </view>
+      <view wx:if="{{apiBaseUrl}}" class="analysis-card">
+        <view class="analysis-title">连接 AI 工具</view>
+        <view class="analysis-note">在 AI 工具的连接设置中，添加远程 MCP 服务时粘贴 MCP 地址，传输方式选 Streamable HTTP。使用「导入 OpenAPI」时，粘贴 OpenAPI 地址即可。</view>
+        <view class="analysis-actions">
+          <t-button block theme="primary" variant="outline" shape="round" disabled="{{!!busy}}" data-format="mcp" bind:tap="copyAddress">复制 MCP 地址</t-button>
+          <t-button block theme="primary" variant="outline" shape="round" disabled="{{!!busy}}" data-format="openapi" bind:tap="copyAddress">复制 OpenAPI 地址</t-button>
+        </view>
+        <view class="analysis-note">生成只读授权后，在工具的认证设置中选择 Bearer，粘贴授权密钥。手动配置 HTTP 请求时，可复制完整调用配置。</view>
+        <block wx:if="{{tokenAvailable}}">
+          <view class="analysis-actions">
+            <t-button block theme="primary" shape="round" disabled="{{!!busy}}" bind:tap="copyToken">复制授权密钥</t-button>
+            <t-button block theme="default" shape="round" disabled="{{!!busy}}" bind:tap="copyConfiguration">复制 HTTP 调用配置</t-button>
+          </view>
+        </block>
+        <view class="analysis-example">
+          <view class="analysis-tip-title">连好后可以这样问</view>
+          <text user-select="true">请按天列出宝宝最近 7 天记录过的食材和用餐反馈，并标出哪些天缺少记录。</text>
+        </view>
+      </view>
+      <view class="analysis-card">
+        <view class="analysis-title">安全提示</view>
+        <view class="analysis-note">MCP 和 OpenAPI 地址可以分享。授权密钥和完整 HTTP 配置请只填入可信工具的私密设置，避免发到聊天或截图中。</view>
+        <view class="analysis-note">如果误发密钥或调用配置，请立即点「撤销授权」。撤销会阻止后续读取，工具已经取得的记录仍可能留存。</view>
+      </view>
+    </block>
+    <t-button wx:if="{{!locked && (!statusLoaded || error || !apiBaseUrl)}}" class="analysis-reload" theme="primary" variant="text" disabled="{{!!busy}}" bind:tap="load">刷新授权状态</t-button>
+  </block>
+</view>

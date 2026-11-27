@@ -210,16 +210,17 @@ test('own meal lists refresh after a synced revision changes without reloading t
   assert.deepEqual(app.page.data.mealPlanDays.map(item => item.date), [date]);
 });
 
-test('meal lists expire independently of the mine profile and refresh at the first page before more pages', async () => {
+test('meal lists keep pagination across long returns and refresh on changed versions', async () => {
   const app = setup({mine: true, getPlans: (id, offset) => ({days: [day()], nextOffset: offset + 1})});
   await app.page.onShow(); await app.page.changeContentTab(tap('mealPlans'));
-  app.advance(30000); await app.page.onShow();
-  assert.deepEqual(app.calls.plans.map(call => call.offset), [0, 0]);
+  await app.page.loadMore();
+  app.advance(86400000); await app.page.onShow();
+  assert.deepEqual(app.calls.plans.map(call => call.offset), [0, 1]);
   app.changeReadVersion(); await app.page.loadMore();
-  assert.deepEqual(app.calls.plans.map(call => call.offset), [0, 0, 0]);
+  assert.deepEqual(app.calls.plans.map(call => call.offset), [0, 1, 0]);
 });
 
-test('failed automatic meal refreshes wait for an explicit retry, new version or expiry', async () => {
+test('failed automatic meal refreshes wait for an explicit retry or new version', async () => {
   const app = setup({mine: true, getPlans: () => {throw Error('网络暂不可用');}});
   await app.page.onShow(); await app.page.changeContentTab(tap('mealPlans'));
   await app.page.onShow(); await app.page.onReachBottom();
@@ -228,5 +229,5 @@ test('failed automatic meal refreshes wait for an explicit retry, new version or
   app.changeReadVersion(); await app.page.onShow(); assert.equal(app.calls.plans.length, 2);
   await app.page.onShow(); assert.equal(app.calls.plans.length, 2);
   await app.page.retryMealPlans(); assert.equal(app.calls.plans.length, 3);
-  app.advance(30000); await app.page.onShow(); assert.equal(app.calls.plans.length, 4);
+  app.advance(86400000); await app.page.onShow(); assert.equal(app.calls.plans.length, 3);
 });

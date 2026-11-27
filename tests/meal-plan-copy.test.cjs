@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const crypto = require('node:crypto');
 const {createRequire} = require('node:module');
 const {MEALS, planId} = require('../utils/meal-plans');
 const {getBuiltInRecipe} = require('../utils/recipe-origin');
@@ -14,6 +15,9 @@ const A = 'a'.repeat(64), B = 'b'.repeat(64), PROFILE = 'c'.repeat(32);
 const PUBLIC = 'd'.repeat(64), SECOND = 'e'.repeat(64);
 const DATE = today(), TOMORROW = shiftDate(DATE, 1);
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
+const publicId = (creator, id) => crypto.createHash('sha256').update('public-recipe:' + creator + ':' + id).digest('hex');
+const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return {promise, resolve, reject}; };
+const turn = () => new Promise(resolve => setImmediate(resolve));
 const publicRecipe = (id = PUBLIC) => ({id, kind: 'public', name: id === PUBLIC ? '南瓜饭' : '番茄面',
   minutes: 20, texture: '软烂颗粒', imageKey: 'pumpkin', photoURL: ''});
 const builtinRecipe = (id = 'pumpkin-millet') => {
@@ -72,7 +76,7 @@ function setup(meals = rows()) {
     async addToCookbook(id) {
       calls.push({action: 'import', id});
       if (hooks.beforeImport) await hooks.beforeImport(id);
-      const existing = store.getRecipe('shared-' + id);
+      const existing = store.findPublicRecipe(id);
       const result = existing ? {recipeId: existing.id, added: false} : store.addPublicRecipe({
         ...recipeInput(), ...publicRecipe(id), profileId: PROFILE, authorName: '分享的小厨房', photo: ''
       }, store.getSyncInfo().owner);
@@ -199,6 +203,101 @@ test('existing public copies are reused but still require a fresh available sour
   assert.equal(app.calls.filter(call => call.action === 'import').length, 1);
 });
 
+test('saving personal or family originals reuses their local IDs across repeated dishes and target dates', async () => {
+  for (const family of [false, true]) {
+    const app = setup();
+    if (family) app.store.bindScope(A, {kind: 'family', id: 'f'.repeat(64), membershipId: '1'.repeat(32)});
+    const id = app.addOwn();
+    app.store.saveRecipe({...app.store.getRecipe(id), name: '我修改后的做法', note: '私人心得',
+      favorite: true, photo: 'wxfile://usr/edited-photo.jpg', ...(family ? {createdBy: B} : {})});
+    const shared = {...publicRecipe(publicId(family ? B : A, id)), name: '原来的公开菜名'};
+    app.meals = rows([shared, shared, shared]);
+    app.remote.meals = app.meals.map(({meal, label, recipe}) => ({meal, label, recipe: copy(recipe)}));
+    const before = copy(app.store.getState().recipes);
+    const first = await app.copy.save(app.input());
+    assert.equal(first.savedCount, 3);
+    assert.deepEqual(copy(app.store.getState().recipes), before);
+    assert.deepEqual(copy(app.store.getState().mealPlans.map(plan => plan.recipeId)), [id, id, id]);
+    const preview = app.copy.preview(app.meals, DATE, 'replace');
+    assert.equal(preview.saveCount, 0); assert.equal(preview.conflictCount, 0);
+    assert.deepEqual(copy(preview.rows.map(row => row.action)), ['same', 'same', 'same']);
+    const writes = app.writes.length;
+    assert.equal((await app.copy.save(app.input({mode: 'replace'}))).savedCount, 0);
+    assert.equal(app.writes.length, writes);
+    assert.equal((await app.copy.save(app.input({targetDate: TOMORROW}))).savedCount, 3);
+    assert.deepEqual(copy(app.store.getState().recipes), before);
+    assert.ok(app.store.getState().mealPlans.every(plan => plan.recipeId === id));
+    assert.equal(app.calls.filter(call => call.action === 'import').length, 2);
+  }
+});
+
+test('a historical source copy with a different local ID is reused without replacing its edits', async () => {
+  const app = setup();
+  const id = app.store.saveRecipe({...recipeInput('我调整的副本'), note: '保留这份心得', favorite: true,
+    source: {recipeId: PUBLIC, profileId: PROFILE, authorName: '原作者'}});
+  const before = copy(app.store.getState().recipes);
+  assert.equal((await app.copy.save(app.input())).savedCount, 1);
+  assert.equal(app.store.getState().mealPlans[0].recipeId, id);
+  assert.deepEqual(copy(app.store.getState().recipes), before);
+});
+
+test('same-named recipes with different origins remain separate', async () => {
+  const app = setup(), existing = app.addOwn(undefined, DATE, publicRecipe().name);
+  await app.copy.save(app.input());
+  assert.equal(app.store.getState().recipes.length, 2);
+  assert.equal(app.store.getState().mealPlans[0].recipeId, 'shared-' + PUBLIC);
+  assert.ok(app.store.getRecipe(existing));
+});
+
+test('different recipes import concurrently and the day is committed once after every import and source check', async () => {
+  const third = '9'.repeat(64), ids = [PUBLIC, SECOND, third];
+  const app = setup(rows(ids.map(id => publicRecipe(id)))), gates = new Map(ids.map(id => [id, deferred()]));
+  app.hooks.beforeImport = id => gates.get(id).promise;
+  const work = app.copy.save(app.input()); await turn();
+  assert.deepEqual(app.calls.filter(call => call.action === 'import').map(call => call.id), ids);
+  assert.equal(app.store.getState().mealPlans, undefined);
+  gates.get(SECOND).resolve(); gates.get(third).resolve(); await turn();
+  assert.equal(app.store.getState().recipes.length, 2); assert.equal(app.store.getState().mealPlans, undefined);
+  assert.equal(app.calls.filter(call => call.action === 'read').length, 1);
+  gates.get(PUBLIC).resolve();
+  assert.equal((await work).savedCount, 3);
+  assert.equal(app.calls.filter(call => call.action === 'read').length, 2);
+  assert.equal(app.writes.filter(write => write.data.data && write.data.data.mealPlans).length, 1);
+});
+
+test('a failed concurrent import waits for the other imports before releasing saving state', async () => {
+  const app = setup(rows([publicRecipe(), publicRecipe(SECOND), undefined]));
+  const first = deferred(), second = deferred();
+  app.hooks.beforeImport = id => id === PUBLIC ? first.promise : second.promise;
+  let settled = false;
+  const work = app.copy.save(app.input()).finally(() => { settled = true; });
+  const failed = assert.rejects(work, /network failure/);
+  await turn(); first.reject(Error('network failure')); await turn();
+  assert.equal(settled, false); assert.equal(app.store.getState().mealPlans, undefined);
+  second.resolve(); await failed;
+  assert.equal(settled, true); assert.equal(app.store.getState().mealPlans, undefined);
+  assert.equal(app.store.getState().recipes.length, 1); assert.equal(app.subscriptions.size, 0);
+  const writes = app.writes.length; await turn(); assert.equal(app.writes.length, writes);
+});
+
+test('concurrent import completion rechecks cancellation, family identity and target changes before network failures', async () => {
+  for (const mode of ['cancel', 'family', 'target']) {
+    const app = setup(rows([publicRecipe(), publicRecipe(SECOND), undefined]));
+    const first = deferred(), second = deferred(), own = app.addOwn();
+    app.hooks.beforeImport = id => id === PUBLIC ? first.promise : second.promise;
+    const work = app.copy.save(app.input());
+    const failed = assert.rejects(work, error => error.code ===
+      ({cancel: 'CANCELLED', family: 'ACCOUNT_CHANGED', target: 'TARGET_CHANGED'})[mode]);
+    await turn(); first.reject(Error('old network error')); await turn();
+    if (mode === 'cancel') app.cancel();
+    if (mode === 'family') app.store.bindScope(A, {kind: 'family', id: 'f'.repeat(64), membershipId: '1'.repeat(32)});
+    if (mode === 'target') app.store.saveMealPlans([{date: DATE, meal: 'dinner', recipeId: own}]);
+    second.resolve(); await failed;
+    assert.equal((app.store.getState().mealPlans || []).length, mode === 'target' ? 1 : 0);
+    assert.equal(app.subscriptions.size, 0);
+  }
+});
+
 test('source changes or withdrawal before importing never write a plan or import a recipe', async () => {
   for (const change of [app => { app.remote.meals[0].recipe = null; }, app => { app.remote.meals[0].recipe = publicRecipe(SECOND); },
     app => { app.remote.meals[0].recipe.name = '更新后的名字'; }, app => { app.remote.meals[0].meal = 'lunch'; },
@@ -227,7 +326,9 @@ test('explicit withdrawal errors from first or later recipe imports request a so
       };
       await assert.rejects(app.copy.save(app.input()), error => error.code === 'SOURCE_CHANGED', code + ':' + revokedId);
       assert.equal(app.store.getState().mealPlans, undefined);
-      assert.equal(app.store.getState().recipes.length, revokedId === PUBLIC ? 0 : 1);
+      // Independent imports settle before the failure is reported. The other
+      // successful recipe stays available for a retry, but no meals are saved.
+      assert.equal(app.store.getState().recipes.length, 1);
       assert.equal(app.subscriptions.size, 0);
     }
   }

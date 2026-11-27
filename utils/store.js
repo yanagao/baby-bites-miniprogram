@@ -6,6 +6,7 @@ const {normalizeCategory} = require('./categories');
 const {normalizeAgeGroups} = require('./recipe-ages');
 const {normalizeAllergies} = require('./allergies');
 const {isBuiltInRecipe, getBuiltInRecipe} = require('./recipe-origin');
+const recipeIdentity = require('./recipe-identity');
 const {mergeSnapshots, mergeAllergies} = require('./sync-merge');
 const {isValidBirthDate} = require('./baby-age');
 const {validMeal, validPlanDate, validPlanId, planId} = require('./meal-plans');
@@ -285,6 +286,16 @@ function init() {
 function getState() { init(); return clone(state); }
 function getWarning() { init(); return warning; }
 function getRecipe(recipeId) { init(); const recipe = state.recipes.find(item => item.id === recipeId); return recipe ? clone(recipe) : null; }
+function matchesPublicRecipe(recipe, publicId) { return recipeIdentity.matchesPublicRecipe(recipe, publicId, getSyncInfo()); }
+function findPublicRecipe(publicId) {
+  init();
+  if (typeof publicId !== 'string' || !/^[a-f0-9]{64}$/.test(publicId)) return null;
+  const info = getSyncInfo(), matches = recipe => recipeIdentity.matchesPublicRecipe(recipe, publicId, info);
+  // Prefer the original in this personal/family cookbook; older saved copies
+  // remain untouched, including their edits, records and existing plans.
+  const recipe = state.recipes.find(item => !item.source && matches(item)) || state.recipes.find(item => item.source && matches(item));
+  return recipe ? clone(recipe) : null;
+}
 function getLog(logId) { init(); const log = state.logs.find(item => item.id === logId); return log ? clone(log) : null; }
 function getSyncInfo() {
   init();
@@ -517,8 +528,9 @@ function addPublicRecipe(input, expectedOwner) {
   init();
   if (!validOwner(expectedOwner) || owner !== expectedOwner) fail('微信账号已切换，请重新打开这道菜谱。');
   if (!isObject(input) || typeof input.id !== 'string' || !/^[a-f0-9]{64}$/.test(input.id)) fail('这道菜谱的信息不完整。');
+  const existing = findPublicRecipe(input.id);
+  if (existing) return {recipeId: existing.id, added: false};
   const recipeId = 'shared-' + input.id;
-  if (getRecipe(recipeId)) return {recipeId, added: false};
   const deletion = sync.deleted.recipes.find(item => item.id === recipeId);
   const now = timestamp(deletion && deletion.updatedAt);
   const recipe = {
@@ -815,7 +827,7 @@ function exportBackup() {
 }
 
 module.exports = {
-  STORAGE_KEY, init, getState, getWarning, getRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe, addBuiltInRecipe,
+  STORAGE_KEY, init, getState, getWarning, getRecipe, findPublicRecipe, matchesPublicRecipe, getLog, saveRecipe, deleteRecipe, addPublicRecipe, addBuiltInRecipe,
   toggleFavorite, addLog, updateLog, deleteLog, saveMealPlans, removeMealPlan, completeMeal,
   setNickname, setBabyProfile, setBabyBirthDate, setAllergies, getAllergyFilterEnabled, setAllergyFilterEnabled, importBackup, exportBackup,
   ACTIVE_OWNER_KEY, ACCOUNT_PREFIX, bindAccount, getSyncSnapshot, getSyncInfo, pendingFamilyPhotoIds, applySyncedSnapshot,

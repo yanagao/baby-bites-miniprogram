@@ -68,7 +68,7 @@ function validateExpected(expected, date) {
 }
 function sameRecipe(local, source) {
   return !!local && !!source && (source.kind === 'builtin' ? local.id === source.id :
-    local.source && local.source.recipeId === source.id);
+    store.matchesPublicRecipe(local, source.id));
 }
 function buildPreview(meals, targetDate, mode, state) {
   const expected = currentPlans(state, targetDate);
@@ -144,12 +144,17 @@ async function save(input) {
   try {
     check(); checkTarget();
     await readSource(); check(); checkTarget();
-    const localIds = new Map();
+    const recipes = new Map();
     for (const row of selected.rows) {
       if (!['add', 'replace'].includes(row.action)) continue;
-      check(); checkTarget();
       const recipe = meals.find(item => item.meal === row.meal).recipe, key = recipe.kind + ':' + recipe.id;
-      if (localIds.has(key)) continue;
+      recipes.set(key, recipe);
+    }
+    // A day has at most three different recipes. Start their reads/downloads
+    // together so they share the initial sync instead of syncing after each
+    // import. Settle every task before returning an error or allowing a retry.
+    const results = await Promise.all([...recipes].map(async ([key, recipe]) => {
+      check(); checkTarget();
       let result;
       if (recipe.kind === 'builtin') result = store.addBuiltInRecipe(recipe.id, initial.owner);
       else {
@@ -159,8 +164,12 @@ async function save(input) {
       check(); checkTarget();
       const local = result && typeof result.recipeId === 'string' && store.getRecipe(result.recipeId);
       if (!sameRecipe(local, recipe)) fail('菜谱未能保存，请重新打开后再试。', 'IMPORT_FAILED');
-      localIds.set(key, result.recipeId);
-    }
+      return [key, result.recipeId];
+    }).map(work => work.then(value => ({value}), error => ({error}))));
+    check(); checkTarget();
+    const failed = results.find(result => 'error' in result);
+    if (failed) throw failed.error;
+    const localIds = new Map(results.map(result => result.value));
     if (localIds.size) { await readSource(); check(); checkTarget(); }
     const latest = buildPreview(meals, targetDate, mode, store.getState()), entries = [];
     for (const row of latest.rows) {

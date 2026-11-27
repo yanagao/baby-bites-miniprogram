@@ -3,6 +3,7 @@
 const {MEALS, validPlanDate} = require('./meal-plans');
 const {getBuiltInRecipe} = require('./recipe-origin');
 const {withCover} = require('./recipe-covers');
+const {isSafeAvatarURL} = require('./profile-avatar');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string' && value.trim() && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 function invalid() { const error = Error('餐单信息暂时无法读取，请重试。'); error.code = 'INVALID_MEAL_PLAN'; throw error; }
@@ -33,7 +34,8 @@ function normalizeMealPlan(value, expectedProfileId, expectedDate) {
   const day = normalizeDay(value), author = value.author;
   if (!object(author) || author.exists !== true || !/^[a-f0-9]{32}$/.test(author.id) ||
     expectedProfileId && author.id !== expectedProfileId || expectedDate && day.date !== expectedDate || !text(author.name, 20)) invalid();
-  return {...day, author: {id: author.id, name: author.name, exists: true}};
+  return {...day, author: {id: author.id, name: author.name, exists: true,
+    ...(isSafeAvatarURL(author.avatarURL) ? {avatarURL: author.avatarURL} : {})}};
 }
 
 function normalizeDays(value, offset) {

@@ -6,7 +6,7 @@
 .shared-plan-share::after {border:0;}
 .shared-plan-author {display:flex;align-items:center;gap:16rpx;width:100%;margin:0 0 24rpx;padding:18rpx 20rpx;border-radius:20rpx;background:#eff8f8;color:#577479;text-align:left;line-height:var(--line-height-body);}
 .shared-plan-author::after,.shared-plan-meal::after {border:0;}
-.shared-plan-avatar {width:72rpx;height:80rpx;flex:none;}
+.shared-plan-avatar {width:72rpx;height:72rpx;flex:none;border-radius:50%;background:#eff8f8;}
 .shared-plan-author-copy,.shared-plan-meal-copy {flex:1;min-width:0;}
 .shared-plan-author-name {color:#345158;font-size:var(--font-body);font-weight:600;overflow-wrap:anywhere;}
 .shared-plan-author-caption,.shared-plan-hint {color:#82969a;font-size:var(--font-caption);line-height:var(--line-height-body);}
