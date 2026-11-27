@@ -10,7 +10,13 @@ const avatars = [
 ];
 const fallback = avatars[4];
 
-function getProfileAvatar(profileId) {
+function isSafeAvatarURL(value) {
+  return typeof value === 'string' && value.length <= 8000 && !/[\s\\\u0000-\u001f\u007f]/.test(value) &&
+    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?(?:[/?#]|$)/i.test(value);
+}
+
+function getProfileAvatar(profileId, avatarURL) {
+  if (isSafeAvatarURL(avatarURL)) return avatarURL;
   if (typeof profileId !== 'string' || !/^[a-f0-9]{32}$/i.test(profileId)) return fallback;
   // Reduce each hex digit before reading the next, avoiding 128-bit precision loss.
   let remainder = 0;
@@ -20,4 +26,4 @@ function getProfileAvatar(profileId) {
   return avatars[remainder];
 }
 
-module.exports = {getProfileAvatar};
+module.exports = {getProfileAvatar, isSafeAvatarURL};

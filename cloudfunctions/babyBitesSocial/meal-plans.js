@@ -15,8 +15,8 @@ function validDate(value) {
 }
 
 function createMealPlans({get, profile, profileIdFor, recipeIdFor, isPublished, renderRecipe, committedSnapshot,
-  activeRecipe, publicProfile, scopeKey, isProfileId, pageOffset, reject, assertCommitted, ensureProfile}) {
-  return async function handle(event, {owner, env, today, isBuiltin, assertScope, expectedScope}) {
+  activeRecipe, scopeKey, isProfileId, pageOffset, reject, assertCommitted, ensureProfile}) {
+  return async function handle(event, {owner, env, isBuiltin, assertScope, expectedScope, renderProfile}) {
     const sharing = event.action === 'shareMealPlan', listing = event.action === 'profileMealPlans';
     if (sharing ? event.profileId !== undefined : !isProfileId(event.profileId)) reject('主页链接不正确。', 'INVALID_REQUEST');
     const offset = listing ? pageOffset(event.offset, MAX_OFFSET) : 0;
@@ -86,11 +86,12 @@ function createMealPlans({get, profile, profileIdFor, recipeIdFor, isPublished, 
     if (sharing) author = await ensureProfile(owner, account);
     else author = await profile(author._id);
     if (!author) reject('这个主页暂时不可用。', 'NOT_FOUND');
+    const authorView = listing ? null : await renderProfile(author);
     // Author/profile reads can also await storage. Check the source revision
     // after every projection await, immediately before returning this view.
     await assertCommitted(targetOwner, account, !sharing);
     if (listing) return {days: rendered, nextOffset: offset + PAGE_SIZE < dates.length ? offset + PAGE_SIZE : null};
-    return {author: publicProfile(author, today), date: event.date, meals: rendered[0].meals};
+    return {author: authorView, date: event.date, meals: rendered[0].meals};
   };
 }
 

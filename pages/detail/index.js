@@ -8,9 +8,14 @@ const {isBuiltInRecipe, getBuiltInRecipe} = require('../../utils/recipe-origin')
 const {getCover} = require('../../utils/recipe-covers');
 const {createSharePhoto} = require('../../utils/recipe-share-photo');
 const {createShareReturn} = require('../../utils/native-share-return');
-const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
-const syncVersion = status => status && Number.isSafeInteger(status.revision) && Number.isSafeInteger(status.publicationVersion) ?
-  status.owner + ':' + status.revision + ':' + status.publicationVersion : '';
+const syncVersion = status => status && Number.isSafeInteger(status.publicationVersion) ?
+  status.owner + ':' + status.publicationVersion : '';
+const shareIdentity = recipe => {
+  if (!recipe) return '';
+  const info = store.getSyncInfo();
+  return JSON.stringify([recipe.id, isBuiltInRecipe(recipe), recipe.source ? recipe.source.recipeId : '',
+    recipe.source ? '' : info.scope && info.scope.kind === 'family' ? recipe.createdBy || '' : info.owner || '']);
+};
 
 Page({
   data: {
@@ -20,7 +25,7 @@ Page({
     deleteConfirmButton: {content: '删除菜谱', theme: 'danger'},
     deleting: false,
     familyRecipe: false, publicInfo: null, publicReady: false, publicError: '', publicBusy: false, publicLoading: false,
-    builtIn: false, publicChanged: false,
+    builtIn: false,
     shareRecipe: null, shareReady: false, shareLoading: false, shareError: ''
   },
   onLoad(options) {
@@ -29,7 +34,6 @@ Page({
     this._visible = false;
     this._shareReturn = createShareReturn(wx);
     this._sharePhoto = createSharePhoto(wx);
-    this._publicationReadVersion = null;
     this._syncRefreshPending = false;
     this._lastSyncedKey = typeof cloudSync.getStatus === 'function' ? syncVersion(cloudSync.getStatus()) : '';
     this._sessionOwner = store.getSyncInfo().owner;
@@ -49,15 +53,15 @@ Page({
   },
   async onShow() {
     if (!this.accountOK(false)) return;
-    const shareReturn = this._shareReturn.show();
+    this._shareReturn.show();
     this._visible = true;
     this.refresh();
     if (!this.data.socialEnabled) return;
-    const localVersion = JSON.stringify(store.getRecipe(this.recipeId));
+    const identity = shareIdentity(store.getRecipe(this.recipeId));
     if (this._publicFlight && this._publicFlight.request === this._publicRequest &&
-      this._publicFlight.localVersion === localVersion && this._publicFlight.version === readVersion()) return this._publicFlight.work;
-    if (shareReturn && shareReturn.recipeId === this.recipeId && shareReturn.request === this._publicRequest &&
-      shareReturn.localVersion === localVersion && shareReturn.version === readVersion() &&
+      this._publicFlight.identity === identity) return this._publicFlight.work;
+    // Local edits and private sync revisions do not invalidate the public card.
+    if (this.data.publicReady && !this.data.publicError && !this.data.shareError &&
       this.shareAvailable() && !this._syncRefreshPending) return;
     await this.refreshPublication();
   },
@@ -86,11 +90,10 @@ Page({
       this._accountCleared = true;
       this._shareReturn.clear();
       this._sharePhoto.clear();
-      this._publicationReadVersion = null;
       this._syncRefreshPending = false;
       this._publicRequest = (this._publicRequest || 0) + 1;
-        this.setData({recipe: null, lastLog: null, publicInfo: null, publicReady: false,
-        publicError: message, publicChanged: false, builtIn: false,
+      this.setData({recipe: null, lastLog: null, publicInfo: null, publicReady: false,
+        publicError: message, builtIn: false,
         deleteVisible: false, publicBusy: false, publicLoading: false, deleting: false,
         shareRecipe: null, shareReady: false, shareLoading: false, shareError: ''});
       this.updateShareMenu();
@@ -111,19 +114,18 @@ Page({
     try {
       const state = store.getState();
       const recipe = state.recipes.find(item => item.id === this.recipeId);
-      const update = {familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null,
-        publicChanged: !!(recipe && this.data.publicInfo && this.data.publicInfo.sourceUpdatedAt !== (recipe.updatedAt || recipe.createdAt || 0))};
+      const update = {familyRecipe: Boolean(recipe && recipe.createdBy && recipe.createdBy !== store.getSyncInfo().owner), recipe: recipe ? enrichRecipe(state, recipe) : null, builtIn: isBuiltInRecipe(recipe), lastLog: listLogs(state).find(log => log.recipeId === this.recipeId) || null};
       const changed = {};
       Object.keys(update).forEach(key => {
         if (JSON.stringify(this.data[key]) !== JSON.stringify(update[key])) changed[key] = update[key];
       });
       if (Object.keys(changed).length) this.setData(changed);
-      if (!recipe || this._shareVersion && this._shareVersion !== JSON.stringify(recipe)) {
+      if (!recipe || this._shareIdentity && this._shareIdentity !== shareIdentity(recipe)) {
         this._shareReturn.clear();
         this._sharePhoto.clear();
-        this._publicationReadVersion = null;
-        this._shareVersion = '';
-        this.setData({shareRecipe: null, shareReady: false, publicReady: false, publicChanged: Boolean(recipe)});
+        this._shareIdentity = '';
+        this._publicRequest = (this._publicRequest || 0) + 1;
+        this.setData({shareRecipe: null, shareReady: false, publicReady: false, shareLoading: false, publicLoading: false});
       }
       this.updateShareMenu();
     } catch (error) { ui.error(error); }
@@ -153,10 +155,9 @@ Page({
   },
   refreshPublication(fromOperation) {
     this._shareReturn.clear();
-    const localVersion = JSON.stringify(store.getRecipe(this.recipeId));
-    const version = readVersion();
+    const identity = shareIdentity(store.getRecipe(this.recipeId));
     const work = this.loadPublication(fromOperation);
-    const flight = {request: this._publicRequest, localVersion, version, work};
+    const flight = {request: this._publicRequest, identity, work};
     this._publicFlight = flight;
     const complete = () => { if (this._publicFlight === flight) this._publicFlight = null; };
     work.then(complete, complete);
@@ -164,41 +165,39 @@ Page({
   },
   async loadPublication(fromOperation) {
     if (!this.data.socialEnabled || !this.accountOK(false) || !this.data.recipe || this.data.deleting || this.data.publicBusy) return false;
-    this._sharePhoto.clear();
-    const version = readVersion();
+    const identity = shareIdentity(store.getRecipe(this.recipeId));
+    const retained = this.shareAvailable();
+    if (!retained) this._sharePhoto.clear();
     this._syncRefreshPending = false;
     if (this.data.builtIn) {
-      this._publicationReadVersion = version;
       this.setData({publicInfo: null, publicReady: true, publicLoading: false, publicError: '', shareRecipe: null, shareError: ''});
       this.updateShareMenu(); return true;
     }
     const request = this._publicRequest = (this._publicRequest || 0) + 1;
-    this._shareVersion = '';
-    this._publicationReadVersion = null;
-    this.setData({publicReady: false, publicError: '', publicLoading: true, shareReady: false,
-      shareRecipe: null, shareLoading: true, shareError: ''});
+    this._shareIdentity = identity;
+    this.setData({publicReady: retained, publicError: '', publicLoading: true,
+      ...(!retained ? {shareRecipe: null, shareReady: false} : {}), shareLoading: true, shareError: ''});
     this.updateShareMenu();
     try {
       const result = await social.getRecipeShareLink(this.recipeId, {force: fromOperation === true});
       if (!this.accountOK(false) || request !== this._publicRequest) return false;
       const local = store.getRecipe(this.recipeId), recipe = result && result.recipe;
-      if (!local || !result.localVersion || result.localVersion !== JSON.stringify(local)) throw Error('菜谱已有更新，请重新准备分享。');
+      if (!local || identity !== shareIdentity(local)) throw Error('菜谱来源已变化，请重新读取分享信息。');
       if (!recipe || !/^[a-f0-9]{64}$/.test(recipe.id || '') || typeof recipe.name !== 'string' || !recipe.name.trim()) {
         throw Error('暂时无法读取可分享的菜谱，请重试。');
       }
-      // Only metadata verified from the synchronized public recipe can leave this page.
-      this._shareVersion = result.localVersion;
-      // An invalidation during this read must not certify older metadata as
-      // current merely because the caller resumed after the version changed.
-      this._publicationReadVersion = version;
-      this._sharePhoto.prepare(recipe.photoURL);
-      this.setData({publicInfo: {id: recipe.id, sourceUpdatedAt: local.updatedAt || local.createdAt || 0},
-        publicReady: true, publicChanged: false, shareRecipe: {id: recipe.id, name: recipe.name, photoURL: recipe.photoURL || ''}});
+      // Use the existing public card even if local edits have not synced yet.
+      if (!this._sharePhoto.get(recipe.photoURL)) this._sharePhoto.prepare(recipe.photoURL);
+      this.setData({publicInfo: {id: recipe.id},
+        publicReady: true, shareRecipe: {id: recipe.id, name: recipe.name, photoURL: recipe.photoURL || ''}});
       return true;
     } catch (error) {
       if (this.accountOK(false) && request === this._publicRequest) {
         if (error.code === 'ACCOUNT_CHANGED') { this._accountLocked = true; this.accountOK(false); }
-        else this.setData({publicInfo: null, publicReady: false, shareError: error.message || '分享尚未准备好，请联网后重试。'});
+        else {
+          this._sharePhoto.clear();
+          this.setData({publicInfo: null, publicReady: false, shareRecipe: null, shareError: error.message || '分享信息暂时无法读取，请重试。'});
+        }
       }
       return false;
     } finally {
@@ -221,9 +220,9 @@ Page({
     const data = this.data;
     return !this._unloaded && !this._accountLocked && data.socialEnabled && !!data.recipe &&
       !data.publicBusy && !data.deleting && !data.deleteVisible &&
-      (data.builtIn ? Boolean(getBuiltInRecipe(this.recipeId)) : (data.publicReady && !data.publicLoading && !data.shareLoading &&
+      (data.builtIn ? Boolean(getBuiltInRecipe(this.recipeId)) : (data.publicReady &&
       !!data.publicInfo && !!data.shareRecipe && data.shareRecipe.id === data.publicInfo.id &&
-      this._shareVersion === JSON.stringify(store.getRecipe(this.recipeId))));
+      this._shareIdentity === shareIdentity(store.getRecipe(this.recipeId))));
   },
   updateShareMenu() {
     const available = this.shareAvailable();
@@ -240,10 +239,9 @@ Page({
   onShareAppMessage() {
     this._shareReturn.clear();
     if (this.accountOK(false) && this.shareAvailable()) {
-      // Native sharing can hide before or after this callback; consume this
-      // exemption on only the next show, with the verified versions unchanged.
+      // The card uses the public metadata already read for this recipe.
       this._shareReturn.share({recipeId: this.recipeId, request: this._publicRequest,
-        localVersion: JSON.stringify(store.getRecipe(this.recipeId)), version: this._publicationReadVersion});
+        identity: this._shareIdentity});
       if (this.data.builtIn) {
         const recipe = getBuiltInRecipe(this.recipeId);
         return {title: recipe.name + ' · 口袋食谱', path: '/pages/builtin-recipe/index?id=' + encodeURIComponent(recipe.id),

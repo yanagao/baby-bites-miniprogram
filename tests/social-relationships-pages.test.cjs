@@ -13,14 +13,15 @@ const second = {...friend, id: 'b'.repeat(32), name: '另一个小厨房'};
 const tap = id => ({currentTarget: {dataset: {id}}});
 
 function setup(name, social, options = {}) {
-  let owner = 'owner-a';
+  let owner = 'owner-a', now = Date.now();
+  class ClockDate extends Date { static now() { return now; } }
   const listeners = new Set();
-  const calls = {errors: [], toasts: [], routes: [], updates: 0};
+  const calls = {errors: [], toasts: [], routes: [], updates: 0, refreshStops: 0};
   const store = {getAllergyFilterEnabled: () => false, getState: () => ({recipes: [], logs: []}), getSyncInfo: () => ({owner}), subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }};
   const wx = {
     showToast(value) { calls.toasts.push(value.title); },
     navigateTo(value) { calls.routes.push(value.url); }, switchTab(value) { calls.routes.push(value.url); },
-    showShareMenu() {}, hideShareMenu() {}
+    showShareMenu() {}, hideShareMenu() {}, stopPullDownRefresh() { calls.refreshStops++; }
   };
   const accountModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/profile/account.js'), 'utf8'), {
@@ -28,7 +29,7 @@ function setup(name, social, options = {}) {
   });
   let definition;
   evaluatePage(name, {
-    Page(value) { definition = value; }, wx,
+    Page(value) { definition = value; }, wx, Date: ClockDate,
     require(dep) {
       if (dep.endsWith('/social')) return social;
       if (dep.endsWith('/store')) return store;
@@ -48,10 +49,10 @@ function setup(name, social, options = {}) {
     });
   }};
   page.onLoad(options);
-  return {page, calls, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }};
+  return {page, calls, advance(milliseconds) { now += milliseconds; }, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }};
 }
 
-test('recent following pages retain pagination until a write or manual reload requires new data', async () => {
+test('following pages retain pagination across long returns until a write or manual refresh', async () => {
   let version = 1; const reads = [];
   const fixture = setup('following', {getReadVersion: () => version, getFollowing: async (offset, options) => {
     reads.push({offset, options}); return {profiles: [offset ? second : friend], nextOffset: offset ? null : 20};
@@ -59,11 +60,80 @@ test('recent following pages retain pagination until a write or manual reload re
   await fixture.page.onShow(); await fixture.page.loadMore(); await fixture.page.onShow();
   assert.equal(reads.length, 2); assert.equal(fixture.page.data.profiles.length, 2);
   assert.equal(fixture.page.data.nextOffset, null); assert.equal(fixture.page.data.loading, false);
+  for (const elapsed of [30001, 3600000, 86400000]) {
+    fixture.advance(elapsed); await fixture.page.onShow();
+    assert.equal(reads.length, 2); assert.equal(fixture.page.data.profiles.length, 2);
+  }
   version++; await fixture.page.onShow(); assert.equal(reads.length, 3);
-  await fixture.page.reload(); assert.equal(reads[3].options.force, true);
-  fixture.page._loadedAt -= 30001; await fixture.page.onShow(); assert.equal(reads.length, 5);
+  await fixture.page.onPullDownRefresh(); assert.equal(reads[3].options.force, true);
+  assert.equal(fixture.calls.refreshStops, 1);
+  fixture.advance(30001); await fixture.page.onShow(); assert.equal(reads.length, 4);
   fixture.changeOwner('owner-b', false); await fixture.page.onShow();
-  assert.equal(reads.length, 5); assert.equal(fixture.page.data.profiles.length, 0);
+  assert.equal(reads.length, 4); assert.equal(fixture.page.data.profiles.length, 0);
+});
+
+test('following people preserve custom-avatar fallbacks across reloads and ignore stale errors', async () => {
+  let avatarURL = 'https://example.test/first-avatar.png';
+  const fixture = setup('following', {getFollowing: async () => ({profiles: [{...friend, avatarURL}], nextOffset: null})}, {tab: 'people'});
+  const {page} = fixture;
+  const error = url => ({currentTarget: {dataset: {id: friend.id, url}}});
+  await page.load(); assert.equal(page.data.profiles[0].avatar, avatarURL);
+  page.profileAvatarError(error(avatarURL)); assert.equal(page.data.profiles[0].avatar, getProfileAvatar(friend.id));
+  await page.reload(); assert.equal(page.data.profiles[0].avatar, getProfileAvatar(friend.id));
+  const previous = avatarURL; avatarURL = 'https://example.test/next-avatar.png';
+  await page.reload(); assert.equal(page.data.profiles[0].avatar, avatarURL);
+  page.profileAvatarError(error(previous)); assert.equal(page.data.profiles[0].avatar, avatarURL);
+  page.profileAvatarError(error(avatarURL)); fixture.changeOwner('owner-b'); await page.reload();
+  assert.equal(page.data.profiles[0].avatar, avatarURL);
+});
+
+test('feed custom-avatar failures update the source list so filtering and ordinary returns cannot revive broken images', async () => {
+  let avatarURL = 'https://example.test/feed-avatar.png';
+  const image = {id: 'recipe', profileId: friend.id, authorName: friend.name, name: '南瓜饭', ingredients: [{name: '南瓜'}]};
+  const {page} = setup('following', {getFeed: async () => ({recipes: [{...image, authorAvatarURL: avatarURL}], nextCursor: null})});
+  const error = url => ({currentTarget: {dataset: {id: friend.id, url}}});
+  await page.load(); assert.equal(page.data.recipes[0].authorAvatar, avatarURL);
+  page.feedAvatarError(error(avatarURL)); page.refreshAllergies(); await page.onShow();
+  assert.equal(page.data.recipes[0].authorAvatar, getProfileAvatar(friend.id));
+  await page.reload(); assert.equal(page.data.recipes[0].authorAvatar, getProfileAvatar(friend.id));
+  const previous = avatarURL; avatarURL = 'https://example.test/new-feed-avatar.png';
+  await page.reload(); page.feedAvatarError(error(previous));
+  assert.equal(page.data.recipes[0].authorAvatar, avatarURL);
+});
+
+test('visitor profiles retain recipe pagination and refresh only after changes or a pull-down', async () => {
+  let version = 1; const reads = [];
+  const fixture = setup('profile', {getReadVersion: () => version, getProfile: async (id, offset, options) => {
+    reads.push({offset, options});
+    return {profile: friend, isSelf: false, recipes: [{id: offset ? 'second' : 'first'}], nextOffset: offset ? null : 20};
+  }}, {id: friend.id});
+  await fixture.page.onShow(); await fixture.page.loadMore();
+  for (const elapsed of [30001, 3600000, 86400000]) {
+    fixture.advance(elapsed); await fixture.page.onShow();
+    assert.equal(reads.length, 2);
+    assert.deepEqual(fixture.page.data.recipes.map(recipe => recipe.id), ['first', 'second']);
+    assert.equal(fixture.page.data.nextOffset, null);
+  }
+  version++; await fixture.page.onShow(); assert.equal(reads.length, 3);
+  await fixture.page.onPullDownRefresh(); assert.equal(reads[3].options.force, true);
+  assert.equal(fixture.calls.refreshStops, 1);
+});
+
+test('following returns share pending loads and pending pull-down refreshes', async () => {
+  const first = deferred(), refreshGate = deferred(); let reads = 0;
+  const fixture = setup('following', {getReadVersion: () => 1,
+    getFollowing: () => ++reads === 1 ? first.promise : refreshGate.promise}, {tab: 'people'});
+  const loading = fixture.page.onShow(), revisit = fixture.page.onShow();
+  assert.equal(reads, 1); assert.equal(loading, revisit);
+  first.resolve({profiles: [friend], nextOffset: null}); await loading;
+  const refresh = fixture.page.onPullDownRefresh();
+  assert.equal(fixture.page.onPullDownRefresh(), refresh);
+  const nextReturn = fixture.page.onShow(); assert.equal(reads, 2);
+  refreshGate.resolve({profiles: [second], nextOffset: null});
+  await Promise.all([refresh, nextReturn]); assert.equal(fixture.calls.refreshStops, 1);
+  assert.deepEqual(fixture.page.data.profiles.map(profile => profile.id), [second.id]);
+  fixture.page.setData({followBusyId: second.id}); await fixture.page.onPullDownRefresh();
+  assert.equal(reads, 2); assert.equal(fixture.calls.refreshStops, 2);
 });
 
 test('profile counters use server totals rather than the first recipe page', async () => {
@@ -254,7 +324,7 @@ test('feed image failures match the current recipe and URL instead of an index f
     ? [{id: 'first', photoURL: oldURL}]
     : [{id: 'replacement', displayPhoto: cover}, {id: 'first', photoURL: currentURL}], nextCursor: null})});
   const error = (id, url, index = 0) => ({currentTarget: {dataset: {id, url, index}}});
-  await page.load(); await page.onShow();
+  await page.load(); await page.reload();
   const updates = calls.updates;
   page.photoError(error('first', oldURL));
   page.photoError(error('gone', cover));

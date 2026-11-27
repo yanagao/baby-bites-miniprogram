@@ -15,6 +15,7 @@
       </view>
     </view>
     <view class="settings-card settings-family-entry"><t-cell title="宝宝的家庭" description="{{familyActive ? '管理共享宝宝数据的家人' : '邀请爸爸妈妈和祖辈一起记录'}}" bordered="{{false}}" arrow bind:click="openFamily" /></view>
+    <view class="settings-card settings-family-entry"><t-cell title="外部 AI 授权" description="授权你选用的 AI 读取辅食记录" bordered="{{false}}" arrow="{{!busy && !scopeLocked}}" bind:click="openAnalysis" /></view>
   </view>
   <view class="settings-section">
     <view class="settings-section-title">{{familyActive ? '家庭数据与备份' : '数据与备份'}}</view>
@@ -61,7 +62,7 @@
   </view>
   <view class="settings-version">
     <text class="settings-version-name">小口袋</text>
-    <text class="settings-version-number">版本 1.7.0</text>
+    <text class="settings-version-number">版本 1.8.3</text>
   </view>
 </view>
 <t-dialog visible="{{importVisible}}" title="合并这份备份？" content="{{importDescription}}" confirm-btn="{{importConfirmButton}}" cancel-btn="取消" bind:confirm="confirmImportDialog" bind:cancel="cancelImportDialog" />

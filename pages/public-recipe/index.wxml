@@ -1,6 +1,6 @@
 <t-navbar z-index="100" class="{{recipe && !loading && !error ? 'detail-navbar' : ''}}" t-class-left="{{recipe && !loading && !error ? 'detail-back' : ''}}" title="{{recipe && !loading && !error ? '' : '食谱详情'}}" placeholder="{{!recipe || loading || error}}" left-arrow delta="{{0}}" bind:go-back="back" />
 <view class="detail-page public-detail-page">
-  <view wx:if="{{loading}}" class="empty-note">正在打开这道菜谱…</view>
+  <view wx:if="{{loading}}" class="empty-note">加载中</view>
   <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button slot="action" theme="primary" bind:tap="reload">重新加载</t-button></t-empty>
   <block wx:elif="{{recipe}}">
     <view class="detail-cover">
@@ -11,7 +11,7 @@
     <view class="detail-meta"><view><t-icon name="time" size="22rpx" />{{recipe.minutes}} 分钟</view><view><t-icon name="rice" size="22rpx" />{{recipe.texture}}</view><view wx:if="{{recipe.category}}" class="detail-category">{{recipe.category}}</view></view>
     <view wx:if="{{allergyWarning}}" class="public-relation-error">{{allergyWarning}}</view>
     <view class="public-author">
-      <view class="public-author-link" bindtap="openAuthor" hover-class="public-pressed" aria-role="button" aria-label="{{'打开' + author.name + '的主页'}}"><image class="public-author-avatar" src="{{author.avatar}}" mode="aspectFit" aria-hidden="true" /><view class="public-author-copy"><view class="public-author-name">{{author.name}}</view><view class="public-author-caption">{{followedBy && !authorIsSelf ? (following ? '你们已互相关注' : 'TA 已关注你') : '分享的口袋食谱'}}</view></view><t-icon name="chevron-right" size="24rpx" /></view>
+      <view class="public-author-link" bindtap="openAuthor" hover-class="public-pressed" aria-role="button" aria-label="{{'打开' + author.name + '的主页'}}"><image class="public-author-avatar" src="{{author.avatar}}" mode="aspectFill" data-id="{{author.id}}" data-url="{{author.avatar}}" binderror="authorAvatarError" aria-hidden="true" /><view class="public-author-copy"><view class="public-author-name">{{author.name}}</view><view class="public-author-caption">{{followedBy && !authorIsSelf ? (following ? '你们已互相关注' : 'TA 已关注你') : '分享的口袋食谱'}}</view></view><t-icon name="chevron-right" size="24rpx" /></view>
       <t-button wx:if="{{relationReady && !authorIsSelf}}" theme="{{following ? 'default' : 'primary'}}" variant="{{following ? 'outline' : 'base'}}" size="small" shape="round" loading="{{followBusy}}" disabled="{{followBusy}}" aria-label="{{following ? '取消关注作者' : followedBy ? '回关作者' : '关注作者'}}" bind:tap="toggleFollow">{{following ? (followedBy ? '互相关注' : '已关注') : (followedBy ? '回关' : '关注')}}</t-button>
       <text wx:elif="{{relationLoading}}" class="public-relation-loading">读取关注状态…</text>
       <t-button wx:elif="{{!relationReady && relationError}}" size="small" theme="primary" variant="text" bind:tap="refreshAuthorRelationship">重试关注状态</t-button>

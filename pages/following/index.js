@@ -6,15 +6,19 @@ const account = require('../profile/account');
 const {getProfileAvatar} = require('../../utils/profile-avatar');
 const tabs = ['recipes', 'people', 'followers'];
 
-function relationships(profiles, tab) {
+function avatarFor(id, url, failed) {
+  const avatar = getProfileAvatar(id, url);
+  return failed && failed.has(id + ':' + avatar) ? getProfileAvatar(id) : avatar;
+}
+function relationships(profiles, tab, failed) {
   return profiles.map(item => ({...item,
-    avatar: getProfileAvatar(item.id),
+    avatar: avatarFor(item.id, item.avatarURL, failed),
     following: typeof item.following === 'boolean' ? item.following : tab === 'people',
     followedBy: typeof item.followedBy === 'boolean' ? item.followedBy : tab === 'followers'
   }));
 }
-function feedRecipes(recipes) {
-  return recipes.map(recipe => ({...recipe, authorAvatar: getProfileAvatar(recipe.profileId)}));
+function feedRecipes(recipes, failed) {
+  return recipes.map(recipe => ({...recipe, authorAvatar: avatarFor(recipe.profileId, recipe.authorAvatarURL, failed)}));
 }
 function read(tab, cursor, options) {
   return tab === 'recipes' ? social.getFeed(cursor, options) : tab === 'followers' ? social.getFollowers(cursor, options) : social.getFollowing(cursor, options);
@@ -29,18 +33,32 @@ Page({
     tab: 'recipes', loading: true, loadingMore: false, error: '', recipes: [], profiles: [],
     nextCursor: null, nextOffset: null, followBusyId: '', hasAllergies: false, skippedAllergyCount: 0
   },
-  onLoad(options = {}) { this.request = 0; this._allRecipes = []; if (tabs.includes(options.tab)) this.setData({tab: options.tab}); account.bind(this); },
+  onLoad(options = {}) { this.request = 0; this._allRecipes = []; this._failedAvatars = new Set(); if (tabs.includes(options.tab)) this.setData({tab: options.tab}); account.bind(this); },
   onShow() {
     if (!account.check(this) || this.data.followBusyId) return;
+    if (this._loadFlight && this._loadFlight.request === this.request) return this._loadFlight.work;
     if (!this.data.error && !this.data.loading && this._loadedTab === this.data.tab &&
-      this._loadedAt && Date.now() - this._loadedAt < 30000 && this._loadedVersion !== null && this._loadedVersion === readVersion()) {
+      this._loadedVersion === readVersion()) {
       this.refreshAllergies(); return;
     }
     return this.load();
   },
   onUnload() { this.request++; account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
-  disposeLocalContent() { this._allRecipes = []; this._loadedAt = 0; this.setData({hasAllergies: false, skippedAllergyCount: 0}); },
+  onPullDownRefresh() {
+    if (this.data.followBusyId) {
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+      return;
+    }
+    if (this._pullDownFlight) return this._pullDownFlight;
+    const work = Promise.resolve(this.reload()).finally(() => {
+      if (this._pullDownFlight === work) this._pullDownFlight = null;
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+    });
+    this._pullDownFlight = work;
+    return work;
+  },
+  disposeLocalContent() { this._allRecipes = []; this._loadedTab = ''; this._loadFlight = null; if (this.accountSession && this.accountSession.changed) this._failedAvatars.clear(); this.setData({hasAllergies: false, skippedAllergyCount: 0}); },
   refreshAllergies() {
     if (!account.check(this) || this.data.tab !== 'recipes') return;
     const allergies = store.getAllergyFilterEnabled() ? store.getState().allergies || [] : [];
@@ -54,7 +72,16 @@ Page({
       this.setData({tab}); return this.load();
     }
   },
-  async load(options) {
+  load(options) {
+    if (!account.check(this) || this.data.followBusyId) return;
+    const work = this.loadList(options);
+    const flight = {request: this.request, work};
+    this._loadFlight = flight;
+    const complete = () => { if (this._loadFlight === flight) this._loadFlight = null; };
+    work.then(complete, complete);
+    return work;
+  },
+  async loadList(options) {
     if (!account.check(this) || this.data.followBusyId) return;
     const request = ++this.request, tab = this.data.tab;
     const version = readVersion();
@@ -64,10 +91,10 @@ Page({
     try {
       const result = await read(tab, tab === 'recipes' ? undefined : 0, options);
       if (!account.check(this) || request !== this.request) return;
-      if (tab === 'recipes') this._allRecipes = feedRecipes(result.recipes);
-      this._loadedTab = tab; this._loadedAt = Date.now(); this._loadedVersion = version;
+      if (tab === 'recipes') this._allRecipes = feedRecipes(result.recipes, this._failedAvatars);
+      this._loadedTab = tab; this._loadedVersion = version;
       this.setData(tab === 'recipes' ? {nextCursor: result.nextCursor || null, loading: false} : {
-        profiles: relationships(result.profiles, tab), nextOffset: result.nextOffset == null ? null : result.nextOffset, loading: false
+        profiles: relationships(result.profiles, tab, this._failedAvatars), nextOffset: result.nextOffset == null ? null : result.nextOffset, loading: false
       });
       this.refreshAllergies();
     } catch (error) {
@@ -88,7 +115,7 @@ Page({
       const key = tab === 'recipes' ? 'recipes' : 'profiles';
       const existing = tab === 'recipes' ? this._allRecipes || [] : this.data.profiles;
       const known = new Set(existing.map(item => item.id));
-      const incoming = tab === 'recipes' ? feedRecipes(result.recipes) : relationships(result.profiles, tab);
+      const incoming = tab === 'recipes' ? feedRecipes(result.recipes, this._failedAvatars) : relationships(result.profiles, tab, this._failedAvatars);
       const combined = existing.concat(incoming.filter(item => { if (known.has(item.id)) return false; known.add(item.id); return true; }));
       if (tab === 'recipes') this._allRecipes = combined;
       this.setData(tab === 'recipes' ? {nextCursor: result.nextCursor || null} : {profiles: combined, nextOffset: result.nextOffset == null ? null : result.nextOffset});
@@ -120,6 +147,23 @@ Page({
     } finally { if (account.check(this) && request === this.request) this.setData({followBusyId: ''}); }
   },
   onReachBottom() { return this.loadMore(); },
+  feedAvatarError(event) {
+    if (!account.check(this)) return;
+    const {id, url} = event.currentTarget.dataset;
+    const fallback = getProfileAvatar(id);
+    if (url === fallback || !(this._allRecipes || []).some(item => item.profileId === id && item.authorAvatar === url)) return;
+    this._failedAvatars.add(id + ':' + url);
+    this._allRecipes = this._allRecipes.map(item => item.profileId === id && item.authorAvatar === url ? {...item, authorAvatar: fallback} : item);
+    this.refreshAllergies();
+  },
+  profileAvatarError(event) {
+    if (!account.check(this)) return;
+    const {id, url} = event.currentTarget.dataset;
+    const fallback = getProfileAvatar(id);
+    if (url === fallback || !this.data.profiles.some(item => item.id === id && item.avatar === url)) return;
+    this._failedAvatars.add(id + ':' + url);
+    this.setData({profiles: this.data.profiles.map(item => item.id === id && item.avatar === url ? {...item, avatar: fallback} : item)});
+  },
   photoError(event) {
     if (!account.check(this)) return;
     const {id, url} = event.currentTarget.dataset;

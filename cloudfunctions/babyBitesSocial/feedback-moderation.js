@@ -4,30 +4,30 @@ const {reject} = require('./private-snapshot');
 const MAX_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 8000;
 function invalidPhoto() { reject('请使用压缩后的 JPG 或 PNG 成品照，大小不超过 1 MB。', 'INVALID_COOKSNAP_PHOTO'); }
-function photoInfo(bytes) {
-  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_BYTES) invalidPhoto();
+function photoInfo(bytes, {invalid = invalidPhoto, maxWidth = 750, maxHeight = 1334} = {}) {
+  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_BYTES) invalid();
   let width, height, type;
   if (bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.toString('ascii', 12, 16) === 'IHDR') {
     type = 'png'; width = bytes.readUInt32BE(16); height = bytes.readUInt32BE(20);
   } else if (bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216) {
     type = 'jpg';
     for (let pos = 2; pos + 4 < bytes.length;) {
-      if (bytes[pos++] !== 255) invalidPhoto();
+      if (bytes[pos++] !== 255) invalid();
       while (bytes[pos] === 255) pos++;
       const marker = bytes[pos++];
       if (marker === 217 || marker === 218) break;
       if (marker === 1 || marker >= 208 && marker <= 215) continue;
-      if (pos + 2 > bytes.length) invalidPhoto();
+      if (pos + 2 > bytes.length) invalid();
       const length = bytes.readUInt16BE(pos);
-      if (length < 2 || pos + length > bytes.length) invalidPhoto();
+      if (length < 2 || pos + length > bytes.length) invalid();
       if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker)) {
-        if (length < 8) invalidPhoto();
+        if (length < 8) invalid();
         height = bytes.readUInt16BE(pos + 3); width = bytes.readUInt16BE(pos + 5); break;
       }
       pos += length;
     }
   }
-  if (!type || !width || !height || width > 750 || height > 1334) invalidPhoto();
+  if (!type || !width || !height || width > maxWidth || height > maxHeight) invalid();
   return {type, contentType: type === 'jpg' ? 'image/jpeg' : 'image/png'};
 }
 function rejected(kind) {

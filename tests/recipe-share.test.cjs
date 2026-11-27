@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const {setup, pending, turn, assertUnshareable, clone, OWNER, OTHER, PUBLIC_ID, AUTHOR_ID, LOCAL_ID} = require('./detail-runtime.cjs');
-const linkResult = (app, name = '同步后的南瓜粥') => ({recipe: {id: PUBLIC_ID, name}, localVersion: JSON.stringify(app.store.getRecipe(app.sourceID))});
+const linkResult = (app, name = '已有公开南瓜粥') => ({recipe: {id: PUBLIC_ID, name}});
 const fallbackImage = '/assets/cute/pocket-mascot.png';
 
 test('detail shares the cached public photo after 301 seconds and reuses it on native share return', async t => {
@@ -46,17 +46,35 @@ test('detail ignores out-of-order photo downloads even when a reload returns the
   assert.equal(app.calls.updates, updates);
 });
 
-test('late detail photo downloads cannot survive edits, account or family changes, or unload', async () => {
-  for (const mode of ['edit', 'account', 'family', 'unload']) {
+test('refreshing metadata with the same public photo URL retains its cached cover without another download', async () => {
+  const app = setup(), page = await app.open();
+  const cover = page.onShareAppMessage().imageUrl;
+  app.updatePublicSnapshot('更新后的公开菜名');
+  app.hooks.image = () => { throw Error('相同封面不需要重新下载'); };
+  await page.requestShare();
+  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(app.calls.images.length, 1);
+  assert.equal(page.onShareAppMessage().title, '更新后的公开菜名 · 口袋食谱');
+  assert.equal(page.onShareAppMessage().imageUrl, cover);
+  app.emitSync(); await turn();
+  assert.equal(app.calls.shareLinks.length, 3);
+  assert.equal(app.calls.images.length, 1);
+  assert.equal(page.onShareAppMessage().imageUrl, cover);
+});
+
+test('late detail photo downloads cannot survive source, account or family changes, deletion or unload', async () => {
+  for (const mode of ['source', 'account', 'family', 'delete', 'unload']) {
     const app = setup(); let download;
     app.hooks.image = args => { download = args; };
     const page = await app.open();
-    if (mode === 'edit') app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '待同步的新菜名'});
+    if (mode === 'source') app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID),
+      source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '另一位作者'}});
     else if (mode === 'account') { app.store.bindAccount(OTHER); app.store.bindAccount(OWNER); }
     else if (mode === 'family') {
       app.store.bindScope(OWNER, {kind: 'family', id: 'f'.repeat(64), membershipId: 'e'.repeat(32)});
       app.store.bindScope(OWNER, {kind: 'personal', id: OWNER});
-    } else page.onUnload();
+    } else if (mode === 'delete') app.store.deleteRecipe(LOCAL_ID);
+    else page.onUnload();
     const updates = app.calls.updates;
     download.success({path: 'wxfile://tmp/previous-session.jpg'});
     assert.equal(app.calls.updates, updates);
@@ -65,7 +83,21 @@ test('late detail photo downloads cannot survive edits, account or family change
   }
 });
 
-test('own recipes prepare a synchronized link without a preview or profile-setup step', async () => {
+test('a pending public cover remains usable after local content and photo edits', async () => {
+  const app = setup(); let download;
+  app.hooks.image = args => { download = args; };
+  const page = await app.open();
+  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '尚未同步的新名字',
+    photo: 'wxfile://usr/private-edited-photo.jpg'});
+  page.favorite();
+  assert.equal(page.data.shareReady, true);
+  download.success({path: 'wxfile://tmp/existing-public-cover.jpg'});
+  assert.equal(page.onShareAppMessage().imageUrl, 'wxfile://tmp/existing-public-cover.jpg');
+  assert.equal(page.onShareAppMessage().title, '已公开的南瓜小米粥 · 口袋食谱');
+  assert.equal(app.calls.images.length, 1); assert.equal(app.calls.shareLinks.length, 1);
+});
+
+test('own recipes read an existing public card without synchronization, preview or profile setup', async () => {
   for (const profileExists of [true, false]) {
     const app = setup({profileExists}), before = clone(app.store.getState()), page = await app.open();
     assert.equal(page.data.shareReady, true);
@@ -74,6 +106,7 @@ test('own recipes prepare a synchronized link without a preview or profile-setup
     assert.equal(page.onShareAppMessage().imageUrl, 'wxfile://tmp/public-share.jpg');
     assert.deepEqual(app.calls.shareLinks, [{id: LOCAL_ID, force: false}]);
     assert.deepEqual(app.calls.navigation, []); assert.deepEqual(app.calls.publish, []);
+    assert.equal(app.calls.sync, 0);
     assert.deepEqual(clone(app.store.getState()), before);
   }
 });
@@ -101,7 +134,7 @@ test('sharing and returning retain verified recipe data without another request 
   }
 });
 
-test('ordinary returns revalidate saved copies when the original author renames or withdraws the recipe', async t => {
+test('explicit refresh revalidates saved copies when the original author renames or withdraws the recipe', async t => {
   for (const change of ['rename', 'NOT_PUBLIC']) await t.test(change, async () => {
     const source = {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'};
     const app = setup({recipe: {source}}), page = await app.open();
@@ -109,24 +142,31 @@ test('ordinary returns revalidate saved copies when the original author renames 
     page.onHide();
     if (change === 'rename') app.updatePublicSnapshot('原作者的新菜名');
     else app.hooks.recipe = () => { throw Object.assign(Error('原作者已取消公开'), {code: 'NOT_PUBLIC'}); };
-    await page.onShow();
+    await page.requestShare();
     assert.equal(app.calls.shareLinks.length, 2);
+    assert.equal(app.calls.shareLinks.at(-1).force, true);
     assert.deepEqual(clone(app.store.getRecipe(LOCAL_ID)), localBefore);
     if (change === 'rename') assert.equal(page.onShareAppMessage().title, '原作者的新菜名 · 口袋食谱');
     else { assertUnshareable(page); assert.match(page.data.shareError, /取消公开/); }
   });
 });
 
-test('one share return does not suppress a later ordinary background refresh', async () => {
+test('share and ordinary returns ignore unrelated social invalidation until an actual publication update', async () => {
   const app = setup(), page = await app.open();
   page.onShareAppMessage(); page.onHide(); app.hideApp(2); await page.onShow();
   assert.equal(app.calls.shareLinks.length, 1);
   page.onHide(); app.updatePublicSnapshot('后台更新的菜名'); await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
+  assert.equal(page.data.shareRecipe.name, '已公开的南瓜小米粥');
+  app.invalidateReads(); await page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
+  assert.equal(page.data.shareRecipe.name, '已公开的南瓜小米粥');
+  page.onHide(); app.emitSync(); await page.onShow();
   assert.equal(app.calls.shareLinks.length, 2);
   assert.equal(page.data.shareRecipe.name, '后台更新的菜名');
 });
 
-test('canceling without hide cannot exempt a later ordinary app hide, even when the source changes', async t => {
+test('canceling without hide cannot suppress a refresh after a publication update', async t => {
   for (const reason of [0, 1, 3, undefined]) for (const change of ['rename', 'NOT_PUBLIC']) {
     await t.test(String(reason) + ' ' + change, async () => {
       const app = setup({recipe: {source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}});
@@ -134,7 +174,7 @@ test('canceling without hide cannot exempt a later ordinary app hide, even when 
       await new Promise(resolve => setTimeout(resolve, 0));
       if (change === 'rename') app.updatePublicSnapshot('原作者修改后的名字');
       else app.hooks.recipe = () => { throw Object.assign(Error('原作者已取消公开'), {code: 'NOT_PUBLIC'}); };
-      app.hideApp(reason); page.onHide(); await page.onShow();
+      app.hideApp(reason); page.onHide(); app.emitSync(); await page.onShow();
       assert.equal(app.calls.shareLinks.length, 2);
       if (change === 'rename') assert.equal(page.data.shareRecipe.name, '原作者修改后的名字');
       else assertUnshareable(page);
@@ -142,63 +182,69 @@ test('canceling without hide cannot exempt a later ordinary app hide, even when 
   }
 });
 
-test('a share cancelled without hiding cannot suppress a later normal navigation return', async t => {
+test('a share cancelled without hiding still keeps verified data on ordinary navigation return', async t => {
   for (const action of ['previewPhoto', 'edit', 'record', 'openLastLog', 'openProfile', 'openPublicRecipe', 'openCooksnap']) {
     await t.test(action, async () => {
       const app = setup({recipe: {photo: 'wxfile://usr/photo.jpg', source: {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'}}});
       const page = await app.open(); page.onShareAppMessage();
       page[action](); page.onHide(); app.hideApp(2); app.updatePublicSnapshot('导航后的新菜名'); await page.onShow();
+      assert.equal(app.calls.shareLinks.length, 1);
+      assert.equal(page.data.shareRecipe.name, '已公开的南瓜小米粥');
+      app.invalidateReads(); await page.onShow();
+      assert.equal(app.calls.shareLinks.length, 1);
+      await page.refreshPublication();
       assert.equal(app.calls.shareLinks.length, 2);
       assert.equal(page.data.shareRecipe.name, '导航后的新菜名');
     });
   }
 });
 
-test('social invalidation before or during native sharing requires a new verified link', async t => {
+test('unrelated social invalidation before or during native sharing preserves the existing card', async t => {
   for (const when of ['before share', 'during share']) await t.test(when, async () => {
     const app = setup(), page = await app.open();
     if (when === 'before share') app.invalidateReads();
     page.onShareAppMessage(); page.onHide(); app.hideApp(2);
     if (when === 'during share') app.invalidateReads();
     app.updatePublicSnapshot('社交更新后的菜名'); await page.onShow();
-    assert.equal(app.calls.shareLinks.length, 2);
-    assert.equal(page.data.shareRecipe.name, '社交更新后的菜名');
+    assert.equal(app.calls.shareLinks.length, 1);
+    assert.equal(page.data.shareRecipe.name, '已公开的南瓜小米粥');
+    assert.equal(app.calls.images.length, 1);
   });
 });
 
-test('a response crossing social invalidation cannot mark its share-return metadata as current', async () => {
+test('a metadata response crossing unrelated social invalidation remains reusable on return', async () => {
   const app = setup();
   app.hooks.link = () => {
-    const result = linkResult(app, '失效前的菜名');
+    const result = linkResult(app, '已读取的公开菜名');
     app.invalidateReads();
     return result;
   };
   const page = await app.open(); delete app.hooks.link;
   page.onShareAppMessage(); page.onHide(); app.hideApp(2); app.updatePublicSnapshot('重新确认的菜名');
   await page.onShow();
-  assert.equal(app.calls.shareLinks.length, 2);
-  assert.equal(page.data.shareRecipe.name, '重新确认的菜名');
+  assert.equal(app.calls.shareLinks.length, 1);
+  assert.equal(page.data.shareRecipe.name, '已读取的公开菜名');
 });
 
-test('manual preparation consumes an old native-share exemption and still forces its request', async () => {
+test('manual preparation forces its request and its result is reused on return', async () => {
   const app = setup(), page = await app.open(); page.onShareAppMessage();
   await page.requestShare(); assert.equal(app.calls.shareLinks.at(-1).force, true);
   page.onHide(); await page.onShow();
-  assert.equal(app.calls.shareLinks.length, 3);
+  assert.equal(app.calls.shareLinks.length, 2);
 });
 
-test('a social change during pending preparation starts a fresh read on return and ignores the older response', async () => {
-  const app = setup(), gate = pending(), stale = linkResult(app, '失效菜名');
+test('a social version change during a pending read still reuses the same source request on return', async () => {
+  const app = setup(), gate = pending(), existing = linkResult(app, '已有公开菜名');
   app.hooks.link = () => gate.promise;
   const first = app.page.onShow(); app.page.onHide(); app.invalidateReads();
-  app.hooks.link = () => linkResult(app, '重新校验后的菜名');
   const second = app.page.onShow();
-  // Do not await a mistakenly reused old promise before reporting the regression.
-  assert.equal(app.calls.shareLinks.length, 2);
-  await second;
-  const updates = app.calls.updates; gate.resolve(stale); await first;
-  assert.equal(app.calls.updates, updates);
-  assert.equal(app.page.data.shareRecipe.name, '重新校验后的菜名');
+  assert.equal(app.calls.shareLinks.length, 1);
+  assertUnshareable(app.page);
+  gate.resolve(existing); await Promise.all([first, second]);
+  assert.equal(app.page.data.shareRecipe.name, '已有公开菜名');
+  assert.equal(app.page.data.shareReady, true);
+  await app.page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
 });
 
 test('an unconsumed native-share return cannot survive account or family changes or unload', async t => {
@@ -222,33 +268,55 @@ test('returning during share preparation reuses the current request', async () =
   assert.equal(app.calls.shareLinks.length, 1);
   gate.resolve(linkResult(app)); await Promise.all([first, second, third]);
   assert.equal(app.page.data.shareReady, true);
-  assert.equal(app.page.onShareAppMessage().title, '同步后的南瓜粥 · 口袋食谱');
+  assert.equal(app.page.onShareAppMessage().title, '已有公开南瓜粥 · 口袋食谱');
 });
 
-test('a real local edit while away still refreshes sharing on return', async () => {
+test('a local edit while away updates detail content and preserves the existing public card on return', async () => {
   const app = setup(), page = await app.open();
   page.onShareAppMessage(); page.onHide(); app.hideApp(2);
   app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '编辑后的菜名'});
   app.hooks.link = () => linkResult(app, '编辑后的菜名');
   await page.onShow();
-  assert.equal(app.calls.shareLinks.length, 2);
+  assert.equal(app.calls.shareLinks.length, 1);
   assert.equal(page.data.recipe.name, '编辑后的菜名');
-  assert.equal(page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
+  assert.equal(page.onShareAppMessage().title, '已公开的南瓜小米粥 · 口袋食谱');
+  assert.equal(page.data.shareReady, true);
 });
 
-test('an edit while preparation is pending starts a fresh read on return and rejects the old response', async () => {
-  const app = setup(), gate = pending(), stale = linkResult(app, '编辑前的菜名');
+test('an edit while share metadata is pending preserves the request and accepts the existing public card', async () => {
+  const app = setup(), gate = pending(), existing = linkResult(app, '已有公开菜名');
   app.hooks.link = () => gate.promise;
   const first = app.page.onShow(); app.page.onHide();
   app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '编辑后的菜名'});
-  app.hooks.link = () => linkResult(app, '编辑后的菜名');
-  await app.page.onShow();
-  assert.equal(app.calls.shareLinks.length, 2);
-  assert.equal(app.page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
-  const updates = app.calls.updates;
-  gate.resolve(stale); await first;
-  assert.equal(app.calls.updates, updates);
-  assert.equal(app.page.onShareAppMessage().title, '编辑后的菜名 · 口袋食谱');
+  const returned = app.page.onShow();
+  assert.equal(app.calls.shareLinks.length, 1);
+  gate.resolve(existing); await Promise.all([first, returned]);
+  assert.equal(app.page.data.recipe.name, '编辑后的菜名');
+  assert.equal(app.page.data.shareReady, true);
+  assert.equal(app.page.onShareAppMessage().title, '已有公开菜名 · 口袋食谱');
+  assert.equal(app.calls.sync, 0);
+});
+
+test('source changes invalidate the loaded card and in-flight metadata even when the source later changes back', async t => {
+  for (const backAgain of [false, true]) await t.test(backAgain ? 'source ABA' : 'new source', async () => {
+    const source = {recipeId: 'e'.repeat(64), profileId: AUTHOR_ID, authorName: '原作者'};
+    const app = setup({recipe: {source}}), page = await app.open(), gate = pending();
+    app.hooks.link = () => gate.promise;
+    const oldRead = page.refreshPublication();
+    app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), source: {...source, recipeId: 'f'.repeat(64)}});
+    if (backAgain) app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), source});
+    assertUnshareable(page);
+    assert.equal(page._sharePhoto.get('https://example.com/public.jpg'), '');
+    delete app.hooks.link;
+    await page.onShow();
+    const expectedId = backAgain ? source.recipeId : 'f'.repeat(64);
+    assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + expectedId);
+    const updates = app.calls.updates;
+    gate.resolve({recipe: {id: source.recipeId, name: '来源变化前的旧响应'}}); await oldRead;
+    assert.equal(app.calls.updates, updates);
+    assert.equal(page.onShareAppMessage().path, '/pages/public-recipe/index?id=' + expectedId);
+    assert.doesNotMatch(page.onShareAppMessage().title, /旧响应/);
+  });
 });
 
 test('local-only meal changes refresh displayed content without preparing the same share again', async () => {
@@ -304,7 +372,7 @@ test('another family member can forward a verified existing link without becomin
   assert.equal(app.store.getRecipe(LOCAL_ID).createdBy, OTHER); assert.deepEqual(app.calls.publish, []);
 });
 
-test('preparation failure exposes no local data and retries the synchronized-link API', async () => {
+test('share metadata failure exposes no local data and retries the existing-link API', async () => {
   const app = setup(); app.hooks.link = () => {throw Error('请联网后重试');}; const page = await app.open();
   assertUnshareable(page); assert.match(page.data.shareError, /联网/);
   delete app.hooks.link; await page.requestShare();
@@ -315,41 +383,80 @@ test('preparation failure exposes no local data and retries the synchronized-lin
 test('duplicate preparation taps coalesce at the page while one request is pending', async () => {
   const app = setup(), page = await app.open(), gate = pending();
   app.hooks.link = () => gate.promise; const first = page.requestShare(); await page.requestShare();
-  assert.equal(app.calls.shareLinks.length, 2); assertUnshareable(page);
+  assert.equal(app.calls.shareLinks.length, 2); assert.equal(page.data.shareReady, true);
+  assert.equal(page.onShareAppMessage().title, '已公开的南瓜小米粥 · 口袋食谱');
   gate.resolve(linkResult(app)); await first; assert.equal(page.data.shareReady, true);
 });
 
-test('invalid server metadata or stale local versions cannot become share cards', async () => {
-  for (const recipe of [null, {id: 'bad', name: '名称'}, {id: PUBLIC_ID, name: ''}, {id: PUBLIC_ID, name: ' '}]) {
-    const app = setup(); app.hooks.link = () => ({recipe, localVersion: JSON.stringify(app.store.getRecipe(LOCAL_ID))});
-    assertUnshareable(await app.open());
-  }
-  const app = setup(); app.hooks.link = () => ({recipe: {id: PUBLIC_ID, name: '旧菜名'}, localVersion: 'old'});
-  const page = await app.open(); assertUnshareable(page); assert.match(page.data.shareError, /更新/);
+test('metadata refresh keeps the loaded card shareable until replacement succeeds or the read fails', async t => {
+  for (const outcome of ['success', 'failure']) await t.test(outcome, async () => {
+    const app = setup(), page = await app.open(), gate = pending();
+    const before = clone(page.onShareAppMessage()), menus = app.calls.shareMenu.length;
+    app.hooks.link = () => gate.promise;
+    const work = page.requestShare();
+    assert.equal(page.data.publicLoading, true); assert.equal(page.data.shareLoading, true);
+    assert.equal(page.data.shareReady, true);
+    assert.deepEqual(clone(page.onShareAppMessage()), before);
+    assert.equal(app.calls.shareMenu.length, menus, 'refreshing metadata does not close the native share entry');
+    const returned = page.onShow();
+    assert.equal(app.calls.shareLinks.length, 2);
+    if (outcome === 'success') gate.resolve({recipe: {id: PUBLIC_ID, name: '最新公开菜名', photoURL: 'https://example.com/latest.jpg'}});
+    else gate.reject(Error('这道菜谱已移除'));
+    await Promise.all([work, returned]);
+    assert.equal(page.data.publicLoading, false); assert.equal(page.data.shareLoading, false);
+    if (outcome === 'success') {
+      assert.equal(page.data.shareReady, true);
+      assert.equal(page.onShareAppMessage().title, '最新公开菜名 · 口袋食谱');
+      assert.equal(app.calls.shareMenu.length, menus);
+    } else {
+      assertUnshareable(page); assert.equal(page.data.shareRecipe, null);
+      assert.match(page.data.shareError, /已移除/);
+      assert.equal(page._sharePhoto.get('https://example.com/public.jpg'), '');
+    }
+  });
 });
 
-test('local edits invalidate a prepared share until a fresh synchronized version is read', async () => {
+test('invalid server metadata cannot become share cards', async () => {
+  for (const recipe of [null, {id: 'bad', name: '名称'}, {id: PUBLIC_ID, name: ''}, {id: PUBLIC_ID, name: ' '}]) {
+    const app = setup(); app.hooks.link = () => ({recipe});
+    assertUnshareable(await app.open());
+  }
+});
+
+test('local content, photo and favorite edits keep a prepared public card without synchronization', async () => {
   const app = setup(), page = await app.open();
-  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '新修改的菜名'});
-  assert.equal(page.data.shareReady, false); assertUnshareable(page);
+  const card = clone(page.onShareAppMessage());
+  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '新修改的菜名', note: '仅本地心得',
+    steps: ['私人调整的做法'], photo: 'wxfile://usr/private-new-photo.jpg'});
+  page.favorite();
+  assert.equal(app.store.getSyncInfo().dirty, true);
+  assert.equal(page.data.shareReady, true);
+  assert.deepEqual(clone(page.onShareAppMessage()), card);
+  assert.equal(app.calls.shareLinks.length, 1); assert.equal(app.calls.images.length, 1); assert.equal(app.calls.sync, 0);
   app.hooks.link = () => linkResult(app, '服务端确认的新菜名'); await page.requestShare();
   assert.equal(page.onShareAppMessage().title, '服务端确认的新菜名 · 口袋食谱');
   assert.doesNotMatch(JSON.stringify(page.onShareAppMessage()), /只给自己|宝宝私密|私密用餐|私人|cloud:\/\//);
 });
 
-test('an edit between helper resolution and page continuation rejects the earlier local version', async () => {
+test('an edit between helper resolution and page continuation does not reject existing public metadata', async () => {
   const app = setup(); app.hooks.link = () => {
     const previous = linkResult(app);
     app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '刚刚修改'});
     return previous;
   };
-  const page = await app.open(); assertUnshareable(page); assert.match(page.data.shareError, /更新/);
+  const page = await app.open();
+  assert.equal(page.data.recipe.name, '刚刚修改'); assert.equal(page.data.shareReady, true);
+  assert.equal(page.onShareAppMessage().title, '已有公开南瓜粥 · 口袋食谱');
+  assert.equal(app.calls.sync, 0);
 });
 
-test('completed sync refreshes sharing once and identity-only notifications do not reread', async () => {
+test('public synchronization refreshes sharing while private revisions and identity notifications do not reread', async () => {
   const app = setup(), page = await app.open(), reads = app.calls.shareLinks.length;
   app.emitSync({revision: 0, publicationVersion: 0, identityCheckedAt: Date.now()}); await turn();
+  app.store.saveRecipe({...app.store.getRecipe(LOCAL_ID), name: '本地新菜名'});
+  app.emitSync({revision: 8, publicationVersion: 0}); await turn();
   assert.equal(app.calls.shareLinks.length, reads);
+  assert.equal(page.data.shareReady, true);
   app.updatePublicSnapshot('自动同步后的菜名'); app.emitSync(); await turn();
   assert.equal(app.calls.shareLinks.length, reads + 1);
   assert.equal(page.onShareAppMessage().title, '自动同步后的菜名 · 口袋食谱');

@@ -58,7 +58,7 @@ test('an unexpected sync rejection cannot roll back a committed local deletion',
 
 test('a failed local deletion during share preparation leaves sharing retryable', async () => {
   const app = setup(), page = await app.open(), gate = pending();
-  const oldLink = {recipe: {id: 'c'.repeat(64), name: '旧分享'}, localVersion: JSON.stringify(app.store.getRecipe(LOCAL_ID))};
+  const oldLink = {recipe: {id: 'c'.repeat(64), name: '旧分享'}};
   app.hooks.link = () => gate.promise;
   const oldRequest = page.refreshPublication();
   assert.equal(page.data.publicLoading, true);
@@ -123,7 +123,9 @@ test('deletion is still available locally when the social feature is disabled', 
 });
 
 test('store-only refreshes do not issue repeated server status reads', async () => {
-  const app = setup({published: true}); const page = await app.open(); const reads = app.calls.mine;
+  const app = setup({published: true}); const page = await app.open();
+  const reads = app.calls.shareLinks.length, shared = clone(page.onShareAppMessage());
   app.store.toggleFavorite(LOCAL_ID); page.refresh(); await turn();
-  assert.equal(app.calls.mine, reads); assert.equal(page.data.publicChanged, true);
+  assert.equal(app.calls.shareLinks.length, reads); assert.equal(page.data.shareReady, true);
+  assert.deepEqual(clone(page.onShareAppMessage()), shared);
 });

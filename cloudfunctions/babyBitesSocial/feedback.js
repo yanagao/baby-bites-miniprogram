@@ -40,7 +40,7 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
   function nextOffset(rows, offset) {
     return rows.length > PAGE_SIZE && offset + PAGE_SIZE <= 1000 ? offset + PAGE_SIZE : null;
   }
-  async function renderCooksnap(record, {owner, env, isBuiltin}) {
+  async function renderCooksnap(record, {owner, env, isBuiltin, avatarURLFor}) {
     if (!record || record.type !== 'cooksnap' || record.active !== true || !isId(record.owner) ||
       !isId(record._id) || !await visible(record.recipeId, isBuiltin)) return null;
     const profileId = profileIdFor(record.owner);
@@ -49,9 +49,11 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
     const file = response && response.fileList && response.fileList[0];
     if (!file || file.fileID !== record.photoFileID || file.status != null && file.status !== 0 ||
       typeof file.tempFileURL !== 'string' || !/^https:\/\//.test(file.tempFileURL)) reject('成品照暂时无法读取。', 'STORAGE_FAILED');
+    const avatarURL = actor && await avatarURLFor(actor);
     const current = await get('feedback', record._id);
     if (!current || current.active !== true || current.photoFileID !== record.photoFileID || !await visible(record.recipeId, isBuiltin)) return null;
-    return {id: record._id, recipeId: record.recipeId, author: {id: profileId, name: actor ? actor.name : defaultProfileName(record.owner)},
+    return {id: record._id, recipeId: record.recipeId, author: {id: profileId, name: actor ? actor.name : defaultProfileName(record.owner),
+      ...(avatarURL ? {avatarURL} : {})},
       photoURL: file.tempFileURL, text: record.text, createdAt: record.createdAt, isSelf: record.owner === owner};
   }
   async function cleanup(fileID) {
@@ -196,7 +198,8 @@ function createFeedback({cloud, db, get, write, collection, profile, isPublished
         const base = {id: record._id, type: record.type, recipeId: recipe._id, recipeName: recipe.name, createdAt: record.createdAt};
         if (record.type === 'save') return {...base, photoURL: '', text: ''};
         const snap = await renderCooksnap(record, session);
-        return snap ? {...base, actorName: snap.author.name, photoURL: snap.photoURL, text: snap.text} : null;
+        return snap ? {...base, actorName: snap.author.name, ...(snap.author.avatarURL ? {actorAvatarURL: snap.author.avatarURL} : {}),
+          photoURL: snap.photoURL, text: snap.text} : null;
       }));
       return {saveCount, cooksnapCount, items: rows.filter(Boolean), nextOffset: nextOffset(result.data, offset)};
     }

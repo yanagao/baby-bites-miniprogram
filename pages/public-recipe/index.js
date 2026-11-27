@@ -16,13 +16,12 @@ Page({
     feedbackLoading: false, feedbackError: '', feedbackReady: false, saveCount: 0, cooksnapCount: 0,
     cooksnaps: [], feedbackOffset: null, feedbackMore: false, deletingCooksnap: ''
   },
-  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; this._shareReturn = createShareReturn(wx); this._sharePhoto = createSharePhoto(wx); this._recipeReadVersion = null; account.bind(this); },
+  onLoad(options = {}) { this.recipeId = options.id || ''; this.request = 0; this.relationRequest = 0; this._failedAuthorAvatar = ''; this._shareReturn = createShareReturn(wx); this._sharePhoto = createSharePhoto(wx); this._recipeReadVersion = null; account.bind(this); },
   onShow() {
     if (!account.check(this)) return;
-    const shareReturn = this._shareReturn.show();
+    this._shareReturn.show();
     if (this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
-    if (shareReturn && shareReturn.recipeId === this.recipeId && shareReturn.request === this.request &&
-      shareReturn.version === readVersion() && !this.data.loading && !this.data.error &&
+    if (this._recipeReadVersion === readVersion() && !this.data.loading && !this.data.error &&
       this.data.recipe && this.data.recipe.id === this.recipeId) {
       this.refreshAllergies();
       const imported = social.findImportedRecipe(this.recipeId);
@@ -30,11 +29,26 @@ Page({
       if (importedId !== this.data.importedId) this.setData({importedId});
       return;
     }
+    if (this.data.loading && this._loadFlight && this._loadFlight.request === this.request) return this._loadFlight.work;
     return this.load();
   },
   onUnload() { this._shareReturn.dispose(); this._sharePhoto.clear(); this.request++; this.relationRequest++; account.dispose(this); },
   reload() { this._shareReturn.clear(); return account.reload(this, {force: true}); },
+  onPullDownRefresh() {
+    if (this.data.adding || this.data.followBusy || this.data.deletingCooksnap) {
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+      return;
+    }
+    if (this._pullDownFlight) return this._pullDownFlight;
+    const work = Promise.resolve(this.reload()).finally(() => {
+      if (this._pullDownFlight === work) this._pullDownFlight = null;
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+    });
+    this._pullDownFlight = work;
+    return work;
+  },
   disposeLocalContent() {
+    if (this.accountSession && this.accountSession.changed) this._failedAuthorAvatar = '';
     this._shareReturn.clear();
     this._sharePhoto.clear();
     this._recipeReadVersion = null;
@@ -49,7 +63,16 @@ Page({
     const allergyWarning = matched.length ? '含已记录的过敏食材：' + matched.join('、') + '，请勿给宝宝食用。' : '';
     if (allergyWarning !== this.data.allergyWarning) this.setData({allergyWarning});
   },
-  async load(options) {
+  load(options) {
+    if (!account.check(this) || this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
+    const work = this.loadRecipe(options);
+    const flight = {request: this.request, work};
+    this._loadFlight = flight;
+    const complete = () => { if (this._loadFlight === flight) this._loadFlight = null; };
+    work.then(complete, complete);
+    return work;
+  },
+  async loadRecipe(options) {
     this._shareReturn.clear();
     if (!account.check(this) || this.data.adding || this.data.followBusy || this.data.deletingCooksnap) return;
     const request = ++this.request;
@@ -66,7 +89,9 @@ Page({
       this._recipeReadVersion = readVersion();
       this._sharePhoto.prepare(result.recipe && result.recipe.photoURL);
       const imported = social.findImportedRecipe(this.recipeId);
-      const author = result.author ? {...result.author, avatar: getProfileAvatar(result.author.id)} : result.author;
+      const candidate = result.author && getProfileAvatar(result.author.id, result.author.avatarURL);
+      const author = result.author ? {...result.author, avatar: this._failedAuthorAvatar === result.author.id + ':' + candidate ?
+        getProfileAvatar(result.author.id) : candidate} : result.author;
       this.setData({recipe: result.recipe, author, importedId: imported ? imported.id : '', loading: false});
       this.refreshAllergies();
       if (wx.showShareMenu) wx.showShareMenu({menus: ['shareAppMessage']});
@@ -219,11 +244,18 @@ Page({
   openAuthor() { if (account.check(this) && this.data.author) { this._shareReturn.clear(); wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(this.data.author.id)}); } },
   openSource() { if (!account.check(this)) return; const source = this.data.recipe && this.data.recipe.source; if (source) { this._shareReturn.clear(); wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(source.profileId)}); } },
   photoError() { this.setData({photoFailed: true}); },
+  authorAvatarError(event) {
+    if (!account.check(this) || !this.data.author) return;
+    const {id, url} = event.currentTarget.dataset, author = this.data.author;
+    const fallback = getProfileAvatar(author.id);
+    if (id !== author.id || url !== author.avatar || url === fallback) return;
+    this._failedAuthorAvatar = id + ':' + url;
+    this.setData({author: {...author, avatar: fallback}});
+  },
   previewPhoto() { this._shareReturn.clear(); if (account.check(this) && this.data.recipe && this.data.recipe.photoURL && !this.data.photoFailed) wx.previewImage({current: this.data.recipe.photoURL, urls: [this.data.recipe.photoURL]}); },
   onShareAppMessage() {
     const recipe = account.check(this) && !this.data.loading && !this.data.error && this.data.recipe;
-    // The native share sheet can hide the page before or after this callback.
-    // Reuse this view only for its next return, unless another action changes it.
+    // Sharing keeps the same loaded view; data changes still invalidate it.
     this._shareReturn.clear();
     if (recipe) this._shareReturn.share({recipeId: this.recipeId, request: this.request, version: this._recipeReadVersion});
     // displayPhoto can alias photoURL; use it only for recipes without an upload.

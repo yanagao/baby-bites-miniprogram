@@ -9,5 +9,5 @@
     <view class="recipe-tile-name">{{recipe.name}}</view>
     <view class="recipe-tile-meta"><text wx:if="{{recipe.minutes}}">{{recipe.minutes}} 分钟</text><text wx:if="{{recipe.minutes && recipe.texture}}"> · </text><text>{{recipe.texture}}</text></view>
   </view>
-  <view wx:if="{{showAuthor && recipe.authorName}}" class="recipe-tile-author" catchtap="author" hover-class="recipe-tile-pressed" aria-role="button" aria-label="{{'打开' + recipe.authorName + '的主页'}}"><view class="recipe-tile-avatar"><image class="recipe-tile-avatar-image" src="{{authorAvatar}}" mode="aspectFit" aria-hidden="true" /></view><text>{{recipe.authorName}}</text></view>
+  <view wx:if="{{showAuthor && recipe.authorName}}" class="recipe-tile-author" catchtap="author" hover-class="recipe-tile-pressed" aria-role="button" aria-label="{{'打开' + recipe.authorName + '的主页'}}"><view class="recipe-tile-avatar"><image class="recipe-tile-avatar-image" src="{{authorAvatar}}" mode="aspectFill" data-id="{{recipe.profileId}}" data-url="{{authorAvatar}}" binderror="avatarError" aria-hidden="true" /></view><text>{{recipe.authorName}}</text></view>
 </view>

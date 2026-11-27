@@ -15,12 +15,22 @@ Component({
         this._imageRecipeId = id;
         Object.assign(update, {imageSource, photoFailed: false});
       }
-      const authorAvatar = getProfileAvatar(recipe && recipe.profileId);
-      if (authorAvatar !== this.data.authorAvatar) update.authorAvatar = authorAvatar;
+      const authorAvatar = getProfileAvatar(recipe && recipe.profileId, recipe && recipe.authorAvatarURL);
+      const authorKey = (recipe && recipe.profileId || '') + ':' + authorAvatar;
+      if (authorKey !== this._authorAvatarKey) {
+        this._authorAvatarKey = authorKey;
+        update.authorAvatar = authorAvatar;
+      }
       if (Object.keys(update).length) this.setData(update);
     }
   },
   methods: {
+    avatarError(event) {
+      const recipe = this.data.recipe, source = event && event.currentTarget && event.currentTarget.dataset;
+      if (!recipe || !source || source.id !== recipe.profileId || source.url !== this.data.authorAvatar) return;
+      const fallback = getProfileAvatar(recipe.profileId);
+      if (this.data.authorAvatar !== fallback) this.setData({authorAvatar: fallback});
+    },
     open() { if (this.data.recipe && this.data.recipe.id) this.triggerEvent('open', {id: this.data.recipe.id}); },
     author() { if (this.data.showAuthor && this.data.recipe && this.data.recipe.profileId) this.triggerEvent('author', {id: this.data.recipe.profileId}); },
     photoError(event) {

@@ -57,6 +57,7 @@ function setup(initial) {
       if (name === './sync-merge') return require('../utils/sync-merge');
       if (name === './recipe-ages') return require('../utils/recipe-ages');
       if (name === './recipe-origin') return require('../utils/recipe-origin');
+      if (name === './recipe-identity') return require('../utils/recipe-identity');
       if (name === './retired-starter-recipes') return require('../utils/retired-starter-recipes');
       if (name === './baby-age') return require('../utils/baby-age');
       if (name === './meal-plans') return require('../utils/meal-plans');

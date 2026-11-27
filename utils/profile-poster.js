@@ -59,6 +59,32 @@ function lines(ctx, value, width, limit) {
   if (line) result.push(line);
   return result;
 }
+async function avatarImage(profile, guard) {
+  const fallback = getProfileAvatar(profile.id);
+  const source = getProfileAvatar(profile.id, profile.avatarURL);
+  try {
+    const image = await call('getImageInfo', {src: source});
+    guard();
+    const path = canvasImagePath(image.path, source === fallback ? fallback : '');
+    if (path) return {...image, path};
+  } catch (error) { guard(); }
+  if (source !== fallback) {
+    try {
+      const image = await call('getImageInfo', {src: fallback});
+      guard();
+      return {...image, path: canvasImagePath(image.path, fallback)};
+    } catch (error) { guard(); }
+  }
+  return {path: fallback};
+}
+function drawAvatar(ctx, image) {
+  const validSize = Number.isFinite(image.width) && image.width > 0 && Number.isFinite(image.height) && image.height > 0;
+  const scale = validSize ? 110 / Math.min(image.width, image.height) : 1;
+  const width = validSize ? image.width * scale : 110, height = validSize ? image.height * scale : 110;
+  ctx.save(); ctx.beginPath(); ctx.arc(300, 164, 55, 0, Math.PI * 2); ctx.clip();
+  ctx.drawImage(image.path, 300 - width / 2, 164 - height / 2, width, height);
+  ctx.restore();
+}
 async function render(page, input, guard) {
   if (!input.profile || !input.profile.exists || !/^[a-f0-9]{32}$/.test(input.profile.id) ||
     typeof input.codeURL !== 'string' || !/^https:\/\/[^\s/@]+(?:\/|$)/.test(input.codeURL)) {
@@ -71,13 +97,12 @@ async function render(page, input, guard) {
     codePath = downloaded.tempFilePath || '';
     guard();
     if (downloaded.statusCode !== 200 || !codePath) throw Error('分享码下载未完成，请重试。');
-    const avatarPath = getProfileAvatar(input.profile.id);
-    const avatar = await call('getImageInfo', {src: avatarPath});
+    const avatar = await avatarImage(input.profile, guard);
     guard();
     const ctx = wx.createCanvasContext(CANVAS_ID, page);
     ctx.setFillStyle('#ffffff'); ctx.fillRect(0, 0, WIDTH, HEIGHT);
     banner(ctx);
-    ctx.drawImage(canvasImagePath(avatar.path, avatarPath), 245, 109, 110, 110);
+    drawAvatar(ctx, avatar);
     ctx.setTextAlign('center'); ctx.setFillStyle('#345158'); ctx.setFontSize(FONTS.cardTitle);
     lines(ctx, input.profile.name, 480, 2).forEach((line, index) => ctx.fillText(line, WIDTH / 2, 265 + index * FONTS.cardTitle * BODY_LINE_HEIGHT));
     ctx.setFontSize(FONTS.secondary); ctx.setFillStyle('#82969a'); ctx.fillText('分享我做过的好味道', WIDTH / 2, 342);

@@ -534,10 +534,10 @@ function assertNoModerationWrites(env, before) {
   assert.deepEqual(env.signed, []);
 }
 
-function moderationTimerFactory(timers, cleared) {
+function moderationTimerFactory(timers, cleared, moduleName = './profile-moderation') {
   const entry = require.resolve('../cloudfunctions/babyBitesSocial');
   const localRequire = createRequire(entry);
-  const moderationFile = localRequire.resolve('./profile-moderation');
+  const moderationFile = localRequire.resolve(moduleName);
   const moderationModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(moderationFile, 'utf8'), {
     module: moderationModule, exports: moderationModule.exports, require: localRequire,
@@ -550,7 +550,7 @@ function moderationTimerFactory(timers, cleared) {
   const handlerModule = {exports: {}};
   vm.runInNewContext(fs.readFileSync(entry, 'utf8'), {
     module: handlerModule, exports: handlerModule.exports, Buffer,
-    require: name => name === './profile-moderation' ? moderationModule.exports : localRequire(name)
+    require: name => name === moduleName ? moderationModule.exports : localRequire(name)
   }, {filename: entry});
   return handlerModule.exports.createHandler;
 }
@@ -2933,6 +2933,297 @@ function cooksnapFixture(env, openid = 'bob', path = 'cooksnap.png') {
   env.files.set(photoFileID, bytes);
   return photoFileID;
 }
+
+function avatarFixture(env, openid = 'alice', path = 'avatar-selected.png') {
+  return cooksnapFixture(env, openid, path);
+}
+
+test('profile avatar saves an approved owner photo as a separate public copy and acknowledges support', async () => {
+  const env = fakeEnvironment(), avatarFileID = avatarFixture(env);
+  const profileId = profileIdFor(ownerFor('alice'));
+  const result = await env.handler()({action: 'updateProfile', name: '头像厨房', avatarFileID,
+    owner: ownerFor('bob'), avatarURL: 'https://untrusted.example/avatar.png'});
+  assert.equal(result.error, undefined);
+  assert.equal(result.avatarUpdated, true);
+  assert.match(result.profile.avatarURL, /^https:\/\/signed\.example\.test\//);
+  assert.equal(result.profile.avatarFileID, undefined);
+  const stored = env.table('profiles').get(profileId);
+  assert.equal(stored.owner, ownerFor('alice'));
+  assert.match(stored.avatarFileID, new RegExp('/social/' + profileId + '/avatars/'));
+  assert.equal(stored.avatarURL, undefined);
+  assert.deepEqual(env.downloads, [avatarFileID]);
+  assert.equal(env.uploads.length, 1);
+  assert.deepEqual(env.uploads[0].fileContent, env.files.get(avatarFileID));
+  assert.deepEqual(env.moderationRequests[1], {image: true, contentType: 'image/png', bytes: 32});
+  assert.deepEqual(env.signed, [{fileID: stored.avatarFileID, maxAge: 300}]);
+  assert.doesNotMatch(JSON.stringify(result), /users%2F|users\/|avatarFileID|untrusted/);
+  const legacySave = await env.handler()({action: 'updateProfile', name: '仅改昵称'});
+  assert.equal(legacySave.avatarUpdated, undefined);
+  assert.equal(legacySave.profile.avatarURL, result.profile.avatarURL);
+  assert.equal(env.uploads.length, 1);
+});
+
+test('profile avatars accept a bounded JPEG and use the decoded format for the public copy', async () => {
+  const env = fakeEnvironment(), avatarFileID = avatarFixture(env, 'alice', 'avatar-selected.jpg');
+  const jpeg = Buffer.from([255, 216, 255, 192, 0, 8, 8, 2, 238, 2, 238, 1, 255, 217]);
+  env.files.set(avatarFileID, jpeg);
+  const result = await env.handler()({action: 'updateProfile', name: '厨房', avatarFileID});
+  assert.equal(result.avatarUpdated, true);
+  assert.match(env.uploads[0].cloudPath, /\.jpg$/);
+  assert.deepEqual(env.moderationRequests[1], {image: true, contentType: 'image/jpeg', bytes: jpeg.length});
+});
+
+test('avatar ownership, environment and upload prefix are checked before moderation or storage', async t => {
+  const owner = ownerFor('alice'), profileId = profileIdFor(owner);
+  const invalid = [undefined, null, '', 42, 'https://example.test/avatar.png',
+    privateFile(ownerFor('bob'), 'photos/avatar-other.png'),
+    privateFile(owner, 'photos/avatar-own.png').replace(ENV, 'another-env'),
+    privateFile(owner, 'photos/recipe.png'), privateFile(owner, 'photos/avatar-.png'),
+    privateFile(owner, 'photos/avatar-own.webp'), privateFile(owner, 'photos/avatar-../other.png'),
+    cloudFile(`social/${profileId}/avatars/approved.png`), privateFile(owner, 'snapshots/avatar-own.json')];
+  for (const avatarFileID of invalid) await t.test(String(avatarFileID), async () => {
+    const env = fakeEnvironment(); existingModerationProfile(env);
+    const before = profileState(env);
+    const result = await env.handler()({action: 'updateProfile', name: '不能覆盖', avatarFileID});
+    assert.equal(result.error.code, 'INVALID_PROFILE_AVATAR');
+    assertNoModerationWrites(env, before);
+    assert.deepEqual(env.moderationRequests, []);
+  });
+});
+
+test('avatar bytes and both dimensions are bounded before image review or copying', async t => {
+  for (const kind of ['empty', 'large', 'invalid', 'width', 'height', 'zero', 'truncated-jpeg']) await t.test(kind, async () => {
+    const env = fakeEnvironment(), avatarFileID = avatarFixture(env);
+    let bytes = Buffer.from(env.files.get(avatarFileID));
+    if (kind === 'empty') bytes = Buffer.alloc(0);
+    if (kind === 'large') bytes = Buffer.alloc(1024 * 1024 + 1);
+    if (kind === 'invalid') bytes = Buffer.from('not a photograph');
+    if (kind === 'width') bytes.writeUInt32BE(751, 16);
+    if (kind === 'height') bytes.writeUInt32BE(751, 20);
+    if (kind === 'zero') bytes.writeUInt32BE(0, 20);
+    if (kind === 'truncated-jpeg') bytes = JPG;
+    env.files.set(avatarFileID, bytes);
+    const result = await env.handler()({action: 'updateProfile', name: '厨房', avatarFileID});
+    assert.equal(result.error.code, 'INVALID_PROFILE_AVATAR');
+    assert.equal(env.moderationRequests.filter(item => item.image).length, 0);
+    assert.deepEqual(env.uploads, []); assert.deepEqual(env.writes, []);
+    assert.deepEqual(env.transactionStarts, []);
+  });
+});
+
+test('avatar review rejects risky, ambiguous, failed and absent approvals without changing existing profiles', async t => {
+  const cases = [
+    ['risky code', {errCode: 87014}, 'PROFILE_AVATAR_REJECTED'],
+    ['lowercase', {errcode: '87014'}, 'PROFILE_AVATAR_REJECTED'],
+    ['review', {errCode: 0, result: {suggest: 'review'}}, 'PROFILE_AVATAR_REJECTED'],
+    ['risky', {errCode: 0, result: {suggest: 'risky'}}, 'PROFILE_AVATAR_REJECTED'],
+    ['empty', {}, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['missing', undefined, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['failure', {errcode: 500}, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['contradictory', {errCode: 0, errcode: 500}, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['boolean', {errCode: false}, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['unknown verdict', {errCode: 0, result: {suggest: 'unknown'}}, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['throws', () => { throw Error('SECRET moderation error'); }, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE'],
+    ['throws risky', () => { throw {errcode: 87014}; }, 'PROFILE_AVATAR_REJECTED'],
+    ['absent API', null, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE']
+  ];
+  for (const [name, response, code] of cases) await t.test(name, async () => {
+    const env = fakeEnvironment(), profileId = existingModerationProfile(env), avatarFileID = avatarFixture(env);
+    env.table('profiles').get(profileId).avatarFileID = cloudFile(`social/${profileId}/avatars/original.png`);
+    const before = profileState(env);
+    const security = {async msgSecCheck() { return {errCode: 0, result: {suggest: 'pass'}}; }};
+    if (name !== 'absent API') security.imgSecCheck = async () => typeof response === 'function' ? response() : response;
+    const result = await env.handler('alice', {openapi: {security}})({action: 'updateProfile', name: '不得保存', avatarFileID});
+    assert.equal(result.error.code, code);
+    assert.doesNotMatch(JSON.stringify(result), /SECRET/);
+    assert.deepEqual(profileState(env), before);
+    assert.deepEqual(env.uploads, []); assert.deepEqual(env.writes, []);
+    assert.deepEqual(env.transactionStarts, []); assert.deepEqual(env.signed, []);
+  });
+});
+
+test('profile avatar stays private until image review completes and preserves intervening birthday and share-code edits', async () => {
+  const env = fakeEnvironment(), profileId = existingModerationProfile(env), avatarFileID = avatarFixture(env);
+  let approve;
+  const handler = env.handler('alice', {openapi: {security: {
+    async msgSecCheck() { return {errCode: 0, result: {suggest: 'pass'}}; },
+    imgSecCheck() { return new Promise(resolve => { approve = resolve; }); }
+  }}});
+  const pending = handler({action: 'updateProfile', name: '审核后的头像', avatarFileID});
+  await new Promise(setImmediate);
+  assert.equal(typeof approve, 'function');
+  assert.equal(env.table('profiles').get(profileId).avatarFileID, undefined);
+  assert.deepEqual(env.writes, []); assert.deepEqual(env.uploads, []); assert.deepEqual(env.transactionStarts, []);
+  const current = env.table('profiles').get(profileId);
+  current.babyBirthDate = '2026-03-31';
+  current.shareCodes.release = cloudFile(`social/${profileId}/codes/release/v1-new.png`);
+  const codes = clone(current.shareCodes);
+  approve({errcode: '0'});
+  const result = await pending;
+  assert.equal(result.avatarUpdated, true);
+  assert.equal(result.profile.babyBirthDate, '2026-03-31');
+  assert.deepEqual(env.table('profiles').get(profileId).shareCodes, codes);
+});
+
+test('legacy profile save and a share-code transaction preserve a concurrently saved avatar', async () => {
+  const env = fakeEnvironment(), profileId = env.addProfile('alice'), avatarFileID = avatarFixture(env);
+  let release;
+  env.setModeration(request => request.content === '延迟改名' ? new Promise(resolve => { release = resolve; }) :
+    {errCode: 0, result: {suggest: 'pass'}});
+  const legacy = env.handler()({action: 'updateProfile', name: '延迟改名'});
+  const first = await env.handler()({action: 'updateProfile', name: '已换头像', avatarFileID});
+  release({errCode: 0, result: {suggest: 'pass'}});
+  assert.equal((await legacy).profile.avatarURL, first.profile.avatarURL);
+  let latestAvatar;
+  const share = env.handler('visitor', {openapi: {wxacode: {async getUnlimited() {
+    const saved = await env.handler()({action: 'updateProfile', name: '再次换头像', avatarFileID});
+    latestAvatar = env.table('profiles').get(profileId).avatarFileID;
+    assert.equal(saved.avatarUpdated, true);
+    return {buffer: PNG};
+  }}}});
+  const code = await share({action: 'shareCode', profileId, envVersion: 'trial'});
+  assert.equal(code.error, undefined);
+  assert.equal(env.table('profiles').get(profileId).avatarFileID, latestAvatar);
+  assert.equal(env.table('profiles').get(profileId).name, '再次换头像');
+  assert.ok(env.table('profiles').get(profileId).shareCodes.trial);
+});
+
+test('checkProfile with an avatar remains read-only and saving independently reviews the image again', async () => {
+  const env = fakeEnvironment(), avatarFileID = avatarFixture(env), event = {name: '厨房', avatarFileID};
+  const before = profileState(env);
+  assert.deepEqual(await env.handler()({action: 'checkProfile', ...event}), {validated: true, saved: false});
+  assert.deepEqual(profileState(env), before);
+  assert.deepEqual(env.uploads, []); assert.deepEqual(env.writes, []); assert.deepEqual(env.signed, []);
+  assert.equal((await env.handler()({action: 'updateProfile', ...event})).avatarUpdated, true);
+  assert.equal(env.moderationRequests.filter(item => item.image).length, 2);
+});
+
+test('avatar review times out without writing and a late approval cannot publish the image', async () => {
+  const env = fakeEnvironment(), avatarFileID = avatarFixture(env), timers = [], cleared = [];
+  const factory = moderationTimerFactory(timers, cleared, './profile-avatar');
+  let approve;
+  const pending = env.handler('alice', {openapi: {security: {
+    async msgSecCheck() { return {errCode: 0, result: {suggest: 'pass'}}; },
+    imgSecCheck() { return new Promise(resolve => { approve = resolve; }); }
+  }}}, () => NOW, factory)({action: 'updateProfile', name: '厨房', avatarFileID});
+  await new Promise(setImmediate);
+  assert.equal(timers.length, 1); timers[0].fire();
+  assert.equal((await pending).error.code, 'PROFILE_AVATAR_MODERATION_UNAVAILABLE');
+  assert.ok(cleared.includes(timers[0]));
+  approve({errCode: 0});
+  await new Promise(setImmediate);
+  assert.deepEqual(env.uploads, []); assert.deepEqual(env.writes, []); assert.deepEqual(env.transactionStarts, []);
+});
+
+test('profile avatar failures before commit retain the previous photo and never report avatarUpdated', async t => {
+  for (const step of ['download', 'download status', 'upload', 'foreign public path']) await t.test(step, async () => {
+    const env = fakeEnvironment(), profileId = env.addProfile('alice'), avatarFileID = avatarFixture(env);
+    const current = env.table('profiles').get(profileId);
+    current.avatarFileID = cloudFile(`social/${profileId}/avatars/old.png`);
+    const before = clone(current);
+    const overrides = step === 'download' ? {async downloadFile() { throw Error('SECRET'); }} :
+      step === 'download status' ? {async downloadFile() { return {statusCode: 403}; }} :
+      step === 'upload' ? {async uploadFile() { throw Error('SECRET'); }} :
+      {async uploadFile() { return {fileID: cloudFile(`social/${profileIdFor(ownerFor('bob'))}/avatars/new.png`)}; }};
+    const result = await env.handler('alice', overrides)({action: 'updateProfile', name: '新名字', avatarFileID});
+    assert.equal(result.error.code, 'STORAGE_FAILED'); assert.equal(result.avatarUpdated, undefined);
+    assert.deepEqual(env.table('profiles').get(profileId), before);
+    assert.deepEqual(env.writes, []); assert.deepEqual(env.transactionStarts, []);
+  });
+});
+
+test('all public author views use the latest avatar without republishing recipes and sign once per request', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice');
+  env.addPublished('alice', 'recipe-2'); env.addPublished('alice', 'recipe-3');
+  const profileId = profileIdFor(ownerFor('alice')), bobProfile = env.addProfile('bob');
+  env.table('follows').set(ownerFor('bob'), {_id: ownerFor('bob'), profileIds: [profileId]});
+  env.table('follows').set(ownerFor('alice'), {_id: ownerFor('alice'), profileIds: [bobProfile]});
+  const originalRecipes = clone(Array.from(env.table('recipes')));
+  const avatarFileID = avatarFixture(env);
+  const first = await env.handler()({action: 'updateProfile', name: '作者', avatarFileID});
+  const second = await env.handler()({action: 'updateProfile', name: '作者', avatarFileID});
+  const avatarURL = second.profile.avatarURL;
+  assert.notEqual(avatarURL, first.profile.avatarURL);
+  const authorAvatar = env.table('profiles').get(profileId).avatarFileID;
+  const visitor = env.handler('bob');
+  const reads = [
+    ['mine', env.handler(), {}, result => [result.profile.avatarURL]],
+    ['profileSummary', visitor, {profileId}, result => [result.profile.avatarURL]],
+    ['profile', visitor, {profileId}, result => [result.profile.avatarURL, ...result.recipes.map(item => item.authorAvatarURL)]],
+    ['recipe', visitor, {recipeId}, result => [result.author.avatarURL, result.recipe.authorAvatarURL]],
+    ['discover', visitor, {}, result => result.recipes.map(item => item.authorAvatarURL)],
+    ['feed', visitor, {}, result => result.recipes.map(item => item.authorAvatarURL)],
+    ['following', visitor, {}, result => result.profiles.map(item => item.avatarURL)],
+    ['followers', visitor, {}, result => result.profiles.map(item => item.avatarURL)]
+  ];
+  for (const [action, handler, fields, urls] of reads) {
+    env.signed.length = 0;
+    const result = await handler({action, ...fields});
+    assert.equal(result.error, undefined, action);
+    assert.ok(urls(result).length > 0, action);
+    assert.ok(urls(result).every(url => url === avatarURL), action);
+    assert.deepEqual(env.signed, [{fileID: authorAvatar, maxAge: 300}], action);
+    assert.doesNotMatch(JSON.stringify(result), /avatarFileID|users%2F|users\//);
+  }
+  assert.deepEqual(Array.from(env.table('recipes')), originalRecipes);
+});
+
+test('avatar signing failures fall back on every row and do not fail a successful save', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice');
+  env.addPublished('alice', 'recipe-2');
+  const profileId = profileIdFor(ownerFor('alice')), avatarFileID = avatarFixture(env);
+  let attempts = 0;
+  const handler = env.handler('alice', {async getTempFileURL() { attempts++; throw Error('SECRET'); }});
+  const saved = await handler({action: 'updateProfile', name: '厨房', avatarFileID});
+  assert.equal(saved.avatarUpdated, true); assert.equal(saved.profile.avatarURL, undefined);
+  const result = await handler({action: 'profile', profileId});
+  assert.equal(result.error, undefined); assert.equal(result.recipes.length, 2);
+  assert.equal(result.profile.avatarURL, undefined);
+  assert.ok(result.recipes.every(recipe => recipe.authorAvatarURL === undefined));
+  assert.equal(attempts, 2, 'failed lookups are also coalesced within one request');
+  assert.equal((await handler({action: 'recipe', recipeId})).error, undefined);
+  assert.equal(attempts, 3, 'the next request retries instead of retaining failure');
+});
+
+test('profile DTOs never sign corrupt, private, foreign or non-avatar stored paths', async () => {
+  const env = fakeEnvironment(), profileId = env.addProfile('alice');
+  for (const fileID of [privateFile(ownerFor('alice'), 'photos/avatar-private.png'),
+    cloudFile(`social/${profileIdFor(ownerFor('bob'))}/avatars/other.png`),
+    cloudFile(`social/${profileId}/avatars/old.png`).replace(ENV, 'foreign-env'),
+    cloudFile(`social/${profileId}/codes/trial/v1-code.png`),
+    cloudFile(`social/${profileId}/avatars/../secret.png`)]) {
+    env.table('profiles').get(profileId).avatarFileID = fileID;
+    const result = await env.handler('visitor')({action: 'profileSummary', profileId});
+    assert.equal(result.error, undefined); assert.equal(result.profile.avatarURL, undefined);
+  }
+  assert.deepEqual(env.signed, []);
+});
+
+test('meal plans, preview, cooksnaps and feedback inbox include the same public avatar fields', async () => {
+  const env = fakeEnvironment(), recipeId = env.addPublished('alice'), profileId = profileIdFor(ownerFor('alice'));
+  const data = snapshot(); data.data.logs = [];
+  data.data.mealPlans = [{id: 'meal-2026-10-23-lunch', date: '2026-10-23', meal: 'lunch', recipeId: 'recipe-1', createdAt: NOW, updatedAt: NOW}];
+  data.deleted.mealPlans = []; env.commit('alice', data);
+  const alice = env.handler(), avatarFileID = avatarFixture(env);
+  const saved = await alice({action: 'updateProfile', name: '厨房', avatarFileID});
+  const avatarURL = saved.profile.avatarURL;
+  const preview = await alice({action: 'previewPublication', sourceRecipeId: 'recipe-1'});
+  assert.equal(preview.author.avatarURL, avatarURL); assert.equal(preview.recipe.authorAvatarURL, avatarURL);
+  for (const [action, fields] of [['mealPlan', {profileId}], ['shareMealPlan', {}]]) {
+    const result = await alice({action, date: '2026-10-23', ...fields});
+    assert.equal(result.error, undefined); assert.equal(result.author.avatarURL, avatarURL);
+  }
+  const bob = env.handler('bob'), bobAvatar = avatarFixture(env, 'bob');
+  const bobSaved = await bob({action: 'updateProfile', name: '跟做的朋友', avatarFileID: bobAvatar});
+  const input = {action: 'addCooksnap', recipeId, requestId: 'avatar-cooksnap-1',
+    photoFileID: cooksnapFixture(env), text: '宝宝喜欢这道菜'};
+  const snap = await bob(input);
+  assert.equal(snap.cooksnap.author.avatarURL, bobSaved.profile.avatarURL);
+  const feedback = await alice({action: 'recipeFeedback', recipeId});
+  assert.equal(feedback.cooksnaps[0].author.avatarURL, bobSaved.profile.avatarURL);
+  const inbox = await alice({action: 'feedbackInbox'});
+  assert.equal(inbox.items[0].actorAvatarURL, bobSaved.profile.avatarURL);
+});
 function savedCopy(env, openid, publicId, author = 'alice') {
   const data = snapshot(openid);
   data.data.recipes[0].id = 'shared-' + publicId;

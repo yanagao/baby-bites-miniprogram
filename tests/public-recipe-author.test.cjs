@@ -50,16 +50,17 @@ function setup(overrides = {}) {
   return {page, calls, changeOwner(value, notify = true) { owner = value; if (notify) listeners.forEach(fn => fn()); }};
 }
 
-test('public detail revalidates withdrawal on every return and uses only lightweight author summaries', async () => {
-  let reads = 0; const summaries = [];
-  const {page} = setup({getRecipe: async () => {
-    if (++reads === 3) throw Error('已取消公开');
+test('public detail reuses ordinary returns and revalidates changed visibility with lightweight author summaries', async () => {
+  let reads = 0, version = 1; const summaries = [];
+  const {page} = setup({getReadVersion: () => version, getRecipe: async () => {
+    if (++reads === 2) throw Error('已取消公开');
     return {recipe, author};
   }, getProfile: () => { throw Error('Full profile pages are unnecessary here'); },
   getProfileSummary: async (id, options) => { summaries.push({id, options}); return {isSelf: false, following: false}; }});
   await page.onShow(); await page.onShow();
-  assert.equal(reads, 2); assert.equal(summaries.length, 2);
-  await page.refreshAuthorRelationship(); assert.equal(summaries[2].options.force, true);
+  assert.equal(reads, 1); assert.equal(summaries.length, 1);
+  await page.refreshAuthorRelationship(); assert.equal(summaries[1].options.force, true);
+  version++;
   await page.onShow();
   assert.equal(page.data.recipe, null); assert.equal(page.data.importedId, '');
   assert.equal(page.onShareAppMessage().path, '/pages/home/index');
@@ -92,6 +93,24 @@ test('public recipe author avatars depend on the public ID, preserve the DTO, an
   await page.load();
   assert.equal(page.data.author.name, '更新后的昵称');
   assert.equal(page.data.author.avatar, getProfileAvatar(original.id));
+});
+
+test('custom recipe-author avatars preserve failure fallback until the URL or account changes', async () => {
+  let avatarURL = 'https://example.test/avatar-first.png';
+  const fixture = setup({getRecipe: async () => ({recipe, author: {...author, avatarURL}})});
+  const {page} = fixture;
+  const error = url => ({currentTarget: {dataset: {id: author.id, url}}});
+  await page.load(); assert.equal(page.data.author.avatar, avatarURL);
+  page.authorAvatarError(error(avatarURL)); assert.equal(page.data.author.avatar, getProfileAvatar(author.id));
+  await page.load(); assert.equal(page.data.author.avatar, getProfileAvatar(author.id));
+  const previous = avatarURL; avatarURL = 'https://example.test/avatar-new.png';
+  await page.load(); assert.equal(page.data.author.avatar, avatarURL);
+  page.authorAvatarError(error(previous)); assert.equal(page.data.author.avatar, avatarURL);
+  page.authorAvatarError(error(avatarURL)); assert.equal(page.data.author.avatar, getProfileAvatar(author.id));
+  fixture.changeOwner('owner-b'); await page.reload();
+  assert.equal(page.data.author.avatar, avatarURL, 'a new account session can load the avatar again');
+  page.onUnload(); const updates = fixture.calls.updates;
+  page.authorAvatarError(error(avatarURL)); assert.equal(fixture.calls.updates, updates);
 });
 
 test('an initial ownership failure preserves recipe, share and author navigation but waits to save until retry succeeds', async () => {

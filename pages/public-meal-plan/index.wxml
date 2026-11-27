@@ -1,6 +1,6 @@
 <t-navbar title="分享的餐单" placeholder left-arrow delta="{{0}}" bind:go-back="back" />
 <view class="shared-plan-page">
-  <view wx:if="{{loading}}" class="empty-note">正在打开这份餐单…</view>
+  <view wx:if="{{loading}}" class="empty-note">加载中</view>
   <t-empty wx:elif="{{error}}" icon="file-unknown" description="{{error}}"><t-button slot="action" theme="primary" shape="round" bind:tap="reload">重新加载</t-button></t-empty>
   <block wx:elif="{{ready}}">
     <view class="shared-plan-date">{{date}} · {{weekdayLabel}}</view>
@@ -8,7 +8,7 @@
       <view class="page-title">{{dateLabel}}餐单</view>
       <button wx:if="{{hasPlans}}" class="shared-plan-share" open-type="share" hover-class="shared-plan-pressed" aria-label="分享这一天的餐单"><t-icon name="share" size="36rpx" /><text>分享</text></button>
     </view>
-    <button class="shared-plan-author" bindtap="openAuthor" hover-class="shared-plan-pressed" aria-label="{{'打开' + author.name + '的主页'}}"><image class="shared-plan-avatar" src="{{author.avatar}}" mode="aspectFit" aria-hidden="true" /><view class="shared-plan-author-copy"><view class="shared-plan-author-name">{{author.name}}</view><view class="shared-plan-author-caption">分享的当日餐单</view></view><t-icon name="chevron-right" size="28rpx" /></button>
+    <button class="shared-plan-author" bindtap="openAuthor" hover-class="shared-plan-pressed" aria-label="{{'打开' + author.name + '的主页'}}"><image class="shared-plan-avatar" src="{{author.avatar}}" mode="aspectFill" data-id="{{author.id}}" data-url="{{author.avatar}}" binderror="authorAvatarError" aria-hidden="true" /><view class="shared-plan-author-copy"><view class="shared-plan-author-name">{{author.name}}</view><view class="shared-plan-author-caption">分享的当日餐单</view></view><t-icon name="chevron-right" size="28rpx" /></button>
     <view wx:if="{{!hasPlans}}" class="shared-plan-empty"><view>这一天还没有安排餐单</view><t-button theme="primary" variant="text" size="small" bind:tap="reload">重新加载</t-button></view>
     <view wx:else class="shared-plan-hint">点开菜谱，看看食材和做法</view>
     <view class="shared-plan-meals">
@@ -54,7 +54,7 @@
       <view wx:if="{{copyUnavailableCount}}" class="copy-note">{{copyUnavailableCount}} 餐做法暂未公开，本次跳过。</view>
       <view wx:if="{{!copySaveCount && !copyError}}" class="copy-note">这一天暂无需要添加的餐次，可以更换日期或处理方式。</view>
       <view wx:if="{{copyError}}" class="copy-error">{{copyError}}</view>
-      <t-button class="copy-confirm" theme="primary" shape="round" block loading="{{copySaving}}" disabled="{{copySaving || !copySaveCount}}" bind:tap="confirmCopy">{{copySaving ? '正在保存菜谱和餐单' : '保存 ' + copySaveCount + ' 餐'}}</t-button>
+      <t-button class="copy-confirm" theme="primary" shape="round" block loading="{{copySaving}}" disabled="{{copySaving || !copySaveCount}}" bind:tap="confirmCopy">{{copySaving ? '保存中' : '保存 ' + copySaveCount + ' 餐'}}</t-button>
       <t-button wx:if="{{!copySaveCount && copyCanView}}" theme="primary" variant="text" block disabled="{{copySaving}}" bind:tap="viewCopiedPlan">查看这一天的餐单</t-button>
     </block>
   </view>

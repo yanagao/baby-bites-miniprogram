@@ -91,6 +91,7 @@ Page({
     this.setData({counts: stats(state), warning: store.getWarning(), familyActive: inFamily()});
   },
   openFamily() { if (!this._disposed && !this.data.busy) wx.navigateTo({url: '/pages/family/index'}); },
+  openAnalysis() { if (!this._disposed && !this.data.busy && !this.data.scopeLocked) wx.navigateTo({url: '/pages/ai-analysis/index'}); },
   syncNow() { return cloudSync.syncNow(); },
   togglePaste() { if (!this.data.busy) this.setData({showPaste: !this.data.showPaste, error: ''}); },
   inputBackup(event) { if (!this.data.busy) this.setData({backupText: event.detail.value, error: ''}); },

@@ -20,16 +20,16 @@ const result = {author, date, meals: [
 ]};
 
 function setup(query = {profileId, date}) {
-  let owner = 'owner-a', scope = 'owner-a:personal';
+  let owner = 'owner-a', scope = 'owner-a:personal', version = 1;
   const listeners = new Set(), hooks = {};
   const calls = {reads: [], routes: [], updates: [], covers: [], backs: 0,
-    previews: [], copies: [], tabs: [], toasts: [], selectedDates: []};
+    previews: [], copies: [], tabs: [], toasts: [], selectedDates: [], refreshStops: 0};
   const store = {getState: () => ({recipes: [], logs: [], mealPlans: []}),
     getSyncInfo: () => ({owner, scopeKey: scope, scope: {kind: scope.endsWith(':personal') ? 'personal' : 'family'}}), subscribe(listener) {
     listeners.add(listener); return () => listeners.delete(listener);
   }};
   const wx = {showShareMenu() {}, hideShareMenu() {}, navigateTo(options) { calls.routes.push(options.url); },
-    showToast(options) { calls.toasts.push(options.title); },
+    showToast(options) { calls.toasts.push(options.title); }, stopPullDownRefresh() { calls.refreshStops++; },
     switchTab(options) {
       calls.tabs.push(options.url);
       if (hooks.switchTab) return hooks.switchTab(options);
@@ -39,7 +39,7 @@ function setup(query = {profileId, date}) {
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../pages/profile/account.js'), 'utf8'), {
     wx, module: accountModule, require(name) { if (name === '../../utils/store') return store; throw Error(name); }
   });
-  const social = {getMealPlan(id, day, options) {
+  const social = {getReadVersion: () => version, getMealPlan(id, day, options) {
     calls.reads.push({profileId: id, date: day, options: clone(options || {})});
     return hooks.read ? hooks.read(id, day, options) : Promise.resolve(clone(result));
   }};
@@ -84,7 +84,7 @@ function setup(query = {profileId, date}) {
     calls.updates.push(clone(fields)); Object.assign(this.data, clone(fields));
   }};
   page.onLoad(query);
-  return {page, calls, hooks, listeners,
+  return {page, calls, hooks, listeners, changeReadVersion() { version++; },
     changeIdentity(nextOwner, nextScope = scope, notify = true) {
       owner = nextOwner; scope = nextScope; if (notify) listeners.forEach(listener => listener());
     }};
@@ -97,7 +97,7 @@ const modeEvent = mode => ({currentTarget: {dataset: {mode}}});
 test('loads confirmed meals in breakfast-lunch-dinner order and fills missing slots without editing state', async () => {
   const app = setup();
   await app.page.onShow();
-  assert.deepEqual(app.calls.reads, [{profileId, date, options: {force: true}}]);
+  assert.deepEqual(app.calls.reads, [{profileId, date, options: {}}]);
   assert.equal(app.page.data.loading, false); assert.equal(app.page.data.ready, true);
   assert.equal(app.page.data.dateLabel, '11 月 24 日'); assert.equal(app.page.data.weekdayLabel, '周二');
   assert.deepEqual(app.page.data.meals.map(row => row.meal), ['breakfast', 'lunch', 'dinner']);
@@ -106,6 +106,24 @@ test('loads confirmed meals in breakfast-lunch-dinner order and fills missing sl
   assert.equal(app.page.data.meals[2].recipe.displayPhoto, 'wxfile://usr/builtin-cover.jpg');
   assert.deepEqual(app.calls.covers, ['pumpkin-millet']);
   assert.equal(app.page.data.author.avatar, getProfileAvatar(profileId));
+});
+
+test('public meal-plan normalization preserves only safe avatar URLs and the page falls back on image errors', async () => {
+  const app = setup(); let avatarURL = 'https://example.test/author-avatar.png';
+  app.hooks.read = (id, day) => normalizeMealPlan({...clone(result), author: {...author, avatarURL}}, id, day);
+  const error = url => ({currentTarget: {dataset: {id: author.id, url}}});
+  await app.page.load(); assert.equal(app.page.data.author.avatar, avatarURL);
+  app.page.authorAvatarError(error(avatarURL)); assert.equal(app.page.data.author.avatar, getProfileAvatar(author.id));
+  await app.page.reload(); assert.equal(app.page.data.author.avatar, getProfileAvatar(author.id));
+  const previous = avatarURL; avatarURL = 'https://example.test/replaced-avatar.png';
+  await app.page.reload(); assert.equal(app.page.data.author.avatar, avatarURL);
+  app.page.authorAvatarError(error(previous)); assert.equal(app.page.data.author.avatar, avatarURL);
+  for (const unsafe of ['http://example.test/avatar', 'https://user@example.test/avatar', 'cloud://private/avatar']) {
+    const normalized = normalizeMealPlan({...clone(result), author: {...author, avatarURL: unsafe}}, profileId, date);
+    assert.equal(normalized.author.avatarURL, undefined);
+  }
+  app.page.authorAvatarError(error(avatarURL)); app.changeIdentity('owner-b'); await app.page.reload();
+  assert.equal(app.page.data.author.avatar, avatarURL);
 });
 
 test('opens recipes and author using loaded identifiers and ignores missing meals or injected targets', async () => {
@@ -218,15 +236,35 @@ test('loading and failed reads clear old meal content, disable navigation and al
   assert.equal(app.page.data.error, ''); assert.equal(app.page.data.ready, true);
 });
 
-test('concurrent onShow events share the active read and later returns revalidate withdrawal', async () => {
+test('concurrent shows share the read, ordinary returns preserve meals, and changed versions refresh withdrawals', async () => {
   const app = setup(), pending = deferred(); app.hooks.read = () => pending.promise;
   const first = app.page.onShow(), second = app.page.onShow(); await turn();
   assert.equal(app.calls.reads.length, 1);
   pending.resolve(clone(result)); await Promise.all([first, second]);
+  app.page.photoError(mealEvent('breakfast'));
+  const meals = clone(app.page.data.meals), updates = app.calls.updates.length;
+  for (let i = 0; i < 3; i++) await app.page.onShow();
+  assert.equal(app.calls.reads.length, 1); assert.deepEqual(app.page.data.meals, meals);
+  assert.equal(app.calls.updates.length, updates);
+  app.changeReadVersion();
   app.hooks.read = () => { throw Error('餐单已撤回'); };
   await app.page.onShow();
   assert.equal(app.calls.reads.length, 2); assert.match(app.page.data.error, /撤回/);
   assert.deepEqual(app.page.data.meals, []);
+});
+
+test('meal-plan pull-down refreshes force a read, coalesce while pending, and stop after completion', async () => {
+  const app = setup(), pending = deferred(); await app.page.onShow();
+  app.hooks.read = () => pending.promise;
+  const refresh = app.page.onPullDownRefresh(), repeat = app.page.onPullDownRefresh();
+  const revisit = app.page.onShow(); await turn();
+  assert.equal(refresh, repeat); assert.equal(app.calls.reads.length, 2);
+  assert.equal(app.calls.reads[1].options.force, true);
+  pending.resolve({...clone(result), author: {...author, name: '更新的餐单作者'}});
+  await Promise.all([refresh, revisit]);
+  assert.equal(app.page.data.author.name, '更新的餐单作者'); assert.equal(app.calls.refreshStops, 1);
+  app.page.openCopy(); await app.page.onPullDownRefresh();
+  assert.equal(app.calls.reads.length, 2); assert.equal(app.calls.refreshStops, 2);
 });
 
 test('a superseded read cannot overwrite the newer response or clear its loading state', async () => {

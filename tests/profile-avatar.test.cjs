@@ -39,6 +39,18 @@ test('invalid or absent public IDs return the brand mascot without coercing arbi
   }
 });
 
+test('custom avatars accept HTTPS image URLs and unsafe or missing URLs retain the stable default', () => {
+  const id = 'a'.repeat(32), fallback = getProfileAvatar(id);
+  const url = 'https://bucket.example.test/social/' + id + '/avatars/photo.png?sign=abc%2Fdef&expires=123';
+  assert.equal(getProfileAvatar(id, url), url);
+  for (const value of [undefined, null, '', false, {}, ['https://example.test/avatar'], 'http://example.test/avatar',
+    'wxfile://usr/avatar', 'cloud://bucket/avatar', 'data:image/png;base64,AA', '//example.test/avatar',
+    'https://user:pass@example.test/avatar', 'https://example.test\\@evil.test/avatar',
+    'https://example.test/avatar\n', 'https:///avatar', 'https://example.test/a\u0000b', 'https://example.test/' + 'x'.repeat(8000)]) {
+    assert.equal(getProfileAvatar(id, value), fallback);
+  }
+});
+
 test('avatar selection is identical across fresh runtimes and needs no device, storage, time or random source', () => {
   const source = fs.readFileSync(require.resolve('../utils/profile-avatar'), 'utf8');
   const id = '13579bdf02468ace13579bdf02468ace';

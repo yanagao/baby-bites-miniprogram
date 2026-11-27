@@ -11,6 +11,7 @@ const ui = require('../../utils/ui');
 
 const APP_SHARE = {title: '小口袋 · 今天辅食吃什么', path: '/pages/home/index', imageUrl: '/assets/cute/pocket-mascot.png'};
 const validProfileId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const readVersion = () => typeof social.getReadVersion === 'function' ? social.getReadVersion() : null;
 
 function publicRecipe(recipe) {
   if (!recipe || typeof recipe !== 'object' || typeof recipe.id !== 'string' || typeof recipe.name !== 'string' || !recipe.name.trim() ||
@@ -59,6 +60,7 @@ Page({
     this.request = 0;
     this._copyRequest = 0;
     this._unloaded = false;
+    this._failedAuthorAvatar = '';
     this._loadPromise = null;
     this._validLink = validProfileId(this.profileId) && validPlanDate(this.planDate);
     account.bind(this);
@@ -71,18 +73,33 @@ Page({
       return;
     }
     if (this.data.loading && this._loadPromise) return this._loadPromise;
-    // Returning from a recipe or the background must notice withdrawn plans.
-    return this.load({force: true});
+    if (this.data.ready && !this.data.error && this._loadedVersion === readVersion()) return;
+    return this.load();
   },
   onUnload() { this._unloaded = true; this.request++; this._copyRequest++; this._copyPreview = null; this._loadPromise = null; account.dispose(this); },
   reload() { return account.reload(this, {force: true}); },
+  onPullDownRefresh() {
+    if (this.data.copySaving || this.data.copyVisible) {
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+      return;
+    }
+    if (this._pullDownFlight) return this._pullDownFlight;
+    const work = Promise.resolve(this.reload()).finally(() => {
+      if (this._pullDownFlight === work) this._pullDownFlight = null;
+      if (wx.stopPullDownRefresh) wx.stopPullDownRefresh();
+    });
+    this._pullDownFlight = work;
+    return work;
+  },
   disposeLocalContent() {
+    if (this.accountSession && this.accountSession.changed) this._failedAuthorAvatar = '';
     this.resetCopy();
     this.setData({ready: false, author: null, meals: [], hasPlans: false, hasSavableMeals: false, date: '', dateLabel: '', weekdayLabel: ''});
   },
   load(options) {
     if (!account.check(this)) return Promise.resolve();
     const request = ++this.request;
+    const version = readVersion();
     this.disposeLocalContent();
     if (!this._validLink) {
       this.setData({loading: false, error: '餐单链接不完整或日期无效，请重新打开分享。'});
@@ -95,8 +112,11 @@ Page({
     }).then(result => {
       if (!account.check(this) || request !== this.request) return;
       const meals = mealRows(result, this.profileId, this.planDate);
-      const author = {id: result.author.id, name: result.author.name, avatar: getProfileAvatar(result.author.id)};
+      const candidate = getProfileAvatar(result.author.id, result.author.avatarURL);
+      const author = {id: result.author.id, name: result.author.name, avatar: this._failedAuthorAvatar === result.author.id + ':' + candidate ?
+        getProfileAvatar(result.author.id) : candidate};
       const weekdayLabel = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][parseDate(result.date).getDay()];
+      this._loadedVersion = version;
       this.setData({loading: false, error: '', ready: true, author, date: result.date,
         dateLabel: dayLabel(result.date), weekdayLabel, meals, hasPlans: meals.some(meal => meal.planned),
         hasSavableMeals: meals.some(meal => meal.planned && meal.recipe)});
@@ -118,6 +138,14 @@ Page({
   openAuthor() {
     if (!account.check(this) || !this.data.ready || this.data.loading || this.data.error || !this.data.author || this.data.copySaving) return;
     wx.navigateTo({url: '/pages/profile/index?id=' + encodeURIComponent(this.data.author.id)});
+  },
+  authorAvatarError(event) {
+    if (!account.check(this) || !this.data.author) return;
+    const {id, url} = event.currentTarget.dataset, author = this.data.author;
+    const fallback = getProfileAvatar(author.id);
+    if (id !== author.id || url !== author.avatar || url === fallback) return;
+    this._failedAuthorAvatar = id + ':' + url;
+    this.setData({author: {...author, avatar: fallback}});
   },
   photoError(event) {
     if (!account.check(this) || !this.data.ready || this.data.loading) return;

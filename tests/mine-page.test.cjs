@@ -277,7 +277,7 @@ test('refreshing the same confirmed profile keeps its avatar while the response 
     const f = setup({pageName: visitor ? 'profile' : 'mine', loadOptions: visitor ? {id: current.id} : {}, social: visitor ? {getProfile: read} : {getMine: read}});
     await f.page.load();
     const avatar = f.page.data.avatarPath; assert.notEqual(avatar, getProfileAvatar());
-    const refreshing = visitor ? f.page.onShow() : f.page.reload();
+    const refreshing = f.page.reload();
     assert.equal(f.page.data.loading, true); assert.equal(f.page.data.avatarPath, avatar);
     pending.resolve(response({...current, name: '更新后的公开昵称'})); await refreshing;
     assert.equal(f.page.data.loading, false); assert.equal(f.page.data.avatarPath, avatar);
@@ -490,4 +490,131 @@ test('a confirmed own profile link reads only mine on subsequent loads', async (
   await fixture.page.load(); await fixture.page.load();
   assert.equal(publicReads, 1); assert.equal(fixture.calls.mine, 2);
   assert.equal(fixture.page.data.isSelf, true); assert.equal(fixture.page.data.followingCount, 5);
+});
+
+const avatarChoice = (page, avatarUrl) => ({detail: {avatarUrl}, currentTarget: {dataset: {
+  editToken: page.data.avatarEditToken, profileId: page.data.profile.id
+}}});
+
+test('choosing an avatar only previews a draft; cancel keeps the saved public avatar', async () => {
+  const current = {...profile, avatarURL: 'https://images.example.test/avatar-old.jpg'};
+  const f = setup({social: {getMine: async () => ({profile: current, published: []})}});
+  await f.page.load(); f.page.edit();
+  assert.equal(f.page.data.avatarPath, current.avatarURL);
+  f.page.chooseAvatar(avatarChoice(f.page, 'wxfile://tmp/new-avatar.jpg'));
+  assert.equal(f.page.data.avatarDraftPath, 'wxfile://tmp/new-avatar.jpg');
+  assert.equal(f.page.data.profile.avatarURL, current.avatarURL);
+  assert.equal(f.page.data.avatarPath, current.avatarURL);
+  assert.deepEqual(f.calls.saved, []);
+  await f.page.onShow();
+  assert.equal(f.page.data.avatarDraftPath, 'wxfile://tmp/new-avatar.jpg');
+  f.page.cancelEdit(); f.page.edit();
+  assert.equal(f.page.data.avatarDraftPath, '');
+  assert.equal(f.page.data.avatarPath, current.avatarURL);
+  assert.deepEqual(f.calls.saved, []);
+});
+
+test('saving an avatar sends the draft once and uses the persisted public image after reload', async () => {
+  const saved = []; let current = {...profile};
+  const f = setup({social: {
+    getMine: async () => ({profile: current, published: []}),
+    saveProfile: async input => {
+      saved.push(clone(input));
+      current = {...current, avatarURL: 'https://images.example.test/avatar-new.jpg'};
+      return {profile: current, avatarUpdated: true};
+    }
+  }});
+  await f.page.load(); f.page.edit();
+  f.page.chooseAvatar(avatarChoice(f.page, 'http://tmp/new-avatar.jpg'));
+  await f.page.save();
+  assert.deepEqual(saved, [{name: profile.name, bio: '', avatarPath: 'http://tmp/new-avatar.jpg'}]);
+  assert.equal(f.page.data.editing, false); assert.equal(f.page.data.avatarDraftPath, '');
+  assert.equal(f.page.data.avatarPath, current.avatarURL);
+  assert.equal(Object.hasOwn(f.page.data.profile, 'avatarPath'), false);
+  await f.page.onShow(); assert.equal(f.page.data.avatarPath, current.avatarURL);
+  f.page.edit(); await f.page.save();
+  assert.equal(Object.hasOwn(saved[1], 'avatarPath'), false, 'unrelated edits preserve the saved avatar');
+});
+
+test('failed avatar saves preserve the draft for retry and block duplicate saves or replacements in flight', async () => {
+  const gate = deferred(), saved = []; let first = true;
+  const f = setup({social: {saveProfile: input => {
+    saved.push(clone(input));
+    if (first) { first = false; return gate.promise; }
+    return Promise.resolve({profile: {...profile, avatarURL: 'https://images.example.test/avatar.jpg'}, avatarUpdated: true});
+  }}});
+  await f.page.load(); f.page.edit();
+  f.page.chooseAvatar(avatarChoice(f.page, '/tmp/avatar.png'));
+  const pendingSave = f.page.save(); await f.page.save();
+  f.page.chooseAvatar(avatarChoice(f.page, '/tmp/replacement.png')); f.page.cancelEdit();
+  assert.equal(f.page.data.editing, true); assert.equal(saved.length, 1);
+  assert.equal(f.page.data.avatarDraftPath, '/tmp/avatar.png');
+  gate.reject(Error('头像未通过审核，请更换')); await pendingSave;
+  assert.equal(f.page.data.saving, false); assert.equal(f.page.data.editing, true);
+  assert.equal(f.page.data.avatarDraftPath, '/tmp/avatar.png');
+  assert.match(f.page.data.profileSaveError, /头像/);
+  await f.page.save(); assert.equal(saved.length, 2);
+  assert.equal(saved[1].avatarPath, saved[0].avatarPath); assert.equal(f.page.data.avatarDraftPath, '');
+});
+
+test('avatar callbacks from an earlier editor or account cannot replace a current draft', async t => {
+  for (const switchSession of ['editor', 'account', 'family', 'account-aba']) await t.test(switchSession, async () => {
+    const f = setup(); await f.page.load(); f.page.edit();
+    const oldEvent = avatarChoice(f.page, '/tmp/old-avatar.png');
+    f.page.chooseAvatar(avatarChoice(f.page, '/tmp/selected.png'));
+    if (switchSession === 'editor') f.page.cancelEdit();
+    else {
+      if (switchSession === 'family') f.changeScope('new-family');
+      else { f.changeOwner('owner-b'); if (switchSession === 'account-aba') f.changeOwner('owner-a'); }
+      assert.equal(f.page.data.avatarDraftPath, '');
+      await f.page.reload();
+    }
+    f.page.edit(); f.page.chooseAvatar(oldEvent);
+    assert.equal(f.page.data.avatarDraftPath, '');
+    assert.deepEqual(f.calls.saved, []);
+  });
+});
+
+test('visitor, closed-editor and nonlocal avatar callbacks cannot select an image', async () => {
+  const f = setup(); await f.page.load();
+  f.page.chooseAvatar(avatarChoice(f.page, '/tmp/avatar.png'));
+  assert.equal(f.page.data.avatarDraftPath, '');
+  f.page.edit();
+  for (const invalid of ['', 'https://untrusted.example/avatar.png', 'cloud://private/avatar', '/tmp/avatar\n.png']) {
+    f.page.chooseAvatar(avatarChoice(f.page, invalid)); assert.equal(f.page.data.avatarDraftPath, '');
+  }
+  const visitor = setup({pageName: 'profile', loadOptions: {id: profile.id}, social: {
+    getProfile: async () => ({profile, isSelf: false, recipes: [], nextOffset: null})
+  }});
+  await visitor.page.load(); visitor.page.edit();
+  visitor.page.chooseAvatar(avatarChoice(visitor.page, '/tmp/avatar.png'));
+  assert.equal(visitor.page.data.editing, false); assert.equal(visitor.page.data.avatarDraftPath, '');
+});
+
+test('failed avatar images fall back safely and stale image errors cannot replace a newer avatar', async () => {
+  let current = {...profile, avatarURL: 'https://images.example.test/old.jpg'};
+  const f = setup({social: {getMine: async () => ({profile: current, published: []})}});
+  await f.page.load();
+  const oldError = {currentTarget: {dataset: {id: profile.id, url: current.avatarURL}}};
+  f.page.avatarError(oldError); assert.equal(f.page.data.avatarPath, getProfileAvatar(profile.id));
+  await f.page.reload(); assert.equal(f.page.data.avatarPath, getProfileAvatar(profile.id));
+  current = {...current, avatarURL: 'https://images.example.test/new.jpg'};
+  await f.page.reload(); f.page.avatarError(oldError);
+  assert.equal(f.page.data.avatarPath, current.avatarURL);
+  f.page.edit(); f.page.chooseAvatar(avatarChoice(f.page, '/tmp/broken.png'));
+  f.page.avatarPreviewError({currentTarget: {dataset: {url: '/tmp/broken.png', editToken: f.page.data.avatarEditToken}}});
+  assert.equal(f.page.data.avatarDraftPath, ''); assert.equal(f.page.data.avatarPath, current.avatarURL);
+  assert.match(f.page.data.profileSaveError, /重新选择/);
+});
+
+test('a late avatar save cannot restore the previous account image or draft', async () => {
+  const gate = deferred();
+  const f = setup({social: {saveProfile: () => gate.promise}});
+  await f.page.load(); f.page.edit(); f.page.chooseAvatar(avatarChoice(f.page, '/tmp/avatar.png'));
+  const save = f.page.save();
+  f.changeOwner('owner-b'); await f.page.reload();
+  const current = clone(f.page.data);
+  gate.resolve({profile: {...profile, avatarURL: 'https://images.example.test/old-account.jpg'}, avatarUpdated: true});
+  await save;
+  assert.deepEqual(f.page.data, current); assert.equal(f.page.data.avatarDraftPath, '');
 });
